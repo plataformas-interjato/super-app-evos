@@ -19,6 +19,8 @@ import { RFValue } from 'react-native-responsive-fontsize';
 
 import BottomNavigation from '../components/BottomNavigation';
 import { WorkOrder, User, FilterStatus } from '../types/workOrder';
+import { fetchWorkOrdersWithFilters, updateWorkOrderStatus } from '../services/workOrderService';
+import { useAuth } from '../contexts/AuthContext';
 
 interface MainScreenProps {
   user: User;
@@ -32,30 +34,10 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Dados de exemplo seguindo o layout da imagem
-  const mockWorkOrders: WorkOrder[] = [
-    {
-      id: 'ID',
-      title: 'Título',
-      client: 'Cliente',
-      address: 'Endereço',
-      priority: 'alta',
-      status: 'aguardando',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    },
-    {
-      id: 'ID',
-      title: 'Título',
-      client: 'Cliente',
-      address: 'Endereço',
-      priority: 'media',
-      status: 'em_progresso',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    },
-  ];
+  const { appUser } = useAuth();
 
   useEffect(() => {
     loadWorkOrders();
@@ -73,18 +55,70 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
     return () => {
       unsubscribe();
     };
-  }, []);
+  }, [appUser]);
 
-  const loadWorkOrders = () => {
-    setWorkOrders(mockWorkOrders);
+  // Recarregar quando filtros mudarem
+  useEffect(() => {
+    if (!loading) {
+      loadWorkOrders();
+    }
+  }, [activeFilter, searchText]);
+
+  const loadWorkOrders = async () => {
+    try {
+      setError(null);
+      
+      // Para técnicos, mostrar apenas suas ordens de serviço
+      // Para gestores, mostrar todas as ordens de serviço
+      let userIdForFilter: string | undefined = undefined;
+      
+      if (appUser?.userType === 'tecnico') {
+        if (appUser.numericId) {
+          // Usar o ID numérico diretamente
+          userIdForFilter = appUser.numericId.toString();
+        } else {
+          // Fallback: usar o UUID para busca
+          userIdForFilter = appUser.id;
+        }
+      }
+      
+      console.log('🔍 Carregando ordens de serviço...');
+      console.log('👤 Usuário:', appUser?.name, '- Tipo:', appUser?.userType);
+      console.log('🔧 UUID:', appUser?.id);
+      console.log('🔢 ID numérico:', appUser?.numericId);
+      console.log('🔧 UserId para filtro:', userIdForFilter);
+      console.log('📋 Filtro ativo:', activeFilter);
+      console.log('🔎 Busca:', searchText);
+      
+      const { data, error: fetchError } = await fetchWorkOrdersWithFilters(
+        userIdForFilter,
+        activeFilter,
+        searchText.trim() || undefined
+      );
+
+      console.log('📊 Resultado da busca:', { data, fetchError });
+
+      if (fetchError) {
+        setError(fetchError);
+        console.error('❌ Erro ao carregar ordens de serviço:', fetchError);
+        setWorkOrders([]);
+      } else {
+        console.log('✅ Dados carregados com sucesso:', data?.length, 'ordens encontradas');
+        setWorkOrders(data || []);
+      }
+    } catch (err) {
+      setError('Erro inesperado ao carregar ordens de serviço');
+      console.error('💥 Erro inesperado:', err);
+      setWorkOrders([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setRefreshing(true);
-    setTimeout(() => {
-      loadWorkOrders();
-      setRefreshing(false);
-    }, 1500);
+    await loadWorkOrders();
+    setRefreshing(false);
   };
 
   const handleWorkOrderPress = (workOrder: WorkOrder) => {
@@ -98,13 +132,23 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
     );
   };
 
-  const handleWorkOrderRefresh = (workOrder: WorkOrder) => {
+  const handleWorkOrderRefresh = async (workOrder: WorkOrder) => {
     Alert.alert(
       'Atualizar',
       `Atualizar OS #${workOrder.id}?`,
       [
         { text: 'Cancelar', style: 'cancel' },
-        { text: 'Atualizar', onPress: () => console.log('Atualizar OS:', workOrder.id) },
+        { 
+          text: 'Atualizar', 
+          onPress: async () => {
+            try {
+              await loadWorkOrders();
+              Alert.alert('Sucesso', 'OS atualizada com sucesso!');
+            } catch (error) {
+              Alert.alert('Erro', 'Falha ao atualizar a OS');
+            }
+          }
+        },
       ]
     );
   };
@@ -124,20 +168,54 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
     });
   };
 
-  const filteredWorkOrders = workOrders.filter((workOrder) => {
-    const matchesSearch = workOrder.title.toLowerCase().includes(searchText.toLowerCase()) ||
-                         workOrder.client.toLowerCase().includes(searchText.toLowerCase()) ||
-                         workOrder.id.includes(searchText);
-    
-    const matchesFilter = activeFilter === 'todas' || workOrder.status === activeFilter;
-    
-    return matchesSearch && matchesFilter;
-  });
+  const getStatusBadgeColor = (workOrder: WorkOrder) => {
+    switch (workOrder.status) {
+      case 'aguardando':
+        return '#f59e0b'; // yellow
+      case 'em_progresso':
+        return '#3b82f6'; // blue
+      case 'finalizada':
+        return '#10b981'; // green
+      case 'cancelada':
+        return '#ef4444'; // red
+      default:
+        return '#6b7280'; // gray
+    }
+  };
+
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'aguardando':
+        return 'Aguardando';
+      case 'em_progresso':
+        return 'Em Progresso';
+      case 'finalizada':
+        return 'Finalizada';
+      case 'cancelada':
+        return 'Cancelada';
+      default:
+        return status;
+    }
+  };
+
+  const getPriorityText = (priority: string) => {
+    switch (priority) {
+      case 'alta':
+        return 'Alta Prioridade';
+      case 'media':
+        return 'Média Prioridade';
+      case 'baixa':
+        return 'Baixa Prioridade';
+      default:
+        return priority;
+    }
+  };
 
   const filters = [
     { key: 'todas' as FilterStatus, label: 'TODAS' },
     { key: 'aguardando' as FilterStatus, label: 'AGUARDANDO' },
     { key: 'em_progresso' as FilterStatus, label: 'EM PROGRESSO' },
+    { key: 'finalizada' as FilterStatus, label: 'FINALIZADAS' },
   ];
 
   return (
@@ -197,7 +275,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
           <View style={styles.searchInputContainer}>
             <TextInput
               style={styles.searchInput}
-              placeholder="Buscar OS"
+              placeholder="Buscar por ID ou título"
               placeholderTextColor="#9ca3af"
               value={searchText}
               onChangeText={setSearchText}
@@ -238,9 +316,38 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
           }
         >
           <View style={styles.workOrdersContainer}>
-            {filteredWorkOrders.map((workOrder, index) => (
+            {error && (
+              <View style={styles.errorContainer}>
+                <Ionicons name="alert-circle" size={24} color="#ef4444" />
+                <Text style={styles.errorText}>{error}</Text>
+                <TouchableOpacity 
+                  style={styles.retryButton}
+                  onPress={loadWorkOrders}
+                >
+                  <Text style={styles.retryButtonText}>Tentar Novamente</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            
+            {loading && !refreshing && (
+              <View style={styles.loadingContainer}>
+                <Text style={styles.loadingText}>Carregando ordens de serviço...</Text>
+              </View>
+            )}
+            
+            {!loading && !error && workOrders.length === 0 && (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="document-text-outline" size={64} color="#9ca3af" />
+                <Text style={styles.emptyTitle}>Nenhuma ordem de serviço encontrada</Text>
+                <Text style={styles.emptySubtitle}>
+                  {searchText ? 'Tente usar outros termos de busca' : 'Não há ordens de serviço no momento'}
+                </Text>
+              </View>
+            )}
+            
+            {workOrders.map((workOrder, index) => (
               <TouchableOpacity 
-                key={index} 
+                key={workOrder.id} 
                 style={styles.workOrderCard}
                 onPress={() => handleWorkOrderPress(workOrder)}
               >
@@ -248,10 +355,10 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
                   <Text style={styles.cardId}>#{workOrder.id}</Text>
                   <View style={[
                     styles.statusBadge,
-                    { backgroundColor: index === 0 ? '#ef4444' : '#ef4444' }
+                    { backgroundColor: getStatusBadgeColor(workOrder) }
                   ]}>
                     <Text style={styles.statusText}>
-                      {index === 0 ? 'Prioridade' : 'Atrasado'}
+                      {getStatusText(workOrder.status)}
                     </Text>
                   </View>
                 </View>
@@ -508,6 +615,61 @@ const styles = StyleSheet.create({
   },
   workOrdersScrollContainer: {
     flex: 1,
+  },
+  errorContainer: {
+    backgroundColor: '#fef2f2',
+    borderRadius: 10,
+    padding: 20,
+    marginHorizontal: 15,
+    marginVertical: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  errorText: {
+    color: '#ef4444',
+    fontSize: RFValue(14),
+    textAlign: 'center',
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  retryButton: {
+    backgroundColor: '#ef4444',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  retryButtonText: {
+    color: 'white',
+    fontSize: RFValue(12),
+    fontWeight: 'bold',
+  },
+  loadingContainer: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: '#6b7280',
+    fontSize: RFValue(14),
+    textAlign: 'center',
+  },
+  emptyContainer: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  emptyTitle: {
+    fontSize: RFValue(18),
+    fontWeight: 'bold',
+    color: '#374151',
+    marginTop: 16,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  emptySubtitle: {
+    fontSize: RFValue(14),
+    color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 20,
   },
 });
 

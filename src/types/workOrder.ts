@@ -4,13 +4,14 @@ export interface WorkOrder {
   client: string;
   address: string;
   priority: 'alta' | 'media' | 'baixa';
-  status: 'todas' | 'aguardando' | 'em_progresso' | 'finalizada';
+  status: 'todas' | 'aguardando' | 'em_progresso' | 'finalizada' | 'cancelada';
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface User {
   id: string;
+  numericId?: number;
   name: string;
   role: string;
   userType: 'gestor' | 'tecnico';
@@ -18,4 +19,4 @@ export interface User {
   url_foto?: string;
 }
 
-export type FilterStatus = 'todas' | 'aguardando' | 'em_progresso' | 'finalizada' | 'cancelada' | 'atrasada'; 
+export type FilterStatus = 'todas' | 'aguardando' | 'em_progresso' | 'finalizada' | 'cancelada'; 
