@@ -1,5 +1,7 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, TextInput, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { RFValue } from 'react-native-responsive-fontsize';
 import SearchBar from './SearchBar';
 
 interface AuditSearchSectionProps {
@@ -13,7 +15,7 @@ const AuditSearchSection: React.FC<AuditSearchSectionProps> = ({
 }) => {
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Pesquisar auditorias</Text>
+      <Text style={styles.sectionTitle}>Pesquisar auditorias</Text>
       <SearchBar
         value={searchValue}
         onChangeText={onSearchChange}
@@ -27,8 +29,8 @@ const styles = StyleSheet.create({
   container: {
     marginBottom: 10,
   },
-  title: {
-    fontSize: 18,
+  sectionTitle: {
+    fontSize: RFValue(18),
     fontWeight: 'bold',
     color: '#374151',
     marginHorizontal: 20,

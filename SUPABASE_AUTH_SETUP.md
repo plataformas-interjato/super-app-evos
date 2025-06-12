@@ -1,4 +1,4 @@
-# Configuração da Autenticação com Supabase
+vol# Configuração da Autenticação com Supabase
 
 ## 📋 Passo a Passo para Configurar a Autenticação
 

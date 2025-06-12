@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { RFValue } from 'react-native-responsive-fontsize';
 
 interface HomeScreenProps {
   userEmail: string;
@@ -30,13 +31,13 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   title: {
-    fontSize: 28,
+    fontSize: RFValue(28),
     fontWeight: 'bold',
     color: '#374151',
     marginBottom: 16,
   },
   subtitle: {
-    fontSize: 18,
+    fontSize: RFValue(18),
     color: '#6b7280',
     marginBottom: 32,
     textAlign: 'center',
@@ -49,7 +50,7 @@ const styles = StyleSheet.create({
   },
   logoutButtonText: {
     color: 'white',
-    fontSize: 16,
+    fontSize: RFValue(16),
     fontWeight: '600',
   },
 });

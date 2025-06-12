@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { RFValue } from 'react-native-responsive-fontsize';
 import { FilterStatus } from '../types/workOrder';
 
 interface FilterTabsProps {
@@ -69,7 +70,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#3b82f6',
   },
   tabText: {
-    fontSize: 14,
+    fontSize: RFValue(14),
     fontWeight: 'bold',
     color: '#6b7280',
     textAlign: 'center',

@@ -23,35 +23,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Função para mapear usuário do Supabase para usuário do app
   const mapSupabaseUserToAppUser = async (supabaseUser: SupabaseUser): Promise<User | null> => {
     try {
-      // Buscar dados do usuário na sua tabela existente
+      // Buscar dados do usuário na sua tabela existente usando user_id
       const { data: userProfile, error } = await supabase
         .from('usuario')
         .select('*')
-        .eq('id', supabaseUser.id)
+        .eq('user_id', supabaseUser.id)
         .single();
 
       if (error) {
         console.log('Erro ao buscar usuário:', error.message);
+        console.log('Usuário não encontrado na tabela usuario com user_id:', supabaseUser.id);
         
-        // Se não encontrar, buscar por email como fallback
-        const { data: userByEmail, error: emailError } = await supabase
-          .from('usuario')
-          .select('*')
-          .eq('email', supabaseUser.email)
-          .single();
-
-        if (emailError) {
-          console.log('Usuário não encontrado na tabela:', emailError.message);
-          // Criar usuário padrão se não encontrar
-          return {
-            id: supabaseUser.id,
-            name: supabaseUser.email?.split('@')[0] || 'Usuário',
-            role: 'Técnico',
-            userType: 'tecnico',
-          };
-        }
-
-        userProfile = userByEmail;
+        // Criar usuário padrão se não encontrar
+        return {
+          id: supabaseUser.id,
+          name: supabaseUser.email?.split('@')[0] || 'Usuário',
+          role: 'Técnico',
+          userType: 'tecnico',
+        };
       }
 
       // Mapear a função conforme suas regras de negócio
@@ -59,10 +48,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const isGestor = funcao === 'supervisor' || funcao === 'gestor';
 
       return {
-        id: userProfile.id || supabaseUser.id,
+        id: userProfile.user_id || supabaseUser.id,
         name: userProfile.nome || userProfile.name || supabaseUser.email?.split('@')[0] || 'Usuário',
         role: isGestor ? 'Gestor' : 'Técnico',
         userType: isGestor ? 'gestor' : 'tecnico',
+        url_foto: userProfile.url_foto,
       };
     } catch (error) {
       console.log('Erro no mapeamento do usuário:', error);

@@ -1,7 +1,8 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { RFValue } from 'react-native-responsive-fontsize';
 import { User } from '../types/workOrder';
 
 interface HeaderProps {
@@ -27,10 +28,14 @@ const Header: React.FC<HeaderProps> = ({ user, isConnected }) => {
     >
       <View style={styles.userSection}>
         <View style={styles.userIcon}>
-          <Ionicons name="person" size={24} color="white" />
+          {user.url_foto ? (
+            <Image source={{ uri: user.url_foto }} style={styles.userPhoto} />
+          ) : (
+            <Ionicons name="person" size={32} color="white" />
+          )}
         </View>
         <View style={styles.userInfo}>
-          <Text style={styles.userName}>Nome</Text>
+          <Text style={styles.userName}>{user.name}</Text>
           <Text style={styles.userRole}>{user.role}</Text>
         </View>
       </View>
@@ -73,9 +78,9 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   userIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 65,
+    height: 65,
+    borderRadius: 32.5,
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -86,12 +91,12 @@ const styles = StyleSheet.create({
   },
   userName: {
     color: 'white',
-    fontSize: 18,
+    fontSize: RFValue(18),
     fontWeight: 'bold',
   },
   userRole: {
     color: 'rgba(255, 255, 255, 0.8)',
-    fontSize: 14,
+    fontSize: RFValue(14),
   },
   statusSection: {
     flexDirection: 'row',
@@ -104,7 +109,7 @@ const styles = StyleSheet.create({
   },
   connectionText: {
     marginLeft: 5,
-    fontSize: 12,
+    fontSize: RFValue(12),
     fontWeight: 'bold',
   },
   dateSection: {
@@ -114,8 +119,13 @@ const styles = StyleSheet.create({
   dateText: {
     color: 'white',
     marginLeft: 5,
-    fontSize: 14,
+    fontSize: RFValue(14),
     fontWeight: '500',
+  },
+  userPhoto: {
+    width: 65,
+    height: 65,
+    borderRadius: 32.5,
   },
 });
 

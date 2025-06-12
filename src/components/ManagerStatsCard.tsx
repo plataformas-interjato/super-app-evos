@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { RFValue } from 'react-native-responsive-fontsize';
 import { ManagerStats } from '../types/manager';
 
 interface ManagerStatsCardProps {
@@ -98,13 +99,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   statLabel: {
-    fontSize: 14,
+    fontSize: RFValue(14),
     color: 'white',
     marginBottom: 8,
     textAlign: 'center',
   },
   statValue: {
-    fontSize: 18,
+    fontSize: RFValue(18),
     fontWeight: 'bold',
     color: 'white',
   },
@@ -119,7 +120,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   rankingValue: {
-    fontSize: 18,
+    fontSize: RFValue(18),
     fontWeight: 'bold',
     color: 'white',
     marginLeft: 5,
@@ -130,7 +131,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: RFValue(18),
     fontWeight: 'bold',
     color: 'white',
     marginBottom: 20,
@@ -156,14 +157,14 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   indicatorText: {
-    fontSize: 16,
+    fontSize: RFValue(16),
     fontWeight: 'bold',
     color: 'white',
     minWidth: 20,
     marginRight: 8,
   },
   indicatorLabel: {
-    fontSize: 14,
+    fontSize: RFValue(14),
     color: 'rgba(255, 255, 255, 0.8)',
   },
   pieChart: {
@@ -204,7 +205,7 @@ const styles = StyleSheet.create({
   },
   percentageLabel: {
     position: 'absolute',
-    fontSize: 14,
+    fontSize: RFValue(14),
     fontWeight: 'bold',
     color: 'white',
   },
@@ -221,7 +222,7 @@ const styles = StyleSheet.create({
     right: 25,
   },
   lastUpdate: {
-    fontSize: 12,
+    fontSize: RFValue(12),
     color: 'rgba(255, 255, 255, 0.7)',
     textAlign: 'right',
   },

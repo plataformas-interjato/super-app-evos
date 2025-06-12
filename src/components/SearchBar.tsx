@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, TextInput, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { RFValue } from 'react-native-responsive-fontsize';
 
 interface SearchBarProps {
   value: string;
@@ -53,7 +54,7 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    fontSize: 16,
+    fontSize: RFValue(16),
     color: '#374151',
   },
 });

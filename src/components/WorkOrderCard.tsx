@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { RFValue } from 'react-native-responsive-fontsize';
 import { WorkOrder } from '../types/workOrder';
 
 interface WorkOrderCardProps {
@@ -55,23 +56,23 @@ const WorkOrderCard: React.FC<WorkOrderCardProps> = ({
       </View>
 
       <View style={styles.infoRow}>
-        <Ionicons name="build" size={16} color="#6b7280" />
+        <Ionicons name="build" size={RFValue(16)} color="#6b7280" />
         <Text style={styles.infoText}>{workOrder.title}</Text>
       </View>
 
       <View style={styles.infoRow}>
-        <Ionicons name="person" size={16} color="#6b7280" />
+        <Ionicons name="person" size={RFValue(16)} color="#6b7280" />
         <Text style={styles.infoText}>{workOrder.client}</Text>
       </View>
 
       <View style={styles.infoRow}>
-        <Ionicons name="location" size={16} color="#6b7280" />
+        <Ionicons name="location" size={RFValue(16)} color="#6b7280" />
         <Text style={styles.infoText}>{workOrder.address}</Text>
       </View>
 
       <View style={styles.footer}>
         <TouchableOpacity style={styles.refreshButton} onPress={onRefresh}>
-          <Ionicons name="refresh" size={20} color="#6b7280" />
+          <Ionicons name="refresh" size={RFValue(20)} color="#6b7280" />
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
@@ -101,7 +102,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   id: {
-    fontSize: 16,
+    fontSize: RFValue(16),
     fontWeight: 'bold',
     color: '#374151',
   },
@@ -112,7 +113,7 @@ const styles = StyleSheet.create({
   },
   priorityText: {
     color: 'white',
-    fontSize: 12,
+    fontSize: RFValue(12),
     fontWeight: 'bold',
   },
   infoRow: {
@@ -122,7 +123,7 @@ const styles = StyleSheet.create({
   },
   infoText: {
     marginLeft: 8,
-    fontSize: 14,
+    fontSize: RFValue(14),
     color: '#6b7280',
     flex: 1,
   },

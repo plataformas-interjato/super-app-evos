@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { RFValue } from 'react-native-responsive-fontsize';
 import { UserStats } from '../types/profile';
 
 interface StatsCardProps {
@@ -52,13 +53,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   statLabel: {
-    fontSize: 14,
+    fontSize: RFValue(14),
     color: '#6b7280',
     marginBottom: 8,
     textAlign: 'center',
   },
   statValue: {
-    fontSize: 18,
+    fontSize: RFValue(18),
     fontWeight: 'bold',
     color: '#374151',
   },
@@ -73,7 +74,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   rankingValue: {
-    fontSize: 18,
+    fontSize: RFValue(18),
     fontWeight: 'bold',
     color: '#374151',
     marginLeft: 5,

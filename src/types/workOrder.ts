@@ -15,6 +15,7 @@ export interface User {
   role: string;
   userType: 'gestor' | 'tecnico';
   avatar?: string;
+  url_foto?: string;
 }
 
 export type FilterStatus = 'todas' | 'aguardando' | 'em_progresso' | 'finalizada' | 'cancelada' | 'atrasada'; 

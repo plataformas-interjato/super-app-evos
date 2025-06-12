@@ -1,5 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { RFValue } from 'react-native-responsive-fontsize';
 import { Audit } from '../types/profile';
 
 interface AuditCardProps {
@@ -80,7 +82,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   supabaseId: {
-    fontSize: 14,
+    fontSize: RFValue(14),
     fontWeight: 'bold',
     color: 'white',
   },
@@ -90,12 +92,24 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   statusText: {
-    color: 'white',
-    fontSize: 12,
+    marginLeft: 8,
+    fontSize: RFValue(14),
+    color: '#6b7280',
+    textTransform: 'capitalize',
+  },
+  dateText: {
+    fontSize: RFValue(12),
+    color: '#9ca3af',
+    textAlign: 'right',
+  },
+  titleText: {
+    fontSize: RFValue(16),
     fontWeight: 'bold',
+    color: '#374151',
+    marginBottom: 8,
   },
   title: {
-    fontSize: 16,
+    fontSize: RFValue(16),
     fontWeight: '600',
     color: 'white',
   },

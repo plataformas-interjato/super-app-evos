@@ -12,6 +12,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { RFValue } from 'react-native-responsive-fontsize';
 import { useAuth } from '../contexts/AuthContext';
 
 // Importar os SVGs
@@ -200,7 +201,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
   },
   title: {
-    fontSize: width * 0.05,
+    fontSize: RFValue(20),
     fontWeight: '500',
     color: '#333',
     marginBottom: height * (isSmallDevice ? 0.02 : 0.04),
@@ -230,12 +231,12 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    fontSize: width * 0.04,
+    fontSize: RFValue(16),
     color: '#333',
   },
   passwordInput: {
     flex: 1,
-    fontSize: width * 0.04,
+    fontSize: RFValue(16),
     color: '#333',
   },
   eyeIcon: {
@@ -248,7 +249,7 @@ const styles = StyleSheet.create({
   },
   forgotPasswordText: {
     color: '#666',
-    fontSize: width * 0.035,
+    fontSize: RFValue(14),
     textDecorationLine: 'underline',
   },
   loginButton: {
@@ -271,7 +272,7 @@ const styles = StyleSheet.create({
   },
   loginButtonText: {
     color: 'white',
-    fontSize: width * 0.04,
+    fontSize: RFValue(16),
     fontWeight: '600',
   },
 });

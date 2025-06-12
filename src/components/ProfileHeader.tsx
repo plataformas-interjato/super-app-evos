@@ -1,7 +1,8 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { RFValue } from 'react-native-responsive-fontsize';
 import { User } from '../types/workOrder';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -46,7 +47,11 @@ const ProfileHeader: React.FC<ProfileHeaderProps> = ({ user, onBackPress }) => {
       <View style={styles.profileSection}>
         <View style={styles.avatarContainer}>
           <View style={styles.avatar}>
-            <Ionicons name="person" size={40} color="white" />
+            {user.url_foto ? (
+              <Image source={{ uri: user.url_foto }} style={styles.userPhoto} />
+            ) : (
+              <Ionicons name="person" size={50} color="white" />
+            )}
           </View>
         </View>
         
@@ -87,9 +92,9 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
     backgroundColor: 'rgba(255, 255, 255, 0.3)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -98,14 +103,19 @@ const styles = StyleSheet.create({
   },
   userName: {
     color: 'white',
-    fontSize: 24,
+    fontSize: RFValue(24),
     fontWeight: 'bold',
     marginBottom: 5,
   },
   userRole: {
     color: 'rgba(255, 255, 255, 0.8)',
-    fontSize: 16,
+    fontSize: RFValue(16),
     fontWeight: '500',
+  },
+  userPhoto: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
   },
 });
 
