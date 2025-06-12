@@ -1,8 +1,9 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { User } from '../types/workOrder';
+import { useAuth } from '../contexts/AuthContext';
 
 interface ProfileHeaderProps {
   user: User;
@@ -10,6 +11,23 @@ interface ProfileHeaderProps {
 }
 
 const ProfileHeader: React.FC<ProfileHeaderProps> = ({ user, onBackPress }) => {
+  const { signOut } = useAuth();
+
+  const handleLogout = () => {
+    Alert.alert(
+      'Sair',
+      'Tem certeza que deseja sair da sua conta?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Sair', 
+          style: 'destructive',
+          onPress: () => signOut()
+        },
+      ]
+    );
+  };
+
   return (
     <LinearGradient
       colors={['#1e3a8a', '#3b82f6']}
@@ -21,6 +39,10 @@ const ProfileHeader: React.FC<ProfileHeaderProps> = ({ user, onBackPress }) => {
         <Ionicons name="arrow-back" size={24} color="white" />
       </TouchableOpacity>
       
+      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+        <Ionicons name="log-out-outline" size={24} color="white" />
+      </TouchableOpacity>
+      
       <View style={styles.profileSection}>
         <View style={styles.avatarContainer}>
           <View style={styles.avatar}>
@@ -28,8 +50,8 @@ const ProfileHeader: React.FC<ProfileHeaderProps> = ({ user, onBackPress }) => {
           </View>
         </View>
         
-        <Text style={styles.userName}>Nome</Text>
-        <Text style={styles.userRole}>Função</Text>
+        <Text style={styles.userName}>{user.name}</Text>
+        <Text style={styles.userRole}>{user.role}</Text>
       </View>
     </LinearGradient>
   );
@@ -49,6 +71,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 55,
     left: 20,
+    zIndex: 1,
+  },
+  logoutButton: {
+    position: 'absolute',
+    top: 55,
+    right: 20,
     zIndex: 1,
   },
   profileSection: {

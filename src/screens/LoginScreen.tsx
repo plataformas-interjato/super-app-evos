@@ -12,13 +12,13 @@ import {
   Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../contexts/AuthContext';
 
 // Importar os SVGs
 import BackgroundLoginSvg from '../img-ref/background_login.svg';
 import LogoEvosSvg from '../img-ref/logo-evos.svg';
 
 interface LoginScreenProps {
-  onLogin: (email: string, password: string) => void;
   onForgotPassword?: () => void;
 }
 
@@ -28,11 +28,11 @@ const { width, height } = Dimensions.get('window');
 const isSmallDevice = height < 700;
 const isMediumDevice = height >= 700 && height < 800;
 
-const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onForgotPassword }) => {
+const LoginScreen: React.FC<LoginScreenProps> = ({ onForgotPassword }) => {
+  const { signIn, loading } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -40,12 +40,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onForgotPassword }) 
       return;
     }
 
-    setLoading(true);
+    const result = await signIn(email, password);
     
-    setTimeout(() => {
-      setLoading(false);
-      onLogin(email, password);
-    }, 1000);
+    if (result.error) {
+      Alert.alert('Erro no Login', result.error);
+    }
+    // Se não há erro, o AuthContext cuidará da navegação automaticamente
   };
 
   return (

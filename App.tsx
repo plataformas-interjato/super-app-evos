@@ -5,55 +5,13 @@ import LoginScreen from './src/screens/LoginScreen';
 import MainScreen from './src/screens/MainScreen';
 import ManagerScreen from './src/screens/ManagerScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
-import { User } from './src/types/workOrder';
+import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 
-type CurrentScreen = 'login' | 'main' | 'profile';
+type CurrentScreen = 'main' | 'profile';
 
-// Usuários mockados para validação
-const mockUsers: { [key: string]: User } = {
-  'gestor@teste.com': {
-    id: '1',
-    name: 'João Silva',
-    role: 'Gestor',
-    userType: 'gestor',
-  },
-  'tecnico@teste.com': {
-    id: '2',
-    name: 'Maria Santos',
-    role: 'Técnico',
-    userType: 'tecnico',
-  },
-};
-
-export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [currentScreen, setCurrentScreen] = useState<CurrentScreen>('login');
-
-  const handleLogin = (email: string, password: string) => {
-    // Verificar se o usuário existe nos dados mockados
-    const authenticatedUser = mockUsers[email.toLowerCase()];
-    
-    if (authenticatedUser) {
-      setUser(authenticatedUser);
-      setCurrentScreen('main');
-    } else {
-      // Se não encontrar, usar usuário padrão (técnico) para demonstração
-      const defaultUser: User = {
-        id: '3',
-        name: 'Usuário Padrão',
-        role: 'Técnico',
-        userType: 'tecnico',
-      };
-      setUser(defaultUser);
-      setCurrentScreen('main');
-    }
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    setCurrentScreen('login');
-  };
+function AppContent() {
+  const { appUser, loading } = useAuth();
+  const [currentScreen, setCurrentScreen] = useState<CurrentScreen>('main');
 
   const handleTabPress = (tab: 'home' | 'profile') => {
     if (tab === 'home') {
@@ -75,29 +33,28 @@ export default function App() {
     );
   }
 
+  // Se não há usuário autenticado, mostrar tela de login
+  if (!appUser) {
+    return <LoginScreen />;
+  }
+
   const renderMainScreen = () => {
-    if (!user) return null;
-    
     // Regra de negócio: Gestor vê ManagerScreen, Técnico vê MainScreen
-    if (user.userType === 'gestor') {
-      return <ManagerScreen user={user} onTabPress={handleTabPress} />;
+    if (appUser.userType === 'gestor') {
+      return <ManagerScreen user={appUser} onTabPress={handleTabPress} />;
     } else {
-      return <MainScreen user={user} onTabPress={handleTabPress} />;
+      return <MainScreen user={appUser} onTabPress={handleTabPress} />;
     }
   };
 
   const renderCurrentScreen = () => {
-    if (!user) {
-      return <LoginScreen onLogin={handleLogin} />;
-    }
-
     switch (currentScreen) {
       case 'main':
         return renderMainScreen();
       case 'profile':
         return (
           <ProfileScreen 
-            user={user} 
+            user={appUser} 
             onBackPress={handleBackToMain}
             onTabPress={handleTabPress}
           />
@@ -112,6 +69,14 @@ export default function App() {
       <StatusBar style="light" />
       {renderCurrentScreen()}
     </>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }
 
