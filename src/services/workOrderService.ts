@@ -75,6 +75,7 @@ const mapSupabaseToWorkOrder = (supabaseOrder: SupabaseWorkOrder): WorkOrder => 
     sync: supabaseOrder.sync,
     createdAt: new Date(supabaseOrder.created_at),
     updatedAt: new Date(supabaseOrder.dt_edicao || supabaseOrder.created_at),
+    os_conteudo: supabaseOrder.os_conteudo,
   };
 };
 

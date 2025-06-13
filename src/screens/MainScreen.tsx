@@ -26,9 +26,10 @@ import { useAuth } from '../contexts/AuthContext';
 interface MainScreenProps {
   user: User;
   onTabPress?: (tab: 'home' | 'profile') => void;
+  onOpenWorkOrder?: (workOrder: WorkOrder) => void;
 }
 
-const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
+const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrder }) => {
   const [searchText, setSearchText] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterStatus>('todas');
   const [activeTab, setActiveTab] = useState<'home' | 'profile'>('home');
@@ -127,10 +128,8 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
   };
 
   const handleModalConfirm = () => {
-    if (selectedWorkOrder) {
-      console.log('Abrir OS:', selectedWorkOrder.id);
-      // Aqui você pode implementar a lógica para abrir a OS
-      // Por exemplo, navegar para uma tela de detalhes da OS
+    if (selectedWorkOrder && onOpenWorkOrder) {
+      onOpenWorkOrder(selectedWorkOrder);
     }
     setModalVisible(false);
     setSelectedWorkOrder(null);

@@ -9,6 +9,7 @@ export interface WorkOrder {
   sync: number;
   createdAt: Date;
   updatedAt: Date;
+  os_conteudo?: string;
 }
 
 export interface User {

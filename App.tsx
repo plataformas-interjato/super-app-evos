@@ -6,13 +6,16 @@ import LoginScreen from './src/screens/LoginScreen';
 import MainScreen from './src/screens/MainScreen';
 import ManagerScreen from './src/screens/ManagerScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import WorkOrderDetailScreen from './src/screens/WorkOrderDetailScreen';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
+import { WorkOrder } from './src/types/workOrder';
 
-type CurrentScreen = 'main' | 'profile';
+type CurrentScreen = 'main' | 'profile' | 'workOrderDetail';
 
 function AppContent() {
   const { appUser, loading } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<CurrentScreen>('main');
+  const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
 
   const handleTabPress = (tab: 'home' | 'profile') => {
     if (tab === 'home') {
@@ -24,6 +27,22 @@ function AppContent() {
 
   const handleBackToMain = () => {
     setCurrentScreen('main');
+    setSelectedWorkOrder(null);
+  };
+
+  const handleOpenWorkOrder = (workOrder: WorkOrder) => {
+    setSelectedWorkOrder(workOrder);
+    setCurrentScreen('workOrderDetail');
+  };
+
+  const handleStartService = () => {
+    // Implementar lógica para iniciar o serviço
+    console.log('Iniciando serviço para OS:', selectedWorkOrder?.id);
+    // Por exemplo, mudar o status para 'em_progresso'
+    if (selectedWorkOrder) {
+      const updatedWorkOrder = { ...selectedWorkOrder, status: 'em_progresso' as const };
+      setSelectedWorkOrder(updatedWorkOrder);
+    }
   };
 
   if (loading) {
@@ -44,7 +63,7 @@ function AppContent() {
     if (appUser.userType === 'gestor') {
       return <ManagerScreen user={appUser} onTabPress={handleTabPress} />;
     } else {
-      return <MainScreen user={appUser} onTabPress={handleTabPress} />;
+      return <MainScreen user={appUser} onTabPress={handleTabPress} onOpenWorkOrder={handleOpenWorkOrder} />;
     }
   };
 
@@ -60,6 +79,16 @@ function AppContent() {
             onTabPress={handleTabPress}
           />
         );
+      case 'workOrderDetail':
+        return selectedWorkOrder ? (
+          <WorkOrderDetailScreen
+            workOrder={selectedWorkOrder}
+            user={appUser}
+            onBackPress={handleBackToMain}
+            onTabPress={handleTabPress}
+            onStartService={handleStartService}
+          />
+        ) : null;
       default:
         return renderMainScreen();
     }
