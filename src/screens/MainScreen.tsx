@@ -231,7 +231,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
   const filters = [
     { key: 'todas' as FilterStatus, label: 'TODAS', icon: 'list' },
     { key: 'aguardando' as FilterStatus, label: 'AGUARDANDO', icon: 'time' },
-    { key: 'em_progresso' as FilterStatus, label: 'EM PROGRESSO', icon: 'settings' },
+    { key: 'em_progresso' as FilterStatus, label: 'PROGRESSO', icon: 'settings' },
     { key: 'finalizada' as FilterStatus, label: 'FINALIZADAS', icon: 'checkmark-circle' },
   ];
 
@@ -335,9 +335,20 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
             >
               <Ionicons 
                 name={filter.icon as any} 
-                size={20} 
+                size={18} 
                 color={activeFilter === filter.key ? 'white' : '#6b7280'} 
               />
+              <Text 
+                style={[
+                  styles.filterText,
+                  activeFilter === filter.key && styles.activeFilterText,
+                ]}
+                numberOfLines={1}
+                adjustsFontSizeToFit={true}
+                minimumFontScale={0.8}
+              >
+                {filter.label}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -567,23 +578,26 @@ const styles = StyleSheet.create({
   },
   filterButton: {
     flex: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 12,
     borderRadius: 10,
     backgroundColor: '#e5e7eb',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
     minWidth: 50,
-    minHeight: 50,
+    minHeight: 60,
+    gap: 4,
   },
   activeFilterButton: {
     backgroundColor: '#3b82f6',
   },
   filterText: {
-    fontSize: RFValue(14),
+    fontSize: RFValue(8),
     fontWeight: 'bold',
     color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 10,
   },
   activeFilterText: {
     color: 'white',
