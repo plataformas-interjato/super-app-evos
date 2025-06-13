@@ -209,10 +209,10 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
   };
 
   const filters = [
-    { key: 'todas' as FilterStatus, label: 'TODAS' },
-    { key: 'aguardando' as FilterStatus, label: 'AGUARDANDO' },
-    { key: 'em_progresso' as FilterStatus, label: 'EM PROGRESSO' },
-    { key: 'finalizada' as FilterStatus, label: 'FINALIZADAS' },
+    { key: 'todas' as FilterStatus, label: 'TODAS', icon: 'list' },
+    { key: 'aguardando' as FilterStatus, label: 'AGUARDANDO', icon: 'time' },
+    { key: 'em_progresso' as FilterStatus, label: 'EM PROGRESSO', icon: 'settings' },
+    { key: 'finalizada' as FilterStatus, label: 'FINALIZADAS', icon: 'checkmark-circle' },
   ];
 
   const isWorkOrderDelayed = (workOrder: WorkOrder) => {
@@ -313,14 +313,11 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
               ]}
               onPress={() => setActiveFilter(filter.key)}
             >
-              <Text
-                style={[
-                  styles.filterText,
-                  activeFilter === filter.key && styles.activeFilterText,
-                ]}
-              >
-                {filter.label}
-              </Text>
+              <Ionicons 
+                name={filter.icon as any} 
+                size={20} 
+                color={activeFilter === filter.key ? 'white' : '#6b7280'} 
+              />
             </TouchableOpacity>
           ))}
         </View>
@@ -392,17 +389,17 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
                 </View>
 
                 <View style={styles.infoRow}>
-                  <Ionicons name="build-outline" size={16} color="#6b7280" />
+                  <Ionicons name="build-outline" size={16} color="#000000" />
                   <Text style={styles.infoText}>{workOrder.title}</Text>
                 </View>
 
                 <View style={styles.infoRow}>
-                  <Ionicons name="person-outline" size={16} color="#6b7280" />
+                  <Ionicons name="person-outline" size={16} color="#000000" />
                   <Text style={styles.infoText}>{workOrder.client}</Text>
                 </View>
 
                 <View style={styles.infoRow}>
-                  <Ionicons name="location-outline" size={16} color="#6b7280" />
+                  <Ionicons name="location-outline" size={16} color="#000000" />
                   <Text style={styles.infoText}>{workOrder.address}</Text>
                 </View>
 
@@ -413,7 +410,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
                         style={styles.syncButton}
                         onPress={() => handleWorkOrderRefresh(workOrder)}
                       >
-                        <Ionicons name="sync" size={20} color="#6b7280" />
+                        <Ionicons name="sync" size={20} color="#000000" />
                       </TouchableOpacity>
                     )}
                   </View>
@@ -546,8 +543,10 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: '#e5e7eb',
     alignItems: 'center',
+    justifyContent: 'center',
     overflow: 'hidden',
-    minWidth: 0,
+    minWidth: 50,
+    minHeight: 50,
   },
   activeFilterButton: {
     backgroundColor: '#3b82f6',
@@ -587,7 +586,7 @@ const styles = StyleSheet.create({
   cardId: {
     fontSize: RFValue(16),
     fontWeight: 'bold',
-    color: '#374151',
+    color: '#000000',
   },
   statusBadge: {
     paddingHorizontal: 12,
@@ -609,7 +608,7 @@ const styles = StyleSheet.create({
   infoText: {
     marginLeft: 8,
     fontSize: RFValue(14),
-    color: '#6b7280',
+    color: '#000000',
     flex: 1,
   },
   cardFooter: {

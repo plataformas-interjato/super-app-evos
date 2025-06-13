@@ -23,7 +23,7 @@ const ManagerStatsCard: React.FC<ManagerStatsCardProps> = ({ stats }) => {
         <View style={styles.statItem}>
           <Text style={styles.statLabel}>Ranqueamento</Text>
           <View style={styles.rankingContainer}>
-            <Ionicons name="star" size={16} color="#f59e0b" />
+            <Ionicons name="star" size={16} color="#000000" />
             <Text style={styles.rankingValue}>{stats.ranking.toFixed(1)}</Text>
           </View>
         </View>

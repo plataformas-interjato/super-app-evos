@@ -56,23 +56,23 @@ const WorkOrderCard: React.FC<WorkOrderCardProps> = ({
       </View>
 
       <View style={styles.infoRow}>
-        <Ionicons name="build" size={RFValue(16)} color="#6b7280" />
+        <Ionicons name="build" size={RFValue(16)} color="#000000" />
         <Text style={styles.infoText}>{workOrder.title}</Text>
       </View>
 
       <View style={styles.infoRow}>
-        <Ionicons name="person" size={RFValue(16)} color="#6b7280" />
+        <Ionicons name="person" size={RFValue(16)} color="#000000" />
         <Text style={styles.infoText}>{workOrder.client}</Text>
       </View>
 
       <View style={styles.infoRow}>
-        <Ionicons name="location" size={RFValue(16)} color="#6b7280" />
+        <Ionicons name="location" size={RFValue(16)} color="#000000" />
         <Text style={styles.infoText}>{workOrder.address}</Text>
       </View>
 
       <View style={styles.footer}>
         <TouchableOpacity style={styles.refreshButton} onPress={onRefresh}>
-          <Ionicons name="refresh" size={RFValue(20)} color="#6b7280" />
+          <Ionicons name="refresh" size={RFValue(20)} color="#000000" />
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
@@ -104,7 +104,7 @@ const styles = StyleSheet.create({
   id: {
     fontSize: RFValue(16),
     fontWeight: 'bold',
-    color: '#374151',
+    color: '#000000',
   },
   priorityBadge: {
     paddingHorizontal: 12,
@@ -124,7 +124,7 @@ const styles = StyleSheet.create({
   infoText: {
     marginLeft: 8,
     fontSize: RFValue(14),
-    color: '#6b7280',
+    color: '#000000',
     flex: 1,
   },
   footer: {

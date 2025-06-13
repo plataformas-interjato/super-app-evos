@@ -21,7 +21,7 @@ const StatsCard: React.FC<StatsCardProps> = ({ stats }) => {
       <View style={styles.statItem}>
         <Text style={styles.statLabel}>Ranqueamento</Text>
         <View style={styles.rankingContainer}>
-          <Ionicons name="star" size={16} color="#f59e0b" />
+          <Ionicons name="star" size={16} color="#000000" />
           <Text style={styles.rankingValue}>{stats.ranking.toFixed(1)}</Text>
         </View>
       </View>
@@ -54,14 +54,14 @@ const styles = StyleSheet.create({
   },
   statLabel: {
     fontSize: RFValue(14),
-    color: '#6b7280',
+    color: '#000000',
     marginBottom: 8,
     textAlign: 'center',
   },
   statValue: {
     fontSize: RFValue(18),
     fontWeight: 'bold',
-    color: '#374151',
+    color: '#000000',
   },
   divider: {
     width: 1,
@@ -76,7 +76,7 @@ const styles = StyleSheet.create({
   rankingValue: {
     fontSize: RFValue(18),
     fontWeight: 'bold',
-    color: '#374151',
+    color: '#000000',
     marginLeft: 5,
   },
 });
