@@ -145,10 +145,12 @@ const WorkOrderDetailScreen: React.FC<WorkOrderDetailScreenProps> = ({
       </ScrollView>
 
       {/* Bottom Navigation */}
-      <BottomNavigation 
-        activeTab="home" 
-        onTabPress={onTabPress}
-      />
+      <View style={styles.bottomNavigationContainer}>
+        <BottomNavigation 
+          activeTab="home" 
+          onTabPress={onTabPress}
+        />
+      </View>
     </SafeAreaView>
   );
 };
@@ -312,6 +314,12 @@ const styles = StyleSheet.create({
   },
   bottomSpacing: {
     height: 100,
+  },
+  bottomNavigationContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
   },
 });
 

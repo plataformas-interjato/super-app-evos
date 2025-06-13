@@ -7,10 +7,11 @@ import MainScreen from './src/screens/MainScreen';
 import ManagerScreen from './src/screens/ManagerScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import WorkOrderDetailScreen from './src/screens/WorkOrderDetailScreen';
+import StartServiceScreen from './src/screens/StartServiceScreen';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import { WorkOrder } from './src/types/workOrder';
 
-type CurrentScreen = 'main' | 'profile' | 'workOrderDetail';
+type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'startService';
 
 function AppContent() {
   const { appUser, loading } = useAuth();
@@ -36,13 +37,24 @@ function AppContent() {
   };
 
   const handleStartService = () => {
-    // Implementar lógica para iniciar o serviço
-    console.log('Iniciando serviço para OS:', selectedWorkOrder?.id);
+    // Navegar para a tela de iniciar serviço
+    setCurrentScreen('startService');
+  };
+
+  const handleConfirmStart = async (photo?: string) => {
+    // Implementar lógica para confirmar início (salvar foto, atualizar status, etc.)
+    console.log('Confirmando início do serviço para OS:', selectedWorkOrder?.id);
+    console.log('Foto:', photo ? 'Foto capturada' : 'Sem foto');
+    
     // Por exemplo, mudar o status para 'em_progresso'
     if (selectedWorkOrder) {
       const updatedWorkOrder = { ...selectedWorkOrder, status: 'em_progresso' as const };
       setSelectedWorkOrder(updatedWorkOrder);
     }
+    
+    // Voltar para a tela principal
+    setCurrentScreen('main');
+    setSelectedWorkOrder(null);
   };
 
   if (loading) {
@@ -87,6 +99,16 @@ function AppContent() {
             onBackPress={handleBackToMain}
             onTabPress={handleTabPress}
             onStartService={handleStartService}
+          />
+        ) : null;
+      case 'startService':
+        return selectedWorkOrder ? (
+          <StartServiceScreen
+            workOrder={selectedWorkOrder}
+            user={appUser}
+            onBackPress={() => setCurrentScreen('workOrderDetail')}
+            onTabPress={handleTabPress}
+            onConfirmStart={handleConfirmStart}
           />
         ) : null;
       default:

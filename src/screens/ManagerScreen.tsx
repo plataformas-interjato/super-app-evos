@@ -31,11 +31,12 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
   const [isConnected, setIsConnected] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [managerStats, setManagerStats] = useState<ManagerStats>({
+    totalEvaluated: 156,
     ranking: 4.8,
-    totalOS: 156,
-    aguardando: 12,
-    emAndamento: 8,
-    finalizadas: 136,
+    executed: { count: 136, percentage: 87.2 },
+    delayed: { count: 8, percentage: 5.1 },
+    pending: { count: 12, percentage: 7.7 },
+    lastUpdate: new Date().toISOString(),
   });
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
@@ -43,22 +44,26 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
   // Dados de exemplo - em produção, viriam de uma API
   const mockWorkOrders: WorkOrder[] = [
     {
-      id: '001',
+      id: 1,
       title: 'Título',
       client: 'Cliente',
       address: 'Endereço',
       priority: 'alta',
       status: 'aguardando',
+      scheduling_date: new Date(),
+      sync: 1,
       createdAt: new Date(),
       updatedAt: new Date(),
     },
     {
-      id: '002',
+      id: 2,
       title: 'Título',
       client: 'Cliente',
       address: 'Endereço',
       priority: 'media',
       status: 'em_progresso',
+      scheduling_date: new Date(),
+      sync: 1,
       createdAt: new Date(),
       updatedAt: new Date(),
     },
@@ -83,11 +88,12 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
     });
     
     setManagerStats({
+      totalEvaluated: 156,
       ranking: 4.8,
-      totalOS: 156,
-      aguardando: 12,
-      emAndamento: 8,
-      finalizadas: 136,
+      executed: { count: 136, percentage: 87.2 },
+      delayed: { count: 8, percentage: 5.1 },
+      pending: { count: 12, percentage: 7.7 },
+      lastUpdate: new Date().toISOString(),
     });
   };
 
@@ -155,7 +161,7 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
   const filteredWorkOrders = workOrders.filter((workOrder) => {
     const matchesSearch = workOrder.title.toLowerCase().includes(searchText.toLowerCase()) ||
                          workOrder.client.toLowerCase().includes(searchText.toLowerCase()) ||
-                         workOrder.id.includes(searchText);
+                         workOrder.id.toString().includes(searchText);
     
     return matchesSearch;
   });
