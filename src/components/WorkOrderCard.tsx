@@ -41,13 +41,38 @@ const WorkOrderCard: React.FC<WorkOrderCardProps> = ({
     }
   };
 
+  // Verifica se a OS está encerrada (finalizada ou cancelada)
+  const isFinished = workOrder.status === 'finalizada' || workOrder.status === 'cancelada';
+
+  const handlePress = () => {
+    // Não executa a ação de clique se a OS estiver encerrada
+    if (isFinished || !onPress) {
+      return;
+    }
+    onPress();
+  };
+
   return (
-    <TouchableOpacity style={styles.container} onPress={onPress}>
+    <TouchableOpacity 
+      style={[
+        styles.container,
+        isFinished && styles.disabledContainer
+      ]} 
+      onPress={handlePress}
+      activeOpacity={isFinished ? 1 : 0.7}
+      disabled={isFinished}
+    >
       <View style={styles.header}>
-        <Text style={styles.id}>#{workOrder.id}</Text>
+        <Text style={[
+          styles.id,
+          isFinished && styles.disabledText
+        ]}>
+          #{workOrder.id}
+        </Text>
         <View style={[
           styles.priorityBadge,
-          { backgroundColor: getPriorityColor(workOrder.priority) }
+          { backgroundColor: getPriorityColor(workOrder.priority) },
+          isFinished && styles.disabledBadge
         ]}>
           <Text style={styles.priorityText}>
             {getPriorityLabel(workOrder.priority)}
@@ -56,23 +81,61 @@ const WorkOrderCard: React.FC<WorkOrderCardProps> = ({
       </View>
 
       <View style={styles.infoRow}>
-        <Ionicons name="build" size={RFValue(16)} color="#000000" />
-        <Text style={styles.infoText}>{workOrder.title}</Text>
+        <Ionicons 
+          name="build" 
+          size={RFValue(16)} 
+          color={isFinished ? "#9ca3af" : "#000000"} 
+        />
+        <Text style={[
+          styles.infoText,
+          isFinished && styles.disabledText
+        ]}>
+          {workOrder.title}
+        </Text>
       </View>
 
       <View style={styles.infoRow}>
-        <Ionicons name="person" size={RFValue(16)} color="#000000" />
-        <Text style={styles.infoText}>{workOrder.client}</Text>
+        <Ionicons 
+          name="person" 
+          size={RFValue(16)} 
+          color={isFinished ? "#9ca3af" : "#000000"} 
+        />
+        <Text style={[
+          styles.infoText,
+          isFinished && styles.disabledText
+        ]}>
+          {workOrder.client}
+        </Text>
       </View>
 
       <View style={styles.infoRow}>
-        <Ionicons name="location" size={RFValue(16)} color="#000000" />
-        <Text style={styles.infoText}>{workOrder.address}</Text>
+        <Ionicons 
+          name="location" 
+          size={RFValue(16)} 
+          color={isFinished ? "#9ca3af" : "#000000"} 
+        />
+        <Text style={[
+          styles.infoText,
+          isFinished && styles.disabledText
+        ]}>
+          {workOrder.address}
+        </Text>
       </View>
 
       <View style={styles.footer}>
-        <TouchableOpacity style={styles.refreshButton} onPress={onRefresh}>
-          <Ionicons name="refresh" size={RFValue(20)} color="#000000" />
+        <TouchableOpacity 
+          style={[
+            styles.refreshButton,
+            isFinished && styles.disabledButton
+          ]} 
+          onPress={onRefresh}
+          disabled={isFinished}
+        >
+          <Ionicons 
+            name="refresh" 
+            size={RFValue(20)} 
+            color={isFinished ? "#9ca3af" : "#000000"} 
+          />
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
@@ -95,6 +158,10 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 3,
   },
+  disabledContainer: {
+    backgroundColor: '#f9fafb',
+    opacity: 0.6,
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -106,10 +173,16 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#000000',
   },
+  disabledText: {
+    color: '#9ca3af',
+  },
   priorityBadge: {
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
+  },
+  disabledBadge: {
+    opacity: 0.5,
   },
   priorityText: {
     color: 'white',
@@ -134,6 +207,9 @@ const styles = StyleSheet.create({
   },
   refreshButton: {
     padding: 8,
+  },
+  disabledButton: {
+    opacity: 0.5,
   },
 });
 

@@ -14,6 +14,7 @@ import ManagerStatsCard from '../components/ManagerStatsCard';
 import SearchBar from '../components/SearchBar';
 import WorkOrderCard from '../components/WorkOrderCard';
 import BottomNavigation from '../components/BottomNavigation';
+import WorkOrderModal from '../components/WorkOrderModal';
 
 import { WorkOrder, User } from '../types/workOrder';
 import { ManagerStats } from '../types/manager';
@@ -30,13 +31,14 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
   const [isConnected, setIsConnected] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [managerStats, setManagerStats] = useState<ManagerStats>({
-    totalEvaluated: 0,
-    ranking: 0.0,
-    executed: { count: 0, percentage: 39 },
-    delayed: { count: 0, percentage: 41 },
-    pending: { count: 0, percentage: 20 },
-    lastUpdate: '',
+    ranking: 4.8,
+    totalOS: 156,
+    aguardando: 12,
+    emAndamento: 8,
+    finalizadas: 136,
   });
+  const [modalVisible, setModalVisible] = useState(false);
+  const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
 
   // Dados de exemplo - em produção, viriam de uma API
   const mockWorkOrders: WorkOrder[] = [
@@ -81,12 +83,11 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
     });
     
     setManagerStats({
-      totalEvaluated: 150,
-      ranking: 0.0,
-      executed: { count: 0, percentage: 39 },
-      delayed: { count: 0, percentage: 41 },
-      pending: { count: 0, percentage: 20 },
-      lastUpdate: `${currentDate}`,
+      ranking: 4.8,
+      totalOS: 156,
+      aguardando: 12,
+      emAndamento: 8,
+      finalizadas: 136,
     });
   };
 
@@ -106,14 +107,31 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
   };
 
   const handleWorkOrderPress = (workOrder: WorkOrder) => {
-    Alert.alert(
-      'Ordem de Serviço',
-      `Abrir OS #${workOrder.id} - ${workOrder.title}?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Abrir', onPress: () => console.log('Abrir OS:', workOrder.id) },
-      ]
-    );
+    // Não permite clique em OS encerradas (finalizadas ou canceladas)
+    if (workOrder.status === 'finalizada' || workOrder.status === 'cancelada') {
+      return;
+    }
+
+    // Para OS em andamento ou aguardando, mostra o modal
+    if (workOrder.status === 'aguardando' || workOrder.status === 'em_progresso') {
+      setSelectedWorkOrder(workOrder);
+      setModalVisible(true);
+    }
+  };
+
+  const handleModalConfirm = () => {
+    if (selectedWorkOrder) {
+      console.log('Abrir OS:', selectedWorkOrder.id);
+      // Aqui você pode implementar a lógica para abrir a OS
+      // Por exemplo, navegar para uma tela de detalhes da OS
+    }
+    setModalVisible(false);
+    setSelectedWorkOrder(null);
+  };
+
+  const handleModalClose = () => {
+    setModalVisible(false);
+    setSelectedWorkOrder(null);
   };
 
   const handleWorkOrderRefresh = (workOrder: WorkOrder) => {
@@ -191,6 +209,13 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
       <BottomNavigation
         activeTab={activeTab}
         onTabPress={handleTabPress}
+      />
+
+      <WorkOrderModal
+        visible={modalVisible}
+        onConfirm={handleModalConfirm}
+        onClose={handleModalClose}
+        workOrder={selectedWorkOrder}
       />
     </LinearGradient>
   );

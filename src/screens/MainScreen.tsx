@@ -18,6 +18,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { RFValue } from 'react-native-responsive-fontsize';
 
 import BottomNavigation from '../components/BottomNavigation';
+import WorkOrderModal from '../components/WorkOrderModal';
 import { WorkOrder, User, FilterStatus } from '../types/workOrder';
 import { fetchWorkOrdersWithFilters, updateWorkOrderStatus } from '../services/workOrderService';
 import { useAuth } from '../contexts/AuthContext';
@@ -36,6 +37,8 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
 
   const { appUser } = useAuth();
 
@@ -111,14 +114,31 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
   };
 
   const handleWorkOrderPress = (workOrder: WorkOrder) => {
-    Alert.alert(
-      'Ordem de Serviço',
-      `Abrir OS #${workOrder.id} - ${workOrder.title}?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Abrir', onPress: () => console.log('Abrir OS:', workOrder.id) },
-      ]
-    );
+    // Não permite clique em OS encerradas (finalizadas ou canceladas)
+    if (workOrder.status === 'finalizada' || workOrder.status === 'cancelada') {
+      return;
+    }
+
+    // Para OS em andamento ou aguardando, mostra o modal
+    if (workOrder.status === 'aguardando' || workOrder.status === 'em_progresso') {
+      setSelectedWorkOrder(workOrder);
+      setModalVisible(true);
+    }
+  };
+
+  const handleModalConfirm = () => {
+    if (selectedWorkOrder) {
+      console.log('Abrir OS:', selectedWorkOrder.id);
+      // Aqui você pode implementar a lógica para abrir a OS
+      // Por exemplo, navegar para uma tela de detalhes da OS
+    }
+    setModalVisible(false);
+    setSelectedWorkOrder(null);
+  };
+
+  const handleModalClose = () => {
+    setModalVisible(false);
+    setSelectedWorkOrder(null);
   };
 
   const handleWorkOrderRefresh = async (workOrder: WorkOrder) => {
@@ -441,6 +461,15 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
         activeTab={activeTab}
         onTabPress={handleTabPress}
       />
+
+      {selectedWorkOrder && (
+        <WorkOrderModal
+          visible={modalVisible}
+          onConfirm={handleModalConfirm}
+          onClose={handleModalClose}
+          workOrder={selectedWorkOrder}
+        />
+      )}
     </ImageBackground>
   );
 };

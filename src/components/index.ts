@@ -7,4 +7,5 @@ export { default as ProfileHeader } from './ProfileHeader';
 export { default as StatsCard } from './StatsCard';
 export { default as AuditSearchSection } from './AuditSearchSection';
 export { default as AuditCard } from './AuditCard';
-export { default as ManagerStatsCard } from './ManagerStatsCard'; 
+export { default as ManagerStatsCard } from './ManagerStatsCard';
+export { default as WorkOrderModal } from './WorkOrderModal'; 
