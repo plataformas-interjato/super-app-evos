@@ -1,17 +1,19 @@
 export interface WorkOrder {
-  id: string;
+  id: number;
   title: string;
   client: string;
   address: string;
+  status: 'aguardando' | 'em_progresso' | 'finalizada' | 'cancelada';
   priority: 'alta' | 'media' | 'baixa';
-  status: 'todas' | 'aguardando' | 'em_progresso' | 'finalizada' | 'cancelada';
+  scheduling_date: Date;
+  sync: number;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface User {
-  id: string;
-  numericId?: number;
+  id: string; // ID numérico da tabela usuario
+  uuid?: string; // UUID do Supabase Auth (referência)
   name: string;
   role: string;
   userType: 'gestor' | 'tecnico';

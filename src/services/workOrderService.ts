@@ -14,6 +14,9 @@ export interface SupabaseWorkOrder {
   endereco_bairro: string | null;
   endereco_logradouro: string;
   cliente_id: number;
+  cliente: {
+    nome: string;
+  };
   data_agendamento: string;
   tipo_os_id: number;
   supervisor_id: number;
@@ -61,36 +64,17 @@ const mapSupabaseToWorkOrder = (supabaseOrder: SupabaseWorkOrder): WorkOrder => 
     : supabaseOrder.endereco_logradouro;
 
   return {
-    id: supabaseOrder.id.toString(),
+    id: supabaseOrder.id,
     title: supabaseOrder.os_motivo_descricao,
-    client: `Cliente ID: ${supabaseOrder.cliente_id}`, // Por enquanto, até termos a tabela de clientes
+    client: supabaseOrder.cliente?.nome || 'Cliente não encontrado',
     address: endereco,
     priority: mapPriority(supabaseOrder.os_prioridade),
     status: mapStatus(supabaseOrder.os_status_txt),
+    scheduling_date: new Date(supabaseOrder.data_agendamento),
+    sync: supabaseOrder.sync,
     createdAt: new Date(supabaseOrder.created_at),
     updatedAt: new Date(supabaseOrder.dt_edicao || supabaseOrder.created_at),
   };
-};
-
-// Função para buscar ID numérico do usuário usando UUID
-const getUserNumericId = async (userUuid: string): Promise<number | null> => {
-  try {
-    const { data, error } = await supabase
-      .from('usuario')
-      .select('id')
-      .eq('user_id', userUuid)
-      .single();
-    
-    if (error) {
-      console.error('Erro ao buscar ID numérico do usuário:', error);
-      return null;
-    }
-    
-    return data?.id || null;
-  } catch (error) {
-    console.error('Erro inesperado ao buscar ID numérico do usuário:', error);
-    return null;
-  }
 };
 
 // Buscar todas as ordens de serviço
@@ -116,21 +100,12 @@ export const fetchWorkOrders = async (): Promise<{ data: WorkOrder[] | null; err
 };
 
 // Buscar ordens de serviço por usuário (técnico)
-export const fetchWorkOrdersByTechnician = async (userUuid: string): Promise<{ data: WorkOrder[] | null; error: string | null }> => {
+export const fetchWorkOrdersByTechnician = async (userId: string): Promise<{ data: WorkOrder[] | null; error: string | null }> => {
   try {
-    // Primeiro buscar o ID numérico do usuário
-    const numericUserId = await getUserNumericId(userUuid);
-    
-    if (!numericUserId) {
-      return { data: null, error: 'Usuário não encontrado na base de dados' };
-    }
-    
-    console.log('🔄 Mapeamento: UUID', userUuid, '→ ID numérico', numericUserId);
-    
     const { data, error } = await supabase
       .from('ordem_servico')
       .select('*')
-      .eq('tecnico_resp_id', numericUserId)
+      .eq('tecnico_resp_id', parseInt(userId)) // userId já é o ID numérico
       .eq('ativo', 1) // Apenas OS ativas
       .order('created_at', { ascending: false });
 
@@ -156,29 +131,18 @@ export const fetchWorkOrdersWithFilters = async (
   try {
     let query = supabase
       .from('ordem_servico')
-      .select('*')
-      .eq('ativo', 1); // Apenas OS ativas
+      .select(`
+        *,
+        cliente:cliente_id (
+          nome
+        )
+      `)
+      .eq('ativo', 1);
 
     // Filtrar por usuário se fornecido
     if (userId) {
-      // Verificar se é um número (ID numérico) ou UUID
-      const isNumeric = /^\d+$/.test(userId);
-      
-      if (isNumeric) {
-        // É um ID numérico, usar diretamente
-        console.log('🔢 Usando ID numérico direto:', userId);
-        query = query.eq('tecnico_resp_id', parseInt(userId));
-      } else {
-        // É um UUID, buscar o ID numérico primeiro
-        const numericUserId = await getUserNumericId(userId);
-        
-        if (!numericUserId) {
-          return { data: null, error: 'Usuário não encontrado na base de dados' };
-        }
-        
-        console.log('🔄 Mapeamento: UUID', userId, '→ ID numérico', numericUserId);
-        query = query.eq('tecnico_resp_id', numericUserId);
-      }
+      console.log('🔢 Usando ID numérico do usuário:', userId);
+      query = query.eq('tecnico_resp_id', parseInt(userId));
     }
 
     // Filtrar por status se não for 'todas'

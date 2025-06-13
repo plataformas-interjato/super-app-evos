@@ -68,35 +68,20 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
     try {
       setError(null);
       
-      // Para técnicos, mostrar apenas suas ordens de serviço
-      // Para gestores, mostrar todas as ordens de serviço
-      let userIdForFilter: string | undefined = undefined;
-      
-      if (appUser?.userType === 'tecnico') {
-        if (appUser.numericId) {
-          // Usar o ID numérico diretamente
-          userIdForFilter = appUser.numericId.toString();
-        } else {
-          // Fallback: usar o UUID para busca
-          userIdForFilter = appUser.id;
-        }
-      }
+      const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
       
       console.log('🔍 Carregando ordens de serviço...');
       console.log('👤 Usuário:', appUser?.name, '- Tipo:', appUser?.userType);
-      console.log('🔧 UUID:', appUser?.id);
-      console.log('🔢 ID numérico:', appUser?.numericId);
-      console.log('🔧 UserId para filtro:', userIdForFilter);
+      console.log('🔢 ID numérico do usuário:', appUser?.id);
+      console.log('🔧 UserId para filtro:', userId);
       console.log('📋 Filtro ativo:', activeFilter);
       console.log('🔎 Busca:', searchText);
       
       const { data, error: fetchError } = await fetchWorkOrdersWithFilters(
-        userIdForFilter,
+        userId,
         activeFilter,
         searchText.trim() || undefined
       );
-
-      console.log('📊 Resultado da busca:', { data, fetchError });
 
       if (fetchError) {
         setError(fetchError);
@@ -104,6 +89,10 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
         setWorkOrders([]);
       } else {
         console.log('✅ Dados carregados com sucesso:', data?.length, 'ordens encontradas');
+        // Log para verificar as datas de agendamento
+        data?.forEach(workOrder => {
+          console.log(`OS #${workOrder.id} - Data agendamento:`, new Date(workOrder.scheduling_date).toLocaleDateString());
+        });
         setWorkOrders(data || []);
       }
     } catch (err) {
@@ -171,16 +160,24 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
   const getStatusBadgeColor = (workOrder: WorkOrder) => {
     switch (workOrder.status) {
       case 'aguardando':
-        return '#f59e0b'; // yellow
+        return '#AFAFAF'; // Fundo aguardando
       case 'em_progresso':
-        return '#3b82f6'; // blue
+        return '#f4a133'; // Fundo em progresso
       case 'finalizada':
-        return '#10b981'; // green
+        return '#60c0f4'; // Fundo finalizada
       case 'cancelada':
-        return '#ef4444'; // red
+        return '#ef4444'; // red (mantido para cancelada)
       default:
         return '#6b7280'; // gray
     }
+  };
+
+  const getStatusBorderColor = (workOrder: WorkOrder) => {
+    return 'white'; // Borda branca para todos os status
+  };
+
+  const getStatusTextColor = (workOrder: WorkOrder) => {
+    return 'white'; // Texto branco para todos os status
   };
 
   const getStatusText = (status: string) => {
@@ -217,6 +214,27 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
     { key: 'em_progresso' as FilterStatus, label: 'EM PROGRESSO' },
     { key: 'finalizada' as FilterStatus, label: 'FINALIZADAS' },
   ];
+
+  const isWorkOrderDelayed = (workOrder: WorkOrder) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const schedulingDate = new Date(workOrder.scheduling_date);
+    schedulingDate.setHours(0, 0, 0, 0);
+    
+    console.log('🔍 Verificando atraso para OS:', workOrder.id);
+    console.log('📅 Data de agendamento:', schedulingDate.toLocaleDateString());
+    console.log('📅 Data atual:', today.toLocaleDateString());
+    console.log('📊 Status da OS:', workOrder.status);
+    
+    const isDelayed = schedulingDate < today && 
+                     workOrder.status !== 'finalizada' && 
+                     workOrder.status !== 'cancelada';
+    
+    console.log('⏰ Está em atraso?', isDelayed);
+    
+    return isDelayed;
+  };
 
   return (
     <ImageBackground
@@ -348,19 +366,29 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
             {workOrders.map((workOrder, index) => (
               <TouchableOpacity 
                 key={workOrder.id} 
-                style={styles.workOrderCard}
+                style={[
+                  styles.workOrderCard,
+                  {
+                    backgroundColor: workOrder.status === 'em_progresso' ? '#f9dbb1' :
+                                   workOrder.status === 'aguardando' ? '#dadadf' :
+                                   workOrder.status === 'finalizada' ? '#9fd8f7' :
+                                   'white',
+                    borderColor: workOrder.status === 'em_progresso' ? '#fdb23b' :
+                               workOrder.status === 'aguardando' ? '#afafaf' :
+                               workOrder.status === 'finalizada' ? '#1cabec' :
+                               '#f3f4f6'
+                  }
+                ]}
                 onPress={() => handleWorkOrderPress(workOrder)}
               >
                 <View style={styles.cardHeader}>
                   <Text style={styles.cardId}>#{workOrder.id}</Text>
-                  <View style={[
-                    styles.statusBadge,
-                    { backgroundColor: getStatusBadgeColor(workOrder) }
-                  ]}>
-                    <Text style={styles.statusText}>
-                      {getStatusText(workOrder.status)}
-                    </Text>
-                  </View>
+                  {isWorkOrderDelayed(workOrder) && (
+                    <View style={styles.delayBadge}>
+                      <Ionicons name="warning" size={16} color="#ef4444" />
+                      <Text style={styles.delayText}>EM ATRASO</Text>
+                    </View>
+                  )}
                 </View>
 
                 <View style={styles.infoRow}>
@@ -379,12 +407,29 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
                 </View>
 
                 <View style={styles.cardFooter}>
-                  <TouchableOpacity 
-                    style={styles.refreshButton}
-                    onPress={() => handleWorkOrderRefresh(workOrder)}
-                  >
-                    <Ionicons name="refresh" size={20} color="#6b7280" />
-                  </TouchableOpacity>
+                  <View style={styles.footerLeft}>
+                    {workOrder.sync === 0 && (
+                      <TouchableOpacity 
+                        style={styles.syncButton}
+                        onPress={() => handleWorkOrderRefresh(workOrder)}
+                      >
+                        <Ionicons name="sync" size={20} color="#6b7280" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <View style={styles.footerRight}>
+                    <View style={[
+                      styles.statusBadge,
+                      { backgroundColor: getStatusBadgeColor(workOrder), borderColor: getStatusBorderColor(workOrder) }
+                    ]}>
+                      <Text style={[
+                        styles.statusText,
+                        { color: getStatusTextColor(workOrder) }
+                      ]}>
+                        {getStatusText(workOrder.status)}
+                      </Text>
+                    </View>
+                  </View>
                 </View>
               </TouchableOpacity>
             ))}
@@ -548,6 +593,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
+    borderWidth: 2,
     overflow: 'hidden',
   },
   statusText: {
@@ -568,11 +614,34 @@ const styles = StyleSheet.create({
   },
   cardFooter: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginTop: 8,
   },
-  refreshButton: {
+  footerLeft: {
+    flex: 1,
+  },
+  footerRight: {
+    alignItems: 'flex-end',
+  },
+  syncButton: {
     padding: 8,
+  },
+  delayBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fee2e2',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  delayText: {
+    color: '#ef4444',
+    fontSize: RFValue(12),
+    fontWeight: 'bold',
+    marginLeft: 4,
   },
   bottomSpacer: {
     height: 20,

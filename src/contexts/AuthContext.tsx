@@ -36,8 +36,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         // Criar usuário padrão se não encontrar
         return {
-          id: supabaseUser.id,
-          numericId: undefined,
+          id: '0', // ID padrão para erros
+          uuid: supabaseUser.id, // UUID como referência
           name: supabaseUser.email?.split('@')[0] || 'Usuário',
           role: 'Técnico',
           userType: 'tecnico',
@@ -49,8 +49,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const isGestor = funcao === 'supervisor' || funcao === 'gestor';
 
       return {
-        id: userProfile.user_id || supabaseUser.id, // UUID do Supabase Auth
-        numericId: userProfile.id, // ID numérico da tabela usuario
+        id: userProfile.id.toString(), // ID numérico como ID principal
+        uuid: userProfile.user_id || supabaseUser.id, // UUID como referência
         name: userProfile.nome || userProfile.name || supabaseUser.email?.split('@')[0] || 'Usuário',
         role: isGestor ? 'Gestor' : 'Técnico',
         userType: isGestor ? 'gestor' : 'tecnico',
@@ -59,8 +59,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error) {
       console.log('Erro no mapeamento do usuário:', error);
       return {
-        id: supabaseUser.id,
-        numericId: undefined,
+        id: '0',
+        uuid: supabaseUser.id,
         name: supabaseUser.email?.split('@')[0] || 'Usuário',
         role: 'Técnico',
         userType: 'tecnico',
