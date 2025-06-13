@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { WorkOrder, FilterStatus } from '../types/workOrder';
+import { cacheService } from './cacheService';
 
 export interface SupabaseWorkOrder {
   id: number;
@@ -77,8 +78,21 @@ const mapSupabaseToWorkOrder = (supabaseOrder: SupabaseWorkOrder): WorkOrder => 
   };
 };
 
-// Buscar todas as ordens de serviço
-export const fetchWorkOrders = async (): Promise<{ data: WorkOrder[] | null; error: string | null }> => {
+// Configurações de cache específicas para work orders
+const WORK_ORDER_CACHE_CONFIG = {
+  ttl: 10 * 60 * 1000, // 10 minutos para expiração do cache
+  syncInterval: 3 * 60 * 1000, // 3 minutos para verificar atualizações
+};
+
+// Chaves de cache
+const CACHE_KEYS = {
+  ALL_WORK_ORDERS: 'work_orders_all',
+  WORK_ORDERS_BY_TECHNICIAN: 'work_orders_by_technician',
+  WORK_ORDERS_WITH_FILTERS: 'work_orders_with_filters',
+};
+
+// Função original para buscar do Supabase (sem cache)
+const fetchWorkOrdersFromSupabase = async (): Promise<{ data: WorkOrder[] | null; error: string | null }> => {
   try {
     const { data, error } = await supabase
       .from('ordem_servico')
@@ -99,8 +113,23 @@ export const fetchWorkOrders = async (): Promise<{ data: WorkOrder[] | null; err
   }
 };
 
-// Buscar ordens de serviço por usuário (técnico)
-export const fetchWorkOrdersByTechnician = async (userId: string): Promise<{ data: WorkOrder[] | null; error: string | null }> => {
+// Buscar todas as ordens de serviço (com cache)
+export const fetchWorkOrders = async (): Promise<{ data: WorkOrder[] | null; error: string | null; fromCache?: boolean }> => {
+  console.log('🔍 Buscando todas as ordens de serviço...');
+  
+  const result = await cacheService.getWithFallback(
+    CACHE_KEYS.ALL_WORK_ORDERS,
+    fetchWorkOrdersFromSupabase,
+    undefined, // sem parâmetros para busca geral
+    WORK_ORDER_CACHE_CONFIG
+  );
+
+  console.log(`📊 Resultado: ${result.fromCache ? 'do cache' : 'do servidor'} - ${result.data?.length || 0} ordens`);
+  return result;
+};
+
+// Função original para buscar por técnico do Supabase (sem cache)
+const fetchWorkOrdersByTechnicianFromSupabase = async (userId: string): Promise<{ data: WorkOrder[] | null; error: string | null }> => {
   try {
     const { data, error } = await supabase
       .from('ordem_servico')
@@ -122,8 +151,23 @@ export const fetchWorkOrdersByTechnician = async (userId: string): Promise<{ dat
   }
 };
 
-// Buscar ordens de serviço com filtros
-export const fetchWorkOrdersWithFilters = async (
+// Buscar ordens de serviço por usuário (técnico) com cache
+export const fetchWorkOrdersByTechnician = async (userId: string): Promise<{ data: WorkOrder[] | null; error: string | null; fromCache?: boolean }> => {
+  console.log(`🔍 Buscando ordens de serviço do técnico ${userId}...`);
+  
+  const result = await cacheService.getWithFallback(
+    CACHE_KEYS.WORK_ORDERS_BY_TECHNICIAN,
+    () => fetchWorkOrdersByTechnicianFromSupabase(userId),
+    { userId }, // parâmetros para cache específico do usuário
+    WORK_ORDER_CACHE_CONFIG
+  );
+
+  console.log(`📊 Resultado: ${result.fromCache ? 'do cache' : 'do servidor'} - ${result.data?.length || 0} ordens`);
+  return result;
+};
+
+// Função original para buscar com filtros do Supabase (sem cache)
+const fetchWorkOrdersWithFiltersFromSupabase = async (
   userId?: string,
   status?: FilterStatus,
   search?: string
@@ -199,7 +243,28 @@ export const fetchWorkOrdersWithFilters = async (
   }
 };
 
-// Atualizar status de uma ordem de serviço
+// Buscar ordens de serviço com filtros (com cache)
+export const fetchWorkOrdersWithFilters = async (
+  userId?: string,
+  status?: FilterStatus,
+  search?: string
+): Promise<{ data: WorkOrder[] | null; error: string | null; fromCache?: boolean }> => {
+  console.log(`🔍 Buscando ordens com filtros - User: ${userId}, Status: ${status}, Search: ${search}...`);
+  
+  const params = { userId, status, search };
+  
+  const result = await cacheService.getWithFallback(
+    CACHE_KEYS.WORK_ORDERS_WITH_FILTERS,
+    () => fetchWorkOrdersWithFiltersFromSupabase(userId, status, search),
+    params,
+    WORK_ORDER_CACHE_CONFIG
+  );
+
+  console.log(`📊 Resultado: ${result.fromCache ? 'do cache' : 'do servidor'} - ${result.data?.length || 0} ordens`);
+  return result;
+};
+
+// Atualizar status de uma ordem de serviço (com invalidação de cache)
 export const updateWorkOrderStatus = async (
   id: string, 
   status: 'aguardando' | 'em_progresso' | 'finalizada' | 'cancelada'
@@ -238,9 +303,73 @@ export const updateWorkOrderStatus = async (
     }
 
     const workOrder = mapSupabaseToWorkOrder(data);
+    
+    // Invalidar cache após atualização
+    console.log('🗑️ Invalidando cache após atualização...');
+    await invalidateWorkOrdersCache();
+    
     return { data: workOrder, error: null };
   } catch (error) {
     console.error('Erro inesperado ao atualizar status da ordem de serviço:', error);
     return { data: null, error: 'Erro inesperado ao atualizar status da ordem de serviço' };
+  }
+};
+
+/**
+ * Invalida todo o cache de work orders
+ */
+export const invalidateWorkOrdersCache = async (): Promise<void> => {
+  try {
+    console.log('🗑️ Iniciando invalidação do cache de work orders...');
+    await cacheService.clearAll('work_orders');
+    console.log('✅ Cache de work orders invalidado com sucesso');
+  } catch (error) {
+    console.error('Erro ao invalidar cache de work orders:', error);
+  }
+};
+
+/**
+ * Força atualização do cache buscando dados frescos do servidor
+ */
+export const refreshWorkOrdersCache = async (): Promise<void> => {
+  try {
+    console.log('🔄 Forçando atualização do cache...');
+    
+    // Invalidar cache atual
+    await invalidateWorkOrdersCache();
+    
+    // Buscar dados frescos (que serão automaticamente cacheados)
+    await fetchWorkOrders();
+    
+    console.log('✅ Cache de work orders atualizado com dados frescos');
+  } catch (error) {
+    console.error('Erro ao atualizar cache:', error);
+  }
+};
+
+/**
+ * Obtém estatísticas do cache
+ */
+export const getCacheStats = async (): Promise<{
+  hasCache: boolean;
+  cacheAge: number;
+  lastSync: number;
+}> => {
+  try {
+    const cached = await cacheService.get(CACHE_KEYS.ALL_WORK_ORDERS);
+    
+    if (!cached) {
+      return { hasCache: false, cacheAge: 0, lastSync: 0 };
+    }
+    
+    const now = Date.now();
+    return {
+      hasCache: true,
+      cacheAge: Math.floor((now - cached.timestamp) / 1000), // em segundos
+      lastSync: Math.floor((now - cached.lastSync) / 1000), // em segundos
+    };
+  } catch (error) {
+    console.error('Erro ao obter estatísticas do cache:', error);
+    return { hasCache: false, cacheAge: 0, lastSync: 0 };
   }
 }; 

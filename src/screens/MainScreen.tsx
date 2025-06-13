@@ -242,16 +242,9 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress }) => {
     const schedulingDate = new Date(workOrder.scheduling_date);
     schedulingDate.setHours(0, 0, 0, 0);
     
-    console.log('🔍 Verificando atraso para OS:', workOrder.id);
-    console.log('📅 Data de agendamento:', schedulingDate.toLocaleDateString());
-    console.log('📅 Data atual:', today.toLocaleDateString());
-    console.log('📊 Status da OS:', workOrder.status);
-    
     const isDelayed = schedulingDate < today && 
                      workOrder.status !== 'finalizada' && 
                      workOrder.status !== 'cancelada';
-    
-    console.log('⏰ Está em atraso?', isDelayed);
     
     return isDelayed;
   };
