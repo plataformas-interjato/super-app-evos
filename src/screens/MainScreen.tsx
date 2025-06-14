@@ -23,14 +23,18 @@ import SyncStatusIndicator from '../components/SyncStatusIndicator';
 import { WorkOrder, User, FilterStatus } from '../types/workOrder';
 import { fetchWorkOrdersWithFilters, updateWorkOrderStatus } from '../services/workOrderService';
 import { useAuth } from '../contexts/AuthContext';
+import { getLocalWorkOrderStatuses } from '../services/localStatusService';
+import { preloadAndCacheAllServiceSteps } from '../services/serviceStepsService';
+import { getWorkOrdersWithCache, getWorkOrdersCacheStats } from '../services/workOrderCacheService';
 
 interface MainScreenProps {
   user: User;
   onTabPress?: (tab: 'home' | 'profile') => void;
   onOpenWorkOrder?: (workOrder: WorkOrder) => void;
+  refreshTrigger?: number; // Para forçar refresh
 }
 
-const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrder }) => {
+const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrder, refreshTrigger }) => {
   const [searchText, setSearchText] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterStatus>('todas');
   const [activeTab, setActiveTab] = useState<'home' | 'profile'>('home');
@@ -56,6 +60,9 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     const unsubscribe = NetInfo.addEventListener(state => {
       setIsConnected(state.isConnected || false);
     });
+
+    // Pré-carregar todos os dados quando online (em background)
+    preloadAllData();
     
     return () => {
       unsubscribe();
@@ -69,20 +76,46 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     }
   }, [activeFilter, searchText]);
 
+  // Recarregar quando refreshTrigger mudar (forçado pelo App)
+  useEffect(() => {
+    if (refreshTrigger && refreshTrigger > 0) {
+      console.log('🔄 Refresh forçado da MainScreen, recarregando OSs...');
+      loadWorkOrders();
+    }
+  }, [refreshTrigger]);
+
   const loadWorkOrders = async () => {
     try {
       setError(null);
       
-      const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
+      // Verificação de segurança: se não há usuário, não carregar
+      if (!appUser) {
+        console.log('⚠️ Usuário não disponível, pulando carregamento de OSs');
+        setLoading(false);
+        return;
+      }
       
-      console.log('🔍 Carregando ordens de serviço...');
+      const userId = appUser?.userType === 'tecnico' ? appUser.id?.toString() : undefined;
+      
+      console.log('🔍 Carregando ordens de serviço com cache...');
       console.log('👤 Usuário:', appUser?.name, '- Tipo:', appUser?.userType);
       console.log('🔢 ID numérico do usuário:', appUser?.id);
       console.log('🔧 UserId para filtro:', userId);
       console.log('📋 Filtro ativo:', activeFilter);
       console.log('🔎 Busca:', searchText);
       
-      const { data, error: fetchError } = await fetchWorkOrdersWithFilters(
+      // Verificar conectividade antes de fazer a requisição
+      const netInfo = await NetInfo.fetch();
+      console.log('📶 Status de conectividade:', netInfo.isConnected ? 'Online' : 'Offline');
+      
+      // Usar o sistema de cache que funciona offline
+      const { data, error: fetchError, fromCache } = await getWorkOrdersWithCache(
+        // Função para buscar do servidor quando online
+        () => fetchWorkOrdersWithFilters(
+          userId,
+          'todas', // Buscar todas para fazer cache completo
+          undefined // Sem filtro de busca para cache completo
+        ),
         userId,
         activeFilter,
         searchText.trim() || undefined
@@ -93,15 +126,25 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
         console.error('❌ Erro ao carregar ordens de serviço:', fetchError);
         setWorkOrders([]);
       } else {
-        console.log('✅ Dados carregados com sucesso:', data?.length, 'ordens encontradas');
+        console.log(`✅ ${data?.length || 0} ordens de serviço carregadas ${fromCache ? 'do cache' : 'do servidor'}`);
+        
         // Log para verificar as datas de agendamento
         data?.forEach(workOrder => {
           console.log(`OS #${workOrder.id} - Data agendamento:`, new Date(workOrder.scheduling_date).toLocaleDateString());
         });
-        setWorkOrders(data || []);
+        
+        // Mesclar com status locais (importante para refletir mudanças offline)
+        const mergedWorkOrders = await mergeWithLocalStatus(data || []);
+        setWorkOrders(mergedWorkOrders);
+        
+        // Mostrar indicador se dados vieram do cache
+        if (fromCache) {
+          console.log(`📱 Dados carregados do cache ${netInfo.isConnected ? 'online' : 'offline'}`);
+        }
       }
     } catch (err) {
-      setError('Erro inesperado ao carregar ordens de serviço');
+      const errorMessage = err instanceof Error ? err.message : 'Erro inesperado ao carregar ordens de serviço';
+      setError(errorMessage);
       console.error('💥 Erro inesperado:', err);
       setWorkOrders([]);
     } finally {
@@ -141,27 +184,6 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     setSelectedWorkOrder(null);
   };
 
-  const handleWorkOrderRefresh = async (workOrder: WorkOrder) => {
-    Alert.alert(
-      'Atualizar',
-      `Atualizar OS #${workOrder.id}?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { 
-          text: 'Atualizar', 
-          onPress: async () => {
-            try {
-              await loadWorkOrders();
-              Alert.alert('Sucesso', 'OS atualizada com sucesso!');
-            } catch (error) {
-              Alert.alert('Erro', 'Falha ao atualizar a OS');
-            }
-          }
-        },
-      ]
-    );
-  };
-
   const handleTabPress = (tab: 'home' | 'profile') => {
     setActiveTab(tab);
     if (onTabPress) {
@@ -178,6 +200,11 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
   };
 
   const getStatusBadgeColor = (workOrder: WorkOrder) => {
+    const hasLocal = hasLocalStatus(workOrder);
+    if (hasLocal) {
+      console.log(`🎨 Cor do badge para OS ${workOrder.id} (status local): ${workOrder.status}`);
+    }
+    
     switch (workOrder.status) {
       case 'aguardando':
         return '#AFAFAF'; // Fundo aguardando
@@ -247,6 +274,107 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
                      workOrder.status !== 'cancelada';
     
     return isDelayed;
+  };
+
+  // Função para mesclar status locais com dados das OSs
+  const mergeWithLocalStatus = async (workOrders: WorkOrder[]): Promise<WorkOrder[]> => {
+    try {
+      console.log(`🔄 Mesclando status locais com ${workOrders.length} ordens de serviço...`);
+      
+      const localStatuses = await getLocalWorkOrderStatuses();
+      const localStatusCount = Object.keys(localStatuses).length;
+      console.log('📱 Status locais encontrados:', localStatusCount);
+      
+      if (localStatusCount > 0) {
+        console.log('📱 Status locais detalhados:', localStatuses);
+      }
+      
+      const mergedWorkOrders = workOrders.map(workOrder => {
+        const localStatus = localStatuses[workOrder.id.toString()];
+        
+        if (localStatus && !localStatus.synced) {
+          // Se há status local não sincronizado, usar ele
+          console.log(`📱 Aplicando status local para OS ${workOrder.id}: ${workOrder.status} → ${localStatus.status}`);
+          return {
+            ...workOrder,
+            status: localStatus.status as any, // Cast para o tipo correto
+            isLocalStatus: true, // Adicionar flag para indicar status local
+          };
+        }
+        
+        return workOrder;
+      });
+      
+      const localStatusApplied = mergedWorkOrders.filter(wo => (wo as any).isLocalStatus).length;
+      console.log(`✅ ${localStatusApplied} status locais aplicados de ${workOrders.length} ordens`);
+      
+      return mergedWorkOrders;
+    } catch (error) {
+      console.error('❌ Erro ao mesclar status locais:', error);
+      return workOrders;
+    }
+  };
+
+  // Função para verificar se uma OS tem status local não sincronizado
+  const hasLocalStatus = (workOrder: WorkOrder): boolean => {
+    return (workOrder as any).isLocalStatus === true;
+  };
+
+  // Função para pré-carregar etapas em background
+  const preloadServiceSteps = async () => {
+    try {
+      console.log('🔄 Iniciando pré-carregamento de etapas em background...');
+      const result = await preloadAndCacheAllServiceSteps();
+      
+      if (result.success) {
+        console.log(`✅ Pré-carregamento concluído: ${result.cached} tipos de OS em cache`);
+      } else {
+        console.log('⚠️ Pré-carregamento falhou ou pulado (offline)');
+        if (result.errors.length > 0) {
+          console.log('❌ Erros no pré-carregamento:', result.errors);
+        }
+      }
+    } catch (error) {
+      console.error('💥 Erro no pré-carregamento de etapas:', error);
+    }
+  };
+
+  // Função para mostrar estatísticas do cache (debug)
+  const showCacheStats = async () => {
+    try {
+      const userId = appUser?.userType === 'tecnico' ? appUser.id?.toString() : undefined;
+      const stats = await getWorkOrdersCacheStats(userId);
+      
+      console.log('📊 Estatísticas do cache de OSs:', {
+        hasCache: stats.hasCache,
+        itemCount: stats.itemCount,
+        cacheAge: `${stats.cacheAge}h`,
+        lastUpdate: stats.lastUpdate
+      });
+    } catch (error) {
+      console.error('❌ Erro ao obter estatísticas do cache:', error);
+    }
+  };
+
+  // Pré-carregamento inicial quando online
+  const preloadAllData = async () => {
+    try {
+      const netInfo = await NetInfo.fetch();
+      if (netInfo.isConnected) {
+        console.log('🌐 Online: iniciando pré-carregamento de dados...');
+        
+        // Pré-carregar etapas
+        await preloadServiceSteps();
+        
+        // Mostrar estatísticas do cache
+        await showCacheStats();
+      } else {
+        console.log('📱 Offline: pulando pré-carregamento');
+        await showCacheStats(); // Mostrar stats mesmo offline
+      }
+    } catch (error) {
+      console.error('💥 Erro no pré-carregamento:', error);
+    }
   };
 
   return (
@@ -424,26 +552,29 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
 
                 <View style={styles.cardFooter}>
                   <View style={styles.footerLeft}>
-                    {workOrder.sync === 0 && (
-                      <TouchableOpacity 
-                        style={styles.syncButton}
-                        onPress={() => handleWorkOrderRefresh(workOrder)}
-                      >
-                        <Ionicons name="sync" size={20} color="#000000" />
-                      </TouchableOpacity>
-                    )}
+                    {/* Botão de sincronização removido - sincronização é automática */}
                   </View>
                   <View style={styles.footerRight}>
                     <View style={[
                       styles.statusBadge,
                       { backgroundColor: getStatusBadgeColor(workOrder), borderColor: getStatusBorderColor(workOrder) }
                     ]}>
-                      <Text style={[
-                        styles.statusText,
-                        { color: getStatusTextColor(workOrder) }
-                      ]}>
-                        {getStatusText(workOrder.status)}
-                      </Text>
+                      <View style={styles.statusBadgeContent}>
+                        <Text style={[
+                          styles.statusText,
+                          { color: getStatusTextColor(workOrder) }
+                        ]}>
+                          {getStatusText(workOrder.status)}
+                        </Text>
+                        {hasLocalStatus(workOrder) && (
+                          <Ionicons 
+                            name="phone-portrait" 
+                            size={12} 
+                            color="white" 
+                            style={styles.localStatusIcon}
+                          />
+                        )}
+                      </View>
                     </View>
                   </View>
                 </View>
@@ -626,6 +757,11 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     overflow: 'hidden',
   },
+  statusBadgeContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   statusText: {
     color: 'white',
     fontSize: RFValue(12),
@@ -653,9 +789,6 @@ const styles = StyleSheet.create({
   },
   footerRight: {
     alignItems: 'flex-end',
-  },
-  syncButton: {
-    padding: 8,
   },
   delayBadge: {
     flexDirection: 'row',
@@ -761,6 +894,9 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     textAlign: 'center',
     lineHeight: 20,
+  },
+  localStatusIcon: {
+    marginLeft: 4,
   },
 });
 

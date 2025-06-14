@@ -1,4 +1,10 @@
 import { supabase } from './supabase';
+import { 
+  cacheServiceSteps, 
+  cacheServiceEntries, 
+  getCachedServiceStepsWithData,
+  CachedServiceEntries 
+} from './cacheService';
 
 export interface ServiceStep {
   id: number;
@@ -637,5 +643,162 @@ export const getAllStepsForDebug = async (): Promise<void> => {
     }
   } catch (error) {
     console.error('💥 Erro ao buscar todas as etapas:', error);
+  }
+};
+
+/**
+ * Busca etapas com cache - tenta cache primeiro, depois servidor
+ */
+export const getServiceStepsWithDataCached = async (
+  tipoOsId: number,
+  ordemServicoId: number
+): Promise<{ data: ServiceStep[] | null; error: string | null; fromCache: boolean }> => {
+  try {
+    // Verificar conectividade
+    const NetInfo = require('@react-native-community/netinfo');
+    const netInfo = await NetInfo.fetch();
+    
+    // Se offline, tentar buscar do cache
+    if (!netInfo.isConnected) {
+      console.log('📱 Offline: buscando etapas do cache...');
+      const cacheResult = await getCachedServiceStepsWithData(tipoOsId);
+      
+      if (cacheResult.fromCache && cacheResult.data) {
+        console.log(`✅ ${cacheResult.data.length} etapas carregadas do cache offline`);
+        return cacheResult;
+      } else {
+        console.log('❌ Nenhum dado encontrado no cache offline');
+        return { data: null, error: 'Sem dados offline disponíveis', fromCache: false };
+      }
+    }
+
+    // Online: tentar cache primeiro, depois servidor
+    console.log('🌐 Online: verificando cache...');
+    const cacheResult = await getCachedServiceStepsWithData(tipoOsId);
+    
+    if (cacheResult.fromCache && cacheResult.data) {
+      console.log(`✅ ${cacheResult.data.length} etapas carregadas do cache`);
+      return cacheResult;
+    }
+
+    // Cache não disponível ou expirado, buscar do servidor
+    console.log('🌐 Buscando etapas do servidor...');
+    const serverResult = await getServiceStepsWithData(tipoOsId, ordemServicoId);
+    
+    if (serverResult.data && !serverResult.error) {
+      // Fazer cache dos dados para uso futuro
+      await cacheServerData(tipoOsId, serverResult.data);
+      console.log(`✅ ${serverResult.data.length} etapas carregadas do servidor e salvas no cache`);
+    }
+
+    return { ...serverResult, fromCache: false };
+  } catch (error) {
+    console.error('💥 Erro inesperado ao buscar etapas com cache:', error);
+    return { data: null, error: 'Erro inesperado ao buscar etapas', fromCache: false };
+  }
+};
+
+/**
+ * Faz cache dos dados do servidor
+ */
+const cacheServerData = async (tipoOsId: number, stepsWithData: ServiceStep[]): Promise<void> => {
+  try {
+    // 1. Separar etapas das entradas
+    const stepsOnly = stepsWithData.map(step => ({
+      ...step,
+      entradas: [] // Remover entradas para cache separado
+    }));
+
+    // 2. Organizar entradas por etapa
+    const entriesByStep: CachedServiceEntries = {};
+    stepsWithData.forEach(step => {
+      if (step.entradas && step.entradas.length > 0) {
+        entriesByStep[step.id] = step.entradas;
+      }
+    });
+
+    // 3. Fazer cache das etapas
+    const stepsResult = await cacheServiceSteps(tipoOsId, stepsOnly);
+    if (!stepsResult.success) {
+      console.warn('⚠️ Erro ao fazer cache das etapas:', stepsResult.error);
+    }
+
+    // 4. Fazer cache das entradas
+    if (Object.keys(entriesByStep).length > 0) {
+      const entriesResult = await cacheServiceEntries(entriesByStep);
+      if (!entriesResult.success) {
+        console.warn('⚠️ Erro ao fazer cache das entradas:', entriesResult.error);
+      }
+    }
+  } catch (error) {
+    console.error('💥 Erro ao fazer cache dos dados do servidor:', error);
+  }
+};
+
+/**
+ * Pré-carrega e faz cache de etapas para todos os tipos de OS
+ */
+export const preloadAndCacheAllServiceSteps = async (): Promise<{ 
+  success: boolean; 
+  cached: number; 
+  errors: string[] 
+}> => {
+  try {
+    console.log('🔄 Iniciando pré-carregamento de etapas...');
+    
+    // Verificar conectividade
+    const NetInfo = require('@react-native-community/netinfo');
+    const netInfo = await NetInfo.fetch();
+    
+    if (!netInfo.isConnected) {
+      console.log('📱 Offline: pulando pré-carregamento');
+      return { success: false, cached: 0, errors: ['Sem conexão'] };
+    }
+
+    // Buscar todos os tipos de OS únicos
+    const { data: tiposOS, error: tiposError } = await supabase
+      .from('etapa_os')
+      .select('tipo_os_id')
+      .not('tipo_os_id', 'is', null);
+
+    if (tiposError || !tiposOS) {
+      console.error('❌ Erro ao buscar tipos de OS:', tiposError);
+      return { success: false, cached: 0, errors: [tiposError?.message || 'Erro desconhecido'] };
+    }
+
+    // Obter tipos únicos
+    const uniqueTipos = [...new Set(tiposOS.map(t => t.tipo_os_id))];
+    console.log(`📋 Encontrados ${uniqueTipos.length} tipos de OS únicos:`, uniqueTipos);
+
+    let cached = 0;
+    const errors: string[] = [];
+
+    // Carregar e fazer cache para cada tipo
+    for (const tipoId of uniqueTipos) {
+      try {
+        console.log(`🔄 Carregando etapas para tipo ${tipoId}...`);
+        
+        // Usar ordemServicoId = 0 para indicar pré-carregamento
+        const result = await getServiceStepsWithData(tipoId, 0);
+        
+        if (result.data && !result.error && result.data.length > 0) {
+          await cacheServerData(tipoId, result.data);
+          cached++;
+          console.log(`✅ Tipo ${tipoId}: ${result.data.length} etapas em cache`);
+        } else {
+          console.log(`⚠️ Tipo ${tipoId}: nenhuma etapa encontrada`);
+        }
+      } catch (error) {
+        const errorMsg = `Erro no tipo ${tipoId}: ${error}`;
+        console.error('❌', errorMsg);
+        errors.push(errorMsg);
+      }
+    }
+
+    console.log(`✅ Pré-carregamento concluído: ${cached}/${uniqueTipos.length} tipos em cache`);
+    return { success: cached > 0, cached, errors };
+  } catch (error) {
+    console.error('💥 Erro no pré-carregamento:', error);
+    return { success: false, cached: 0, errors: [error?.toString() || 'Erro desconhecido'] };
   }
 }; 

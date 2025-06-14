@@ -37,13 +37,35 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [isCheckingPhoto, setIsCheckingPhoto] = useState(true);
 
+  // Verificações de segurança
+  if (!workOrder || !user) {
+    console.error('❌ Dados obrigatórios não fornecidos:', { workOrder: !!workOrder, user: !!user });
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar backgroundColor="#3b82f6" barStyle="light-content" />
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Erro: Dados não disponíveis</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   useEffect(() => {
     checkExistingPhoto();
   }, []);
 
   const checkExistingPhoto = async () => {
     try {
-      const { hasPhoto, error } = await hasInitialPhoto(workOrder.id);
+      setIsCheckingPhoto(true);
+      
+      // Timeout de 5 segundos para evitar travamento
+      const timeoutPromise = new Promise<{ hasPhoto: boolean; error: string | null }>((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout na verificação')), 5000)
+      );
+      
+      const checkPromise = hasInitialPhoto(workOrder.id);
+      
+      const { hasPhoto, error } = await Promise.race([checkPromise, timeoutPromise]);
       
       if (error) {
         console.warn('⚠️ Erro ao verificar foto inicial:', error);
@@ -54,15 +76,18 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
 
       if (hasPhoto) {
         console.log('✅ Foto inicial já existe, pulando tela...');
-        // Pula direto para a próxima tela
-        await onConfirmStart(undefined);
+        // Usar setTimeout para evitar problemas de navegação assíncrona
+        setTimeout(() => {
+          onConfirmStart(undefined);
+        }, 100);
         return;
       }
 
       // Não tem foto, continua na tela normalmente
       setIsCheckingPhoto(false);
     } catch (error) {
-      console.error('💥 Erro inesperado ao verificar foto:', error);
+      console.error('💥 Erro inesperado ao verificar foto (timeout ou erro de rede):', error);
+      // Em caso de erro ou timeout, sempre continuar na tela normalmente
       setIsCheckingPhoto(false);
     }
   };
@@ -80,10 +105,10 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
   };
 
   const takePhoto = async () => {
-    const hasPermission = await requestCameraPermission();
-    if (!hasPermission) return;
-
     try {
+      const hasPermission = await requestCameraPermission();
+      if (!hasPermission) return;
+
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.8,
@@ -130,6 +155,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
         }
       }
     } catch (error) {
+      console.error('💥 Erro na função takePhoto:', error);
       Alert.alert('Erro', 'Não foi possível tirar a foto. Tente novamente.');
     }
   };

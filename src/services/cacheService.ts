@@ -1,265 +1,267 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ServiceStep, ServiceStepData } from './serviceStepsService';
 
-export interface CacheItem<T> {
-  data: T;
-  timestamp: number;
-  lastSync: number;
+const CACHE_KEYS = {
+  SERVICE_STEPS: 'cached_service_steps',
+  SERVICE_ENTRIES: 'cached_service_entries',
+  CACHE_TIMESTAMP: 'cache_timestamp',
+};
+
+const CACHE_EXPIRY_HOURS = 24; // Cache válido por 24 horas
+
+export interface CachedServiceSteps {
+  [tipoOsId: number]: ServiceStep[];
 }
 
-export interface CacheConfig {
-  ttl: number; // Time to live em milissegundos
-  syncInterval: number; // Intervalo de sincronização em milissegundos
+export interface CachedServiceEntries {
+  [etapaId: number]: ServiceStepData[];
 }
 
-class CacheService {
-  private defaultConfig: CacheConfig = {
-    ttl: 5 * 60 * 1000, // 5 minutos
-    syncInterval: 2 * 60 * 1000, // 2 minutos
-  };
+/**
+ * Verifica se o cache ainda é válido
+ */
+const isCacheValid = async (): Promise<boolean> => {
+  try {
+    const timestamp = await AsyncStorage.getItem(CACHE_KEYS.CACHE_TIMESTAMP);
+    if (!timestamp) return false;
 
-  /**
-   * Função simples de hash que funciona em React Native
-   */
-  private simpleHash(str: string): string {
-    let hash = 0;
-    if (str.length === 0) return hash.toString();
+    const cacheTime = new Date(timestamp);
+    const now = new Date();
+    const diffHours = (now.getTime() - cacheTime.getTime()) / (1000 * 60 * 60);
+
+    return diffHours < CACHE_EXPIRY_HOURS;
+  } catch (error) {
+    console.error('❌ Erro ao verificar validade do cache:', error);
+    return false;
+  }
+};
+
+/**
+ * Salva etapas no cache local
+ */
+export const cacheServiceSteps = async (
+  tipoOsId: number,
+  steps: ServiceStep[]
+): Promise<{ success: boolean; error: string | null }> => {
+  try {
+    // Buscar cache existente
+    const existingCacheStr = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_STEPS);
+    const existingCache: CachedServiceSteps = existingCacheStr 
+      ? JSON.parse(existingCacheStr) 
+      : {};
+
+    // Adicionar/atualizar etapas para este tipo
+    existingCache[tipoOsId] = steps;
+
+    // Salvar cache atualizado
+    await AsyncStorage.setItem(CACHE_KEYS.SERVICE_STEPS, JSON.stringify(existingCache));
     
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32bit integer
+    // Atualizar timestamp
+    await AsyncStorage.setItem(CACHE_KEYS.CACHE_TIMESTAMP, new Date().toISOString());
+
+    console.log(`✅ Etapas do tipo ${tipoOsId} salvas no cache (${steps.length} etapas)`);
+    return { success: true, error: null };
+  } catch (error) {
+    console.error('❌ Erro ao salvar etapas no cache:', error);
+    return { success: false, error: 'Erro ao salvar etapas no cache' };
+  }
+};
+
+/**
+ * Salva entradas no cache local
+ */
+export const cacheServiceEntries = async (
+  entriesByStep: CachedServiceEntries
+): Promise<{ success: boolean; error: string | null }> => {
+  try {
+    // Buscar cache existente
+    const existingCacheStr = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_ENTRIES);
+    const existingCache: CachedServiceEntries = existingCacheStr 
+      ? JSON.parse(existingCacheStr) 
+      : {};
+
+    // Mesclar com cache existente
+    const updatedCache = { ...existingCache, ...entriesByStep };
+
+    // Salvar cache atualizado
+    await AsyncStorage.setItem(CACHE_KEYS.SERVICE_ENTRIES, JSON.stringify(updatedCache));
+    
+    // Atualizar timestamp
+    await AsyncStorage.setItem(CACHE_KEYS.CACHE_TIMESTAMP, new Date().toISOString());
+
+    const totalEntries = Object.values(entriesByStep).reduce((sum, entries) => sum + entries.length, 0);
+    console.log(`✅ ${totalEntries} entradas salvas no cache`);
+    return { success: true, error: null };
+  } catch (error) {
+    console.error('❌ Erro ao salvar entradas no cache:', error);
+    return { success: false, error: 'Erro ao salvar entradas no cache' };
+  }
+};
+
+/**
+ * Busca etapas do cache local
+ */
+export const getCachedServiceSteps = async (
+  tipoOsId: number
+): Promise<{ data: ServiceStep[] | null; error: string | null; fromCache: boolean }> => {
+  try {
+    // Verificar se cache é válido
+    const isValid = await isCacheValid();
+    if (!isValid) {
+      console.log('⏰ Cache expirado ou inválido');
+      return { data: null, error: 'Cache expirado', fromCache: false };
     }
-    
-    return Math.abs(hash).toString(36);
-  }
 
-  /**
-   * Gera chave única para o cache baseada nos parâmetros
-   */
-  private generateCacheKey(prefix: string, params?: Record<string, any>): string {
-    if (!params) return `cache_${prefix}`;
-    
-    const sortedParams = Object.keys(params)
-      .sort()
-      .reduce((result, key) => {
-        result[key] = params[key];
-        return result;
-      }, {} as Record<string, any>);
-    
-    const paramString = JSON.stringify(sortedParams);
-    const hash = this.simpleHash(paramString);
-    return `cache_${prefix}_${hash}`;
-  }
-
-  /**
-   * Armazena dados no cache
-   */
-  async set<T>(
-    key: string,
-    data: T,
-    params?: Record<string, any>,
-    config?: Partial<CacheConfig>
-  ): Promise<void> {
-    try {
-      const cacheKey = this.generateCacheKey(key, params);
-      const now = Date.now();
-      
-      const cacheItem: CacheItem<T> = {
-        data,
-        timestamp: now,
-        lastSync: now,
-      };
-
-      await AsyncStorage.setItem(cacheKey, JSON.stringify(cacheItem));
-      console.log(`📦 Cache atualizado: ${cacheKey}`);
-    } catch (error) {
-      console.error('Erro ao salvar no cache:', error);
+    const cacheStr = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_STEPS);
+    if (!cacheStr) {
+      console.log('📭 Nenhum cache de etapas encontrado');
+      return { data: null, error: 'Cache não encontrado', fromCache: false };
     }
-  }
 
-  /**
-   * Recupera dados do cache
-   */
-  async get<T>(
-    key: string,
-    params?: Record<string, any>,
-    config?: Partial<CacheConfig>
-  ): Promise<CacheItem<T> | null> {
-    try {
-      const cacheKey = this.generateCacheKey(key, params);
-      const cached = await AsyncStorage.getItem(cacheKey);
-      
-      if (!cached) {
-        console.log(`📦 Cache miss: ${cacheKey}`);
-        return null;
+    const cache: CachedServiceSteps = JSON.parse(cacheStr);
+    const steps = cache[tipoOsId];
+
+    if (!steps || steps.length === 0) {
+      console.log(`📭 Nenhuma etapa encontrada no cache para tipo ${tipoOsId}`);
+      return { data: null, error: 'Etapas não encontradas no cache', fromCache: false };
+    }
+
+    console.log(`📱 ${steps.length} etapas carregadas do cache para tipo ${tipoOsId}`);
+    return { data: steps, error: null, fromCache: true };
+  } catch (error) {
+    console.error('❌ Erro ao buscar etapas do cache:', error);
+    return { data: null, error: 'Erro ao buscar etapas do cache', fromCache: false };
+  }
+};
+
+/**
+ * Busca entradas do cache local
+ */
+export const getCachedServiceEntries = async (
+  etapaIds: number[]
+): Promise<{ data: CachedServiceEntries | null; error: string | null; fromCache: boolean }> => {
+  try {
+    // Verificar se cache é válido
+    const isValid = await isCacheValid();
+    if (!isValid) {
+      console.log('⏰ Cache de entradas expirado ou inválido');
+      return { data: null, error: 'Cache expirado', fromCache: false };
+    }
+
+    const cacheStr = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_ENTRIES);
+    if (!cacheStr) {
+      console.log('📭 Nenhum cache de entradas encontrado');
+      return { data: null, error: 'Cache não encontrado', fromCache: false };
+    }
+
+    const cache: CachedServiceEntries = JSON.parse(cacheStr);
+    
+    // Filtrar apenas as entradas das etapas solicitadas
+    const filteredEntries: CachedServiceEntries = {};
+    let totalEntries = 0;
+
+    etapaIds.forEach(etapaId => {
+      if (cache[etapaId]) {
+        filteredEntries[etapaId] = cache[etapaId];
+        totalEntries += cache[etapaId].length;
       }
+    });
 
-      const cacheItem: CacheItem<T> = JSON.parse(cached);
-      console.log(`📦 Cache hit: ${cacheKey}`);
-      return cacheItem;
-    } catch (error) {
-      console.error('Erro ao ler do cache:', error);
-      return null;
-    }
+    console.log(`📱 ${totalEntries} entradas carregadas do cache para ${etapaIds.length} etapas`);
+    return { data: filteredEntries, error: null, fromCache: true };
+  } catch (error) {
+    console.error('❌ Erro ao buscar entradas do cache:', error);
+    return { data: null, error: 'Erro ao buscar entradas do cache', fromCache: false };
   }
+};
 
-  /**
-   * Verifica se o cache está válido (não expirou)
-   */
-  isValid<T>(cacheItem: CacheItem<T>, config?: Partial<CacheConfig>): boolean {
-    const { ttl } = { ...this.defaultConfig, ...config };
-    const now = Date.now();
-    const isValid = (now - cacheItem.timestamp) < ttl;
+/**
+ * Busca etapas com entradas do cache (função principal)
+ */
+export const getCachedServiceStepsWithData = async (
+  tipoOsId: number
+): Promise<{ data: ServiceStep[] | null; error: string | null; fromCache: boolean }> => {
+  try {
+    // 1. Buscar etapas do cache
+    const { data: steps, error: stepsError, fromCache: stepsFromCache } = await getCachedServiceSteps(tipoOsId);
     
-    console.log(`📦 Cache ${isValid ? 'válido' : 'expirado'} - Idade: ${Math.floor((now - cacheItem.timestamp) / 1000)}s`);
-    return isValid;
-  }
+    if (stepsError || !steps || !stepsFromCache) {
+      return { data: null, error: stepsError, fromCache: false };
+    }
 
-  /**
-   * Verifica se precisa sincronizar com o servidor
-   */
-  needsSync<T>(cacheItem: CacheItem<T>, config?: Partial<CacheConfig>): boolean {
-    const { syncInterval } = { ...this.defaultConfig, ...config };
-    const now = Date.now();
-    const needsSync = (now - cacheItem.lastSync) >= syncInterval;
+    // 2. Buscar entradas do cache
+    const etapaIds = steps.map(step => step.id);
+    const { data: entriesData, error: entriesError, fromCache: entriesFromCache } = await getCachedServiceEntries(etapaIds);
+
+    if (entriesError || !entriesFromCache) {
+      console.warn('⚠️ Erro ao buscar entradas do cache, continuando apenas com etapas:', entriesError);
+      // Retornar etapas sem entradas
+      return { data: steps, error: null, fromCache: true };
+    }
+
+    // 3. Combinar etapas com entradas
+    const stepsWithData = steps.map(step => ({
+      ...step,
+      entradas: entriesData?.[step.id] || []
+    }));
+
+    return { data: stepsWithData, error: null, fromCache: true };
+  } catch (error) {
+    console.error('💥 Erro inesperado ao buscar dados do cache:', error);
+    return { data: null, error: 'Erro inesperado ao buscar dados do cache', fromCache: false };
+  }
+};
+
+/**
+ * Limpa todo o cache de etapas e entradas
+ */
+export const clearServiceCache = async (): Promise<{ success: boolean; error: string | null }> => {
+  try {
+    await AsyncStorage.multiRemove([
+      CACHE_KEYS.SERVICE_STEPS,
+      CACHE_KEYS.SERVICE_ENTRIES,
+      CACHE_KEYS.CACHE_TIMESTAMP,
+    ]);
+
+    console.log('🗑️ Cache de etapas e entradas limpo');
+    return { success: true, error: null };
+  } catch (error) {
+    console.error('❌ Erro ao limpar cache:', error);
+    return { success: false, error: 'Erro ao limpar cache' };
+  }
+};
+
+/**
+ * Obtém informações sobre o cache
+ */
+export const getCacheInfo = async (): Promise<{
+  isValid: boolean;
+  timestamp: string | null;
+  stepsCount: number;
+  entriesCount: number;
+}> => {
+  try {
+    const isValid = await isCacheValid();
+    const timestamp = await AsyncStorage.getItem(CACHE_KEYS.CACHE_TIMESTAMP);
     
-    console.log(`🔄 ${needsSync ? 'Precisa' : 'Não precisa'} sincronizar - Última sync: ${Math.floor((now - cacheItem.lastSync) / 1000)}s atrás`);
-    return needsSync;
-  }
+    let stepsCount = 0;
+    let entriesCount = 0;
 
-  /**
-   * Atualiza timestamp da última sincronização
-   */
-  async updateSyncTimestamp<T>(
-    key: string,
-    params?: Record<string, any>
-  ): Promise<void> {
-    try {
-      const cacheKey = this.generateCacheKey(key, params);
-      const cached = await AsyncStorage.getItem(cacheKey);
-      
-      if (cached) {
-        const cacheItem: CacheItem<T> = JSON.parse(cached);
-        cacheItem.lastSync = Date.now();
-        await AsyncStorage.setItem(cacheKey, JSON.stringify(cacheItem));
-        console.log(`🔄 Timestamp de sync atualizado: ${cacheKey}`);
-      }
-    } catch (error) {
-      console.error('Erro ao atualizar timestamp de sync:', error);
+    const stepsCache = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_STEPS);
+    if (stepsCache) {
+      const steps: CachedServiceSteps = JSON.parse(stepsCache);
+      stepsCount = Object.values(steps).reduce((sum, stepArray) => sum + stepArray.length, 0);
     }
-  }
 
-  /**
-   * Remove item específico do cache
-   */
-  async remove(key: string, params?: Record<string, any>): Promise<void> {
-    try {
-      const cacheKey = this.generateCacheKey(key, params);
-      await AsyncStorage.removeItem(cacheKey);
-      console.log(`🗑️ Cache removido: ${cacheKey}`);
-    } catch (error) {
-      console.error('Erro ao remover do cache:', error);
+    const entriesCache = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_ENTRIES);
+    if (entriesCache) {
+      const entries: CachedServiceEntries = JSON.parse(entriesCache);
+      entriesCount = Object.values(entries).reduce((sum, entryArray) => sum + entryArray.length, 0);
     }
-  }
 
-  /**
-   * Limpa todo o cache (usando prefixo)
-   */
-  async clearAll(prefix?: string): Promise<void> {
-    try {
-      const keys = await AsyncStorage.getAllKeys();
-      const cacheKeys = keys.filter(key => {
-        if (prefix) {
-          return key.startsWith(`cache_${prefix}`);
-        }
-        return key.startsWith('cache_');
-      });
-      
-      await AsyncStorage.multiRemove(cacheKeys);
-      console.log(`🗑️ Cache limpo: ${cacheKeys.length} itens removidos`);
-    } catch (error) {
-      console.error('Erro ao limpar cache:', error);
-    }
+    return { isValid, timestamp, stepsCount, entriesCount };
+  } catch (error) {
+    console.error('❌ Erro ao obter informações do cache:', error);
+    return { isValid: false, timestamp: null, stepsCount: 0, entriesCount: 0 };
   }
-
-  /**
-   * Estratégia de cache com fallback para servidor
-   */
-  async getWithFallback<T>(
-    key: string,
-    fetchFunction: () => Promise<{ data: T | null; error: string | null }>,
-    params?: Record<string, any>,
-    config?: Partial<CacheConfig>
-  ): Promise<{ data: T | null; error: string | null; fromCache: boolean }> {
-    const mergedConfig = { ...this.defaultConfig, ...config };
-    
-    try {
-      // Tentar buscar do cache primeiro
-      const cached = await this.get<T>(key, params, mergedConfig);
-      
-      if (cached) {
-        // Se cache é válido e não precisa sync, retornar do cache
-        if (this.isValid(cached, mergedConfig) && !this.needsSync(cached, mergedConfig)) {
-          return { data: cached.data, error: null, fromCache: true };
-        }
-        
-        // Se cache existe mas precisa sync, buscar do servidor em background
-        if (this.needsSync(cached, mergedConfig)) {
-          console.log('🔄 Iniciando sincronização em background...');
-          
-          // Retornar dados do cache imediatamente
-          const cacheResult = { data: cached.data, error: null, fromCache: true };
-          
-          // Sincronizar em background
-          this.syncInBackground(key, fetchFunction, params, mergedConfig);
-          
-          return cacheResult;
-        }
-      }
-      
-      // Se não há cache ou cache expirou, buscar do servidor
-      console.log('🌐 Buscando dados do servidor...');
-      const result = await fetchFunction();
-      
-      if (result.data && !result.error) {
-        // Salvar no cache
-        await this.set(key, result.data, params, mergedConfig);
-      }
-      
-      return { ...result, fromCache: false };
-      
-    } catch (error) {
-      console.error('Erro na estratégia de cache:', error);
-      return { data: null, error: 'Erro interno do cache', fromCache: false };
-    }
-  }
-
-  /**
-   * Sincronização em background
-   */
-  private async syncInBackground<T>(
-    key: string,
-    fetchFunction: () => Promise<{ data: T | null; error: string | null }>,
-    params?: Record<string, any>,
-    config?: CacheConfig
-  ): Promise<void> {
-    try {
-      const result = await fetchFunction();
-      
-      if (result.data && !result.error) {
-        await this.set(key, result.data, params, config);
-        console.log('✅ Sincronização em background concluída');
-      } else {
-        // Apenas atualizar timestamp mesmo se houve erro
-        await this.updateSyncTimestamp(key, params);
-        console.log('⚠️ Erro na sincronização, mantendo cache atual');
-      }
-    } catch (error) {
-      console.error('Erro na sincronização em background:', error);
-      // Atualizar timestamp para evitar sync constantes em caso de erro
-      await this.updateSyncTimestamp(key, params);
-    }
-  }
-}
-
-export const cacheService = new CacheService(); 
+}; 

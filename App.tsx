@@ -9,18 +9,21 @@ import ProfileScreen from './src/screens/ProfileScreen';
 import WorkOrderDetailScreen from './src/screens/WorkOrderDetailScreen';
 import StartServiceScreen from './src/screens/StartServiceScreen';
 import ServiceStepsScreen from './src/screens/ServiceStepsScreen';
+import PostServiceAuditScreen from './src/screens/PostServiceAuditScreen';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import { WorkOrder } from './src/types/workOrder';
-import { startAutoSync, syncAllPendingActions } from './src/services/offlineService';
+import { startAutoSync, syncAllPendingActions, saveStatusUpdateOffline } from './src/services/offlineService';
 import { updateWorkOrderStatus } from './src/services/workOrderService';
+import { updateLocalWorkOrderStatus } from './src/services/localStatusService';
 
-type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'startService' | 'steps';
+type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'startService' | 'steps' | 'audit';
 
 function AppContent() {
   const { appUser, loading } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<CurrentScreen>('main');
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
   const [activeTab, setActiveTab] = useState<'home' | 'profile'>('home');
+  const [refreshMainScreen, setRefreshMainScreen] = useState(0); // Para forçar refresh
 
   // Inicializar monitoramento de sincronização
   useEffect(() => {
@@ -86,16 +89,24 @@ function AppContent() {
     
     if (selectedWorkOrder) {
       try {
-        // Atualizar status da OS para 'em_progresso'
-        const { data, error } = await updateWorkOrderStatus(
-          selectedWorkOrder.id.toString(), 
+        // Atualizar status local primeiro
+        await updateLocalWorkOrderStatus(selectedWorkOrder.id, 'em_progresso', false);
+        
+        // Tentar atualizar status online/offline
+        const { success, savedOffline } = await saveStatusUpdateOffline(
+          selectedWorkOrder.id, 
           'em_progresso'
         );
         
-        if (error) {
-          console.error('Erro ao atualizar status:', error);
-          // Continuar mesmo com erro, pois a foto já foi salva
+        if (!success) {
+          console.error('Erro ao atualizar status, mas continuando...');
         }
+        
+        // Atualizar o objeto selectedWorkOrder localmente
+        setSelectedWorkOrder({
+          ...selectedWorkOrder,
+          status: 'em_progresso'
+        });
         
         // Ir para a tela de etapas do serviço
         setCurrentScreen('steps');
@@ -108,29 +119,49 @@ function AppContent() {
   };
 
   const handleFinishService = async () => {
-    console.log('Finalizando serviço para OS:', selectedWorkOrder?.id);
+    console.log('Navegando para auditoria pós-serviço para OS:', selectedWorkOrder?.id);
+    
+    // Navegar para a tela de auditoria pós-serviço
+    setCurrentScreen('audit');
+  };
+
+  const handleFinishAudit = async (auditData: any) => {
+    console.log('Finalizando auditoria para OS:', selectedWorkOrder?.id, auditData);
     
     if (selectedWorkOrder) {
       try {
-        // Atualizar status da OS para 'finalizada'
-        const { data, error } = await updateWorkOrderStatus(
-          selectedWorkOrder.id.toString(), 
+        // Atualizar status local primeiro
+        await updateLocalWorkOrderStatus(selectedWorkOrder.id, 'finalizada', false);
+        
+        // Tentar atualizar status online/offline
+        const { success, savedOffline } = await saveStatusUpdateOffline(
+          selectedWorkOrder.id, 
           'finalizada'
         );
         
-        if (error) {
-          console.error('Erro ao finalizar serviço:', error);
+        if (!success) {
+          console.error('Erro ao finalizar serviço, mas continuando...');
         } else {
           console.log('✅ Serviço finalizado com sucesso');
         }
+        
+        // A auditoria já foi salva na tela PostServiceAuditScreen
+        console.log('✅ Auditoria finalizada:', auditData);
+        
       } catch (error) {
         console.error('Erro ao finalizar serviço:', error);
       }
     }
     
-    // Voltar para a tela principal
+    // Voltar para a tela principal primeiro
     setCurrentScreen('main');
     setSelectedWorkOrder(null);
+    
+    // Forçar refresh da MainScreen com delay para dar tempo do contexto se estabilizar
+    setTimeout(() => {
+      setRefreshMainScreen(prev => prev + 1);
+      console.log('🔄 Forçando refresh da MainScreen após finalização da auditoria (com delay)');
+    }, 1000); // 1 segundo de delay
   };
 
   if (loading) {
@@ -151,7 +182,7 @@ function AppContent() {
     if (appUser.userType === 'gestor') {
       return <ManagerScreen user={appUser} onTabPress={handleTabPress} />;
     } else {
-      return <MainScreen user={appUser} onTabPress={handleTabPress} onOpenWorkOrder={handleOpenWorkOrder} />;
+      return <MainScreen user={appUser} onTabPress={handleTabPress} onOpenWorkOrder={handleOpenWorkOrder} refreshTrigger={refreshMainScreen} />;
     }
   };
 
@@ -199,6 +230,16 @@ function AppContent() {
             }}
             onTabPress={handleTabPress}
             onFinishService={handleFinishService}
+          />
+        ) : null;
+      case 'audit':
+        return selectedWorkOrder ? (
+          <PostServiceAuditScreen
+            workOrder={selectedWorkOrder}
+            user={appUser}
+            onBackPress={() => setCurrentScreen('steps')}
+            onTabPress={handleTabPress}
+            onFinishAudit={handleFinishAudit}
           />
         ) : null;
       default:

@@ -22,6 +22,17 @@ export interface AuditoriaTecnico {
  */
 const convertPhotoToBase64 = async (photoUri: string): Promise<{ base64: string | null; error: string | null }> => {
   try {
+    // Verificar se o URI é válido
+    if (!photoUri || typeof photoUri !== 'string') {
+      return { base64: null, error: 'URI da foto inválido' };
+    }
+
+    // Verificar se o arquivo existe
+    const fileInfo = await FileSystem.getInfoAsync(photoUri);
+    if (!fileInfo.exists) {
+      return { base64: null, error: 'Arquivo de foto não encontrado' };
+    }
+
     const base64 = await FileSystem.readAsStringAsync(photoUri, {
       encoding: FileSystem.EncodingType.Base64,
     });
@@ -37,7 +48,7 @@ const convertPhotoToBase64 = async (photoUri: string): Promise<{ base64: string 
 
   } catch (error) {
     console.error('💥 Erro ao converter foto para base64:', error);
-    return { base64: null, error: 'Erro inesperado ao converter foto' };
+    return { base64: null, error: `Erro inesperado ao converter foto: ${error}` };
   }
 };
 
@@ -54,6 +65,19 @@ export const savePhotoInicio = async (
     console.log('OS ID:', workOrderId);
     console.log('Técnico ID:', technicoId);
     console.log('Photo URI Local:', photoUri);
+
+    // Validações de entrada
+    if (!workOrderId || workOrderId <= 0) {
+      return { data: null, error: 'ID da ordem de serviço inválido' };
+    }
+
+    if (!technicoId || technicoId.trim() === '') {
+      return { data: null, error: 'ID do técnico inválido' };
+    }
+
+    if (!photoUri || photoUri.trim() === '') {
+      return { data: null, error: 'URI da foto não fornecido' };
+    }
 
     // 1. Converter foto para base64
     const { base64, error: conversionError } = await convertPhotoToBase64(photoUri);
@@ -74,7 +98,6 @@ export const savePhotoInicio = async (
         auditor_id: parseInt(technicoId),
         foto_inicial: base64, // Base64 da foto
         dt_adicao: new Date().toISOString(),
-        motivo: 'Início da ordem de serviço',
         ativo: 1,
         trabalho_realizado: 0,
       })
@@ -144,6 +167,17 @@ export const hasInitialPhoto = async (
   workOrderId: number
 ): Promise<{ hasPhoto: boolean; error: string | null }> => {
   try {
+    // Primeiro verificar se há conexão
+    const NetInfo = require('@react-native-community/netinfo');
+    const netInfo = await NetInfo.fetch();
+    
+    if (!netInfo.isConnected) {
+      // Offline: assumir que não há foto para permitir continuar
+      console.log('📱 Offline: assumindo que não há foto inicial');
+      return { hasPhoto: false, error: null };
+    }
+
+    // Online: verificar no banco
     const { data, error } = await supabase
       .from('auditoria_tecnico')
       .select('id, foto_inicial')
@@ -154,13 +188,107 @@ export const hasInitialPhoto = async (
 
     if (error) {
       console.error('❌ Erro ao verificar foto inicial:', error);
-      return { hasPhoto: false, error: error.message };
+      // Em caso de erro, assumir que não há foto para permitir continuar
+      return { hasPhoto: false, error: null };
     }
 
     const hasPhoto = data && data.length > 0 && data[0].foto_inicial;
     return { hasPhoto: !!hasPhoto, error: null };
   } catch (error) {
     console.error('💥 Erro inesperado ao verificar foto inicial:', error);
-    return { hasPhoto: false, error: 'Erro inesperado ao verificar foto inicial' };
+    // Em caso de erro, assumir que não há foto para permitir continuar
+    return { hasPhoto: false, error: null };
+  }
+};
+
+/**
+ * Salva a auditoria final (foto final + dados da auditoria)
+ */
+export const saveAuditoriaFinal = async (
+  workOrderId: number,
+  technicoId: string,
+  photoUri: string,
+  trabalhoRealizado: boolean,
+  motivo?: string,
+  comentario?: string
+): Promise<{ data: AuditoriaTecnico | null; error: string | null }> => {
+  try {
+    console.log('📸 Salvando auditoria final...');
+    console.log('OS ID:', workOrderId);
+    console.log('Técnico ID:', technicoId);
+    console.log('Trabalho realizado:', trabalhoRealizado);
+    console.log('Motivo:', motivo);
+    console.log('Comentário:', comentario);
+
+    // Validações de entrada
+    if (!workOrderId || workOrderId <= 0) {
+      return { data: null, error: 'ID da ordem de serviço inválido' };
+    }
+
+    if (!technicoId || technicoId.trim() === '') {
+      return { data: null, error: 'ID do técnico inválido' };
+    }
+
+    if (!photoUri || photoUri.trim() === '') {
+      return { data: null, error: 'URI da foto não fornecido' };
+    }
+
+    if (typeof trabalhoRealizado !== 'boolean') {
+      return { data: null, error: 'Valor de trabalho realizado inválido' };
+    }
+
+    // 1. Converter foto para base64
+    const { base64, error: conversionError } = await convertPhotoToBase64(photoUri);
+
+    if (conversionError || !base64) {
+      console.error('❌ Falha na conversão para base64:', conversionError);
+      return { 
+        data: null, 
+        error: `Erro na conversão da foto: ${conversionError}` 
+      };
+    }
+
+    // 2. Buscar registro existente da auditoria (criado na foto inicial)
+    const { data: existingAudit, error: searchError } = await supabase
+      .from('auditoria_tecnico')
+      .select('*')
+      .eq('ordem_servico_id', workOrderId)
+      .eq('auditor_id', parseInt(technicoId))
+      .eq('ativo', 1)
+      .single();
+
+    if (searchError || !existingAudit) {
+      console.error('❌ Registro de auditoria não encontrado:', searchError);
+      return { 
+        data: null, 
+        error: 'Registro de auditoria inicial não encontrado' 
+      };
+    }
+
+    // 3. Atualizar registro existente com dados finais
+    const { data, error } = await supabase
+      .from('auditoria_tecnico')
+      .update({
+        foto_final: base64,
+        trabalho_realizado: trabalhoRealizado ? 1 : 0,
+        motivo: motivo || null,
+        comentario: comentario || null,
+        dt_edicao: new Date().toISOString(),
+      })
+      .eq('id', existingAudit.id)
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('❌ Erro ao atualizar auditoria:', error);
+      return { data: null, error: error.message };
+    }
+
+    console.log('✅ Auditoria final salva com sucesso:', data?.id);
+    return { data, error: null };
+
+  } catch (error) {
+    console.error('💥 Erro inesperado ao salvar auditoria final:', error);
+    return { data: null, error: 'Erro inesperado ao salvar auditoria final' };
   }
 }; 

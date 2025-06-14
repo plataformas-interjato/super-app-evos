@@ -17,7 +17,7 @@ import BottomNavigation from '../components/BottomNavigation';
 import { 
   ServiceStep, 
   ServiceStepData, 
-  getServiceStepsWithData,
+  getServiceStepsWithDataCached,
   saveServiceStepData,
   testDatabaseData,
   insertTestData,
@@ -68,33 +68,44 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
         workOrder.tipo_os_id = 1; // Assumir que foi criado com ID 1
       }
       
-      // Tentar buscar do banco primeiro se tipo_os_id estiver disponível
+      // Usar a nova função com cache que funciona offline
       if (workOrder.tipo_os_id) {
-        // TESTE: Buscar sem filtro ativo para comparar
-        await getServiceStepsByTypeIdTest(workOrder.tipo_os_id);
-        
-        const { data: stepsFromDB, error } = await getServiceStepsWithData(
+        const { data: stepsFromCache, error, fromCache } = await getServiceStepsWithDataCached(
           workOrder.tipo_os_id, 
           workOrder.id
         );
         
-        if (stepsFromDB && !error && stepsFromDB.length > 0) {
-          setSteps(stepsFromDB);
+        if (stepsFromCache && !error && stepsFromCache.length > 0) {
+          setSteps(stepsFromCache);
+          
+          // Mostrar indicador se dados vieram do cache
+          if (fromCache) {
+            console.log('📱 Dados carregados do cache local');
+          } else {
+            console.log('🌐 Dados carregados do servidor');
+          }
           return;
         } else {
-          // Não usar mock data - deixar vazio para mostrar que não há dados
+          console.warn('⚠️ Nenhuma etapa encontrada:', error);
           setSteps([]);
           return;
         }
       } else {
-        // Não usar mock data - deixar vazio
+        console.warn('⚠️ Nenhum tipo_os_id disponível');
         setSteps([]);
         return;
       }
     } catch (error) {
-      console.error('Erro ao carregar etapas:', error);
-      Alert.alert('Erro', 'Não foi possível carregar as etapas do serviço.');
-      // Não usar mock como fallback - deixar vazio
+      console.error('💥 Erro ao carregar etapas:', error);
+      // Em caso de erro, não mostrar alert se estivermos offline
+      const NetInfo = require('@react-native-community/netinfo');
+      const netInfo = await NetInfo.fetch();
+      
+      if (netInfo.isConnected) {
+        Alert.alert('Erro', 'Não foi possível carregar as etapas do serviço.');
+      } else {
+        console.log('📱 Offline: erro esperado, continuando sem dados');
+      }
       setSteps([]);
     } finally {
       setIsLoadingSteps(false);
@@ -122,27 +133,8 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
   };
 
   const handleFinishService = async () => {
-    Alert.alert(
-      'Encerrar Ordem de Serviço',
-      'Deseja encerrar esta ordem de serviço? Esta ação não pode ser desfeita.',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { 
-          text: 'Encerrar', 
-          style: 'destructive',
-          onPress: async () => {
-            setIsLoading(true);
-            try {
-              await onFinishService();
-            } catch (error) {
-              Alert.alert('Erro', 'Não foi possível encerrar a ordem de serviço.');
-            } finally {
-              setIsLoading(false);
-            }
-          }
-        },
-      ]
-    );
+    // Navegar para a tela de auditoria pós-serviço
+    onFinishService();
   };
 
   const getCompletionStats = () => {
@@ -376,7 +368,7 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
           disabled={isLoading}
         >
           <Text style={styles.finishButtonText}>
-            {isLoading ? 'Encerrando...' : 'Encerrar ordem de serviço'}
+            Prosseguir para auditoria
           </Text>
         </TouchableOpacity>
 
