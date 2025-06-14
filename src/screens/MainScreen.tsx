@@ -19,6 +19,7 @@ import { RFValue } from 'react-native-responsive-fontsize';
 
 import BottomNavigation from '../components/BottomNavigation';
 import WorkOrderModal from '../components/WorkOrderModal';
+import SyncStatusIndicator from '../components/SyncStatusIndicator';
 import { WorkOrder, User, FilterStatus } from '../types/workOrder';
 import { fetchWorkOrdersWithFilters, updateWorkOrderStatus } from '../services/workOrderService';
 import { useAuth } from '../contexts/AuthContext';
@@ -288,12 +289,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
           <View style={styles.dateContainer}>
             <Ionicons name="calendar-outline" size={16} color="#6b7280" />
             <Text style={styles.dateMainText}>{getCurrentDate()}</Text>
-            {!isConnected && (
-              <View style={styles.connectionStatusInline}>
-                <Ionicons name="wifi" size={14} color="#ef4444" />
-                <Text style={styles.connectionTextInline}>SEM CONEXÃO</Text>
-              </View>
-            )}
+            <SyncStatusIndicator style={styles.syncIndicatorInline} />
           </View>
         </View>
         
@@ -695,16 +691,8 @@ const styles = StyleSheet.create({
     color: '#374151',
     marginLeft: 6,
   },
-  connectionStatusInline: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  syncIndicatorInline: {
     marginLeft: 10,
-  },
-  connectionTextInline: {
-    marginLeft: 5,
-    fontSize: RFValue(12),
-    fontWeight: 'bold',
-    color: '#ef4444',
   },
   dividerLine: {
     height: 1,

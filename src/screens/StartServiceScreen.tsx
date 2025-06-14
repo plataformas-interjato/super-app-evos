@@ -15,6 +15,7 @@ import { RFValue } from 'react-native-responsive-fontsize';
 import * as ImagePicker from 'expo-image-picker';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
+import { savePhotoInicioOffline } from '../services/offlineService';
 
 interface StartServiceScreenProps {
   workOrder: WorkOrder;
@@ -57,7 +58,44 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
       });
 
       if (!result.canceled && result.assets[0]) {
-        setPhoto(result.assets[0].uri);
+        const photoUri = result.assets[0].uri;
+        setPhoto(photoUri);
+
+        // Salvar foto usando o serviço offline
+        try {
+          const { success, error, savedOffline } = await savePhotoInicioOffline(
+            workOrder.id,
+            user.id,
+            photoUri
+          );
+
+          if (success) {
+            if (savedOffline) {
+              console.log('📱 Foto salva offline, será sincronizada quando houver conexão');
+              Alert.alert(
+                'Foto Salva',
+                'Foto capturada e salva localmente. Será sincronizada automaticamente quando houver conexão com a internet.',
+                [{ text: 'OK' }]
+              );
+            } else {
+              console.log('✅ Foto salva online com sucesso');
+            }
+          } else {
+            console.error('❌ Erro ao salvar foto:', error);
+            Alert.alert(
+              'Erro',
+              'Não foi possível salvar a foto. Tente novamente.'
+            );
+            setPhoto(null); // Remove a foto se não conseguiu salvar
+          }
+        } catch (auditError) {
+          console.error('💥 Erro inesperado ao salvar foto:', auditError);
+          Alert.alert(
+            'Erro',
+            'Erro inesperado ao salvar a foto. Tente novamente.'
+          );
+          setPhoto(null);
+        }
       }
     } catch (error) {
       Alert.alert('Erro', 'Não foi possível tirar a foto. Tente novamente.');
@@ -67,15 +105,32 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
   const removePhoto = () => {
     Alert.alert(
       'Remover Foto',
-      'Deseja remover a foto?',
+      'Deseja remover a foto? (A foto será mantida no histórico do sistema)',
       [
         { text: 'Cancelar', style: 'cancel' },
-        { text: 'Remover', onPress: () => setPhoto(null) },
+        { 
+          text: 'Remover', 
+          onPress: () => {
+            // Remove apenas do app, mantém na base de dados e cache offline
+            setPhoto(null);
+            console.log('📱 Foto removida do app (mantida no histórico)');
+          }
+        },
       ]
     );
   };
 
   const handleConfirmStart = async () => {
+    // Verificar se há foto antes de prosseguir
+    if (!photo) {
+      Alert.alert(
+        'Foto Obrigatória',
+        'É necessário tirar uma foto para confirmar o início da ordem de serviço.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     setIsLoading(true);
     try {
       await onConfirmStart(photo || undefined);
@@ -149,12 +204,20 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
 
         {/* Botão de Confirmar */}
         <TouchableOpacity 
-          style={[styles.confirmButton, isLoading && styles.confirmButtonDisabled]} 
+          style={[
+            styles.confirmButton, 
+            (isLoading || !photo) && styles.confirmButtonDisabled
+          ]} 
           onPress={handleConfirmStart}
-          disabled={isLoading}
+          disabled={isLoading || !photo}
         >
-          <Text style={styles.confirmButtonText}>
-            {isLoading ? 'Iniciando...' : 'Confirmar Início da Ordem de Serviço'}
+          <Text style={[
+            styles.confirmButtonText,
+            !photo && styles.confirmButtonTextDisabled
+          ]}>
+            {isLoading ? 'Iniciando...' : 
+             !photo ? 'Tire uma foto para continuar' :
+             'Confirmar Início da Ordem de Serviço'}
           </Text>
         </TouchableOpacity>
 
@@ -345,6 +408,9 @@ const styles = StyleSheet.create({
     color: '#1f2937',
     fontSize: RFValue(16),
     fontWeight: '600',
+  },
+  confirmButtonTextDisabled: {
+    color: '#9ca3af',
   },
   bottomSpacing: {
     height: 100,

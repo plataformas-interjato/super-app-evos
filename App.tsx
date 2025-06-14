@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -10,6 +10,7 @@ import WorkOrderDetailScreen from './src/screens/WorkOrderDetailScreen';
 import StartServiceScreen from './src/screens/StartServiceScreen';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import { WorkOrder } from './src/types/workOrder';
+import { startAutoSync, syncAllPendingActions } from './src/services/offlineService';
 
 type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'startService';
 
@@ -17,6 +18,30 @@ function AppContent() {
   const { appUser, loading } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<CurrentScreen>('main');
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
+
+  // Inicializar monitoramento de sincronização
+  useEffect(() => {
+    console.log('🚀 Inicializando sistema de sincronização offline...');
+    
+    // Iniciar monitoramento automático
+    const unsubscribe = startAutoSync();
+    
+    // Tentar sincronizar ações pendentes na inicialização (com delay)
+    const initSync = setTimeout(() => {
+      syncAllPendingActions().then(result => {
+        if (result.total > 0) {
+          console.log(`📊 Sincronização inicial: ${result.synced}/${result.total} ações sincronizadas`);
+        }
+      });
+    }, 5000); // 5 segundos após inicialização
+
+    // Cleanup na desmontagem
+    return () => {
+      console.log('🛑 Parando monitoramento de sincronização');
+      clearTimeout(initSync);
+      unsubscribe();
+    };
+  }, []);
 
   const handleTabPress = (tab: 'home' | 'profile') => {
     if (tab === 'home') {
