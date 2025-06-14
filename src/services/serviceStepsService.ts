@@ -1,0 +1,641 @@
+import { supabase } from './supabase';
+
+export interface ServiceStep {
+  id: number;
+  titulo: string;
+  ordem_etapa: number;
+  etapa_os_id: number;
+  entradas?: ServiceStepData[]; // Entradas relacionadas a esta etapa
+}
+
+export interface ServiceStepData {
+  id: number;
+  etapa_os_id: number;
+  ordem_entrada: number;
+  valor?: string;
+  foto_base64?: string;
+  completed: boolean;
+  created_at?: string;
+}
+
+/**
+ * Busca as etapas de serviço baseado no tipo_os_id
+ */
+export const getServiceStepsByTypeId = async (
+  tipoOsId: number
+): Promise<{ data: ServiceStep[] | null; error: string | null }> => {
+  try {
+    // Primeira tentativa: buscar etapas específicas do tipo (sem filtro ativo)
+    let { data, error } = await supabase
+      .from('etapa_os')
+      .select(`
+        id,
+        titulo,
+        ordem_etapa
+      `)
+      .eq('tipo_os_id', tipoOsId)
+      .order('ordem_etapa', { ascending: true });
+
+    // Se não encontrou etapas para este tipo específico, buscar de qualquer tipo
+    if (!error && (!data || data.length === 0)) {
+      const fallbackResult = await supabase
+        .from('etapa_os')
+        .select(`
+          id,
+          titulo,
+          ordem_etapa
+        `)
+        .order('ordem_etapa', { ascending: true })
+        .limit(10); // Limitar para não pegar muitas
+      
+      data = fallbackResult.data;
+      error = fallbackResult.error;
+    }
+
+    if (error) {
+      console.error('❌ Erro ao buscar etapas do serviço:', error);
+      return { data: null, error: error.message };
+    }
+
+    // Mapear dados para o formato esperado
+    const steps: ServiceStep[] = data?.map(etapa => ({
+      id: etapa.id,
+      titulo: etapa.titulo,
+      ordem_etapa: etapa.ordem_etapa || 0,
+      etapa_os_id: etapa.id,
+      entradas: [], // Será preenchido posteriormente
+    })) || [];
+
+    return { data: steps, error: null };
+  } catch (error) {
+    console.error('💥 Erro inesperado ao buscar etapas:', error);
+    return { data: null, error: 'Erro inesperado ao buscar etapas do serviço' };
+  }
+};
+
+/**
+ * Busca dados salvos de etapas para etapas específicas e organiza por etapa
+ */
+export const getServiceStepDataBySteps = async (
+  etapaIds: number[]
+): Promise<{ data: { [etapaId: number]: ServiceStepData[] } | null; error: string | null }> => {
+  try {
+    if (!etapaIds || etapaIds.length === 0) {
+      return { data: {}, error: null };
+    }
+
+    const { data, error } = await supabase
+      .from('entrada_dados')
+      .select('*')
+      .in('etapa_os_id', etapaIds)
+      .order('ordem_entrada', { ascending: true });
+
+    if (error) {
+      console.error('❌ Erro ao buscar dados das etapas:', error);
+      return { data: null, error: error.message };
+    }
+
+    // Organizar dados por etapa_os_id
+    const dataByStep: { [etapaId: number]: ServiceStepData[] } = {};
+    
+    data?.forEach(entrada => {
+      if (!dataByStep[entrada.etapa_os_id]) {
+        dataByStep[entrada.etapa_os_id] = [];
+      }
+      dataByStep[entrada.etapa_os_id].push(entrada);
+    });
+
+    return { data: dataByStep, error: null };
+  } catch (error) {
+    console.error('💥 Erro inesperado ao buscar dados das etapas:', error);
+    return { data: null, error: 'Erro inesperado ao buscar dados das etapas' };
+  }
+};
+
+/**
+ * Combina etapas com seus dados relacionados
+ */
+export const getServiceStepsWithData = async (
+  tipoOsId: number,
+  ordemServicoId: number
+): Promise<{ data: ServiceStep[] | null; error: string | null }> => {
+  try {
+    // 1. Buscar etapas
+    const { data: steps, error: stepsError } = await getServiceStepsByTypeId(tipoOsId);
+    if (stepsError || !steps) {
+      return { data: null, error: stepsError };
+    }
+
+    // 2. Buscar dados das etapas usando os IDs das etapas
+    const etapaIds = steps.map(step => step.id);
+    
+    const { data: stepData, error: dataError } = await getServiceStepDataBySteps(etapaIds);
+    if (dataError) {
+      console.warn('⚠️ Erro ao buscar dados das etapas, continuando sem dados:', dataError);
+    }
+
+    // 3. Combinar etapas com seus dados
+    const stepsWithData = steps.map(step => ({
+      ...step,
+      entradas: stepData?.[step.id] || []
+    }));
+
+    return { data: stepsWithData, error: null };
+  } catch (error) {
+    console.error('💥 Erro inesperado ao combinar etapas com dados:', error);
+    return { data: null, error: 'Erro inesperado ao combinar etapas com dados' };
+  }
+};
+
+/**
+ * Salva dados de uma etapa (foto, texto, etc.)
+ */
+export const saveServiceStepData = async (
+  ordemServicoId: number,
+  etapaId: number,
+  valor?: string,
+  fotoBase64?: string
+): Promise<{ data: ServiceStepData | null; error: string | null }> => {
+  try {
+    // Buscar a próxima ordem_entrada para esta etapa
+    const { data: existingEntries, error: countError } = await supabase
+      .from('entrada_dados')
+      .select('ordem_entrada')
+      .eq('etapa_os_id', etapaId)
+      .order('ordem_entrada', { ascending: false })
+      .limit(1);
+
+    if (countError) {
+      console.error('❌ Erro ao buscar ordem_entrada:', countError);
+      return { data: null, error: countError.message };
+    }
+
+    const nextOrdem = existingEntries && existingEntries.length > 0 
+      ? (existingEntries[0].ordem_entrada || 0) + 1 
+      : 1;
+
+    const { data, error } = await supabase
+      .from('entrada_dados')
+      .insert({
+        etapa_os_id: etapaId,
+        ordem_entrada: nextOrdem,
+        valor: valor,
+        foto_base64: fotoBase64,
+        completed: true,
+        created_at: new Date().toISOString(),
+      })
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('❌ Erro ao salvar dados da etapa:', error);
+      return { data: null, error: error.message };
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('💥 Erro inesperado ao salvar dados da etapa:', error);
+    return { data: null, error: 'Erro inesperado ao salvar dados da etapa' };
+  }
+};
+
+/**
+ * Busca dados salvos de etapas para uma ordem de serviço (função original mantida para compatibilidade)
+ */
+export const getServiceStepData = async (
+  tipoOsId: number
+): Promise<{ data: ServiceStepData[] | null; error: string | null }> => {
+  try {
+    // Buscar etapas do tipo de OS
+    const { data: etapas, error: etapasError } = await supabase
+      .from('etapa_os')
+      .select('id')
+      .eq('tipo_os_id', tipoOsId);
+
+    if (etapasError) {
+      console.error('❌ Erro ao buscar etapas:', etapasError);
+      return { data: null, error: etapasError.message };
+    }
+
+    if (!etapas || etapas.length === 0) {
+      return { data: [], error: null };
+    }
+
+    const etapaIds = etapas.map(e => e.id);
+
+    const { data, error } = await supabase
+      .from('entrada_dados')
+      .select('*')
+      .in('etapa_os_id', etapaIds)
+      .order('ordem_entrada', { ascending: true });
+
+    if (error) {
+      console.error('❌ Erro ao buscar dados das etapas:', error);
+      return { data: null, error: error.message };
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('💥 Erro inesperado ao buscar dados das etapas:', error);
+    return { data: null, error: 'Erro inesperado ao buscar dados das etapas' };
+  }
+};
+
+/**
+ * Atualiza dados de uma etapa existente
+ */
+export const updateServiceStepData = async (
+  id: number,
+  valor?: string,
+  fotoBase64?: string
+): Promise<{ data: ServiceStepData | null; error: string | null }> => {
+  try {
+    const { data, error } = await supabase
+      .from('entrada_dados')
+      .update({
+        valor: valor,
+        foto_base64: fotoBase64,
+        completed: true,
+      })
+      .eq('id', id)
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('❌ Erro ao atualizar dados da etapa:', error);
+      return { data: null, error: error.message };
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('💥 Erro inesperado ao atualizar dados da etapa:', error);
+    return { data: null, error: 'Erro inesperado ao atualizar dados da etapa' };
+  }
+};
+
+/**
+ * Função de teste para verificar dados nas tabelas
+ */
+export const testDatabaseData = async (): Promise<void> => {
+  try {
+    console.log('🧪 === TESTE DE DADOS DO BANCO ===');
+    
+    // Testar tabela etapa_os
+    const { data: etapas, error: etapasError } = await supabase
+      .from('etapa_os')
+      .select('*')
+      .limit(5);
+    
+    console.log('📊 Dados da tabela etapa_os:', { 
+      count: etapas?.length || 0, 
+      error: etapasError,
+      sample: etapas?.slice(0, 2) 
+    });
+    
+    // Testar tabela entrada_dados
+    const { data: entradas, error: entradasError } = await supabase
+      .from('entrada_dados')
+      .select('*')
+      .limit(5);
+    
+    // Testar tabela tipo_os
+    const { data: tipos, error: tiposError } = await supabase
+      .from('tipo_os')
+      .select('id, titulo')
+      .limit(5);
+    
+    console.log('🧪 === FIM DO TESTE ===');
+  } catch (error) {
+    console.error('💥 Erro no teste de dados:', error);
+  }
+};
+
+/**
+ * Função para inserir dados de exemplo para teste
+ */
+export const insertTestData = async (): Promise<void> => {
+  try {
+    console.log('🧪 === INSERINDO DADOS DE TESTE ===');
+    
+    // Verificar se já existem dados
+    const { data: existingEtapas } = await supabase
+      .from('etapa_os')
+      .select('id')
+      .limit(1);
+    
+    if (existingEtapas && existingEtapas.length > 0) {
+      console.log('⚠️ Dados já existem, pulando inserção');
+      return;
+    }
+    
+    // Inserir tipo_os de exemplo
+    const { data: tipoOs, error: tipoError } = await supabase
+      .from('tipo_os')
+      .insert({
+        titulo: 'Instalação Padrão'
+      })
+      .select('id')
+      .single();
+    
+    if (tipoError) {
+      console.error('❌ Erro ao inserir tipo_os:', tipoError);
+      return;
+    }
+    
+    console.log('✅ Tipo OS criado:', tipoOs.id);
+    
+    // Inserir etapas de exemplo
+    const etapasExemplo = [
+      { titulo: 'Frente da CDI', ordem_etapa: 1, tipo_os_id: tipoOs.id, ativo: 1 },
+      { titulo: 'Porta de Entrada', ordem_etapa: 2, tipo_os_id: tipoOs.id, ativo: 1 },
+      { titulo: 'Local de instalação da antena', ordem_etapa: 3, tipo_os_id: tipoOs.id, ativo: 1 },
+    ];
+    
+    const { data: etapasInseridas, error: etapasError } = await supabase
+      .from('etapa_os')
+      .insert(etapasExemplo)
+      .select('*');
+    
+    if (etapasError) {
+      console.error('❌ Erro ao inserir etapas:', etapasError);
+      return;
+    }
+    
+    console.log('✅ Etapas criadas:', etapasInseridas?.length);
+    
+    // Inserir algumas entradas de exemplo
+    if (etapasInseridas && etapasInseridas.length > 0) {
+      const entradasExemplo = [
+        {
+          etapa_os_id: etapasInseridas[0].id,
+          ordem_entrada: 1,
+          valor: 'Foto da frente da CDI tirada',
+          completed: true
+        },
+        {
+          etapa_os_id: etapasInseridas[1].id,
+          ordem_entrada: 1,
+          valor: 'Porta de entrada documentada',
+          completed: true
+        }
+      ];
+      
+      const { data: entradasInseridas, error: entradasError } = await supabase
+        .from('entrada_dados')
+        .insert(entradasExemplo)
+        .select('*');
+      
+      if (entradasError) {
+        console.error('❌ Erro ao inserir entradas:', entradasError);
+      } else {
+        console.log('✅ Entradas criadas:', entradasInseridas?.length);
+      }
+    }
+    
+    console.log('🧪 === DADOS DE TESTE INSERIDOS ===');
+  } catch (error) {
+    console.error('💥 Erro ao inserir dados de teste:', error);
+  }
+};
+
+/**
+ * Função para atualizar uma OS com tipo_os_id de teste
+ */
+export const updateWorkOrderWithTestType = async (workOrderId: number): Promise<void> => {
+  try {
+    console.log('🔧 Atualizando OS com tipo_os_id de teste...');
+    
+    // Buscar um tipo_os existente
+    const { data: tipoOs, error: tipoError } = await supabase
+      .from('tipo_os')
+      .select('id')
+      .limit(1)
+      .single();
+    
+    if (tipoError || !tipoOs) {
+      console.log('⚠️ Nenhum tipo_os encontrado, criando um...');
+      
+      const { data: novoTipo, error: novoTipoError } = await supabase
+        .from('tipo_os')
+        .insert({
+          titulo: 'Instalação Padrão'
+        })
+        .select('id')
+        .single();
+      
+      if (novoTipoError || !novoTipo) {
+        console.error('❌ Erro ao criar tipo_os:', novoTipoError);
+        return;
+      }
+      
+      // Atualizar a OS com o novo tipo
+      const { error: updateError } = await supabase
+        .from('ordem_servico')
+        .update({ tipo_os_id: novoTipo.id })
+        .eq('id', workOrderId);
+      
+      if (updateError) {
+        console.error('❌ Erro ao atualizar OS:', updateError);
+      } else {
+        console.log('✅ OS atualizada com tipo_os_id:', novoTipo.id);
+      }
+    } else {
+      // Atualizar a OS com o tipo existente
+      const { error: updateError } = await supabase
+        .from('ordem_servico')
+        .update({ tipo_os_id: tipoOs.id })
+        .eq('id', workOrderId);
+      
+      if (updateError) {
+        console.error('❌ Erro ao atualizar OS:', updateError);
+      } else {
+        console.log('✅ OS atualizada com tipo_os_id:', tipoOs.id);
+      }
+    }
+  } catch (error) {
+    console.error('💥 Erro ao atualizar OS com tipo_os_id:', error);
+  }
+};
+
+/**
+ * Função de debug para analisar a estrutura real das tabelas
+ */
+export const debugDatabaseStructure = async (): Promise<void> => {
+  try {
+    console.log('🔍 === ANÁLISE DA ESTRUTURA DO BANCO ===');
+    
+    // 1. Analisar ordem_servico
+    console.log('📋 1. ORDEM_SERVICO:');
+    const { data: ordens, error: ordensError } = await supabase
+      .from('ordem_servico')
+      .select('id, tipo_os_id, os_motivo_descricao')
+      .limit(3);
+    
+    console.log('Ordens de serviço:', { 
+      count: ordens?.length || 0, 
+      error: ordensError,
+      data: ordens 
+    });
+    
+    // 2. Analisar tipo_os
+    console.log('📋 2. TIPO_OS:');
+    const { data: tipos, error: tiposError } = await supabase
+      .from('tipo_os')
+      .select('*')
+      .limit(5);
+    
+    console.log('Tipos de OS:', { 
+      count: tipos?.length || 0, 
+      error: tiposError,
+      data: tipos 
+    });
+    
+    // 3. Analisar etapa_os
+    console.log('📋 3. ETAPA_OS:');
+    const { data: etapas, error: etapasError } = await supabase
+      .from('etapa_os')
+      .select('*')
+      .limit(5);
+    
+    console.log('Etapas:', { 
+      count: etapas?.length || 0, 
+      error: etapasError,
+      data: etapas 
+    });
+    
+    // 4. Analisar entrada_dados
+    console.log('📋 4. ENTRADA_DADOS:');
+    const { data: entradas, error: entradasError } = await supabase
+      .from('entrada_dados')
+      .select('*')
+      .limit(5);
+    
+    console.log('Entradas:', { 
+      count: entradas?.length || 0, 
+      error: entradasError
+    });
+
+    // 5. Testar relação completa se temos dados
+    if (ordens && ordens.length > 0 && ordens[0].tipo_os_id) {
+      console.log('📋 5. TESTE DE RELAÇÃO COMPLETA:');
+      const tipoOsId = ordens[0].tipo_os_id;
+      console.log(`Testando com tipo_os_id: ${tipoOsId}`);
+      
+      // Buscar etapas deste tipo
+      const { data: etapasTeste, error: etapasTesteError } = await supabase
+        .from('etapa_os')
+        .select('*')
+        .eq('tipo_os_id', tipoOsId)
+        .eq('ativo', 1)
+        .order('ordem_etapa', { ascending: true });
+      
+      console.log('Etapas encontradas para este tipo:', { 
+        count: etapasTeste?.length || 0, 
+        error: etapasTesteError,
+        data: etapasTeste 
+      });
+      
+      // Se temos etapas, buscar entradas
+      if (etapasTeste && etapasTeste.length > 0) {
+        const etapaIds = etapasTeste.map(e => e.id);
+        console.log('IDs das etapas:', etapaIds);
+        
+        const { data: entradasTeste, error: entradasTesteError } = await supabase
+          .from('entrada_dados')
+          .select('*')
+          .in('etapa_os_id', etapaIds)
+          .order('ordem_entrada', { ascending: true });
+        
+        console.log('Entradas encontradas para estas etapas:', { 
+          count: entradasTeste?.length || 0, 
+          error: entradasTesteError
+        });
+        
+        // Organizar por etapa
+        if (entradasTeste && entradasTeste.length > 0) {
+          const entradasPorEtapa: { [key: number]: any[] } = {};
+          entradasTeste.forEach(entrada => {
+            if (!entradasPorEtapa[entrada.etapa_os_id]) {
+              entradasPorEtapa[entrada.etapa_os_id] = [];
+            }
+            entradasPorEtapa[entrada.etapa_os_id].push(entrada);
+          });
+          
+          console.log('Entradas organizadas por etapa - count:', Object.keys(entradasPorEtapa).length);
+        }
+      }
+    }
+    
+    console.log('🔍 === FIM DA ANÁLISE ===');
+  } catch (error) {
+    console.error('💥 Erro na análise da estrutura:', error);
+  }
+};
+
+/**
+ * Versão de teste - busca etapas sem filtrar por ativo
+ */
+export const getServiceStepsByTypeIdTest = async (
+  tipoOsId: number
+): Promise<{ data: ServiceStep[] | null; error: string | null }> => {
+  try {
+    const { data, error } = await supabase
+      .from('etapa_os')
+      .select(`
+        id,
+        titulo,
+        ordem_etapa,
+        ativo
+      `)
+      .eq('tipo_os_id', tipoOsId)
+      .order('ordem_etapa', { ascending: true });
+
+    if (error) {
+      console.error('❌ Erro ao buscar etapas do serviço:', error);
+      return { data: null, error: error.message };
+    }
+
+    // Mapear dados para o formato esperado
+    const steps: ServiceStep[] = data?.map(etapa => ({
+      id: etapa.id,
+      titulo: etapa.titulo,
+      ordem_etapa: etapa.ordem_etapa || 0,
+      etapa_os_id: etapa.id,
+      entradas: [], // Será preenchido posteriormente
+    })) || [];
+
+    return { data: steps, error: null };
+  } catch (error) {
+    console.error('💥 Erro inesperado ao buscar etapas:', error);
+    return { data: null, error: 'Erro inesperado ao buscar etapas do serviço' };
+  }
+};
+
+/**
+ * Função para buscar TODAS as etapas (para debug)
+ */
+export const getAllStepsForDebug = async (): Promise<void> => {
+  try {
+    console.log('🔍 DEBUG - Buscando TODAS as etapas da tabela...');
+    
+    const { data, error } = await supabase
+      .from('etapa_os')
+      .select('*')
+      .limit(10);
+
+    console.log('📊 DEBUG - Todas as etapas encontradas:', { 
+      count: data?.length || 0, 
+      error,
+      data: data 
+    });
+
+    if (data && data.length > 0) {
+      console.log('📋 DEBUG - Tipos de OS únicos encontrados:', 
+        [...new Set(data.map(e => e.tipo_os_id))]);
+      console.log('📋 DEBUG - Valores do campo ativo:', 
+        [...new Set(data.map(e => e.ativo))]);
+    }
+  } catch (error) {
+    console.error('💥 Erro ao buscar todas as etapas:', error);
+  }
+}; 

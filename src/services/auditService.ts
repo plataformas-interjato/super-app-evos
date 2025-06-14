@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import * as FileSystem from 'expo-file-system';
+import { updateWorkOrderStatus } from './workOrderService';
 
 export interface AuditoriaTecnico {
   id?: number;
@@ -21,8 +22,6 @@ export interface AuditoriaTecnico {
  */
 const convertPhotoToBase64 = async (photoUri: string): Promise<{ base64: string | null; error: string | null }> => {
   try {
-    console.log('🔄 Convertendo foto para base64...');
-
     const base64 = await FileSystem.readAsStringAsync(photoUri, {
       encoding: FileSystem.EncodingType.Base64,
     });
@@ -33,9 +32,6 @@ const convertPhotoToBase64 = async (photoUri: string): Promise<{ base64: string 
 
     // Adicionar prefix data URI para facilitar uso posterior
     const base64WithPrefix = `data:image/jpeg;base64,${base64}`;
-    
-    console.log('✅ Foto convertida para base64 com sucesso');
-    console.log(`📏 Tamanho: ${(base64.length / 1024).toFixed(2)} KB`);
     
     return { base64: base64WithPrefix, error: null };
 
@@ -91,7 +87,22 @@ export const savePhotoInicio = async (
     }
 
     console.log('✅ Foto de início salva com sucesso:', data?.id);
-    console.log('📸 Foto salva como base64 no banco de dados');
+    
+    // 3. Atualizar status da ordem de serviço para "em_progresso"
+    console.log('🔄 Atualizando status da OS para "em_progresso"...');
+    const { error: statusError } = await updateWorkOrderStatus(
+      workOrderId.toString(), 
+      'em_progresso'
+    );
+    
+    if (statusError) {
+      console.warn('⚠️ Erro ao atualizar status da OS:', statusError);
+      // Não retornar erro aqui pois a foto foi salva com sucesso
+      // O status pode ser atualizado manualmente se necessário
+    } else {
+      console.log('✅ Status da OS atualizado para "em_progresso"');
+    }
+    
     return { data, error: null };
 
   } catch (error) {
@@ -123,5 +134,33 @@ export const getAuditoriasByWorkOrder = async (
   } catch (error) {
     console.error('💥 Erro inesperado ao buscar auditorias:', error);
     return { data: null, error: 'Erro inesperado ao buscar auditorias' };
+  }
+};
+
+/**
+ * Verifica se já existe foto inicial para uma ordem de serviço
+ */
+export const hasInitialPhoto = async (
+  workOrderId: number
+): Promise<{ hasPhoto: boolean; error: string | null }> => {
+  try {
+    const { data, error } = await supabase
+      .from('auditoria_tecnico')
+      .select('id, foto_inicial')
+      .eq('ordem_servico_id', workOrderId)
+      .eq('ativo', 1)
+      .not('foto_inicial', 'is', null)
+      .limit(1);
+
+    if (error) {
+      console.error('❌ Erro ao verificar foto inicial:', error);
+      return { hasPhoto: false, error: error.message };
+    }
+
+    const hasPhoto = data && data.length > 0 && data[0].foto_inicial;
+    return { hasPhoto: !!hasPhoto, error: null };
+  } catch (error) {
+    console.error('💥 Erro inesperado ao verificar foto inicial:', error);
+    return { hasPhoto: false, error: 'Erro inesperado ao verificar foto inicial' };
   }
 }; 

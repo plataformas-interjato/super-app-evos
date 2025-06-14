@@ -8,16 +8,19 @@ import ManagerScreen from './src/screens/ManagerScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import WorkOrderDetailScreen from './src/screens/WorkOrderDetailScreen';
 import StartServiceScreen from './src/screens/StartServiceScreen';
+import ServiceStepsScreen from './src/screens/ServiceStepsScreen';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import { WorkOrder } from './src/types/workOrder';
 import { startAutoSync, syncAllPendingActions } from './src/services/offlineService';
+import { updateWorkOrderStatus } from './src/services/workOrderService';
 
-type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'startService';
+type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'startService' | 'steps';
 
 function AppContent() {
   const { appUser, loading } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<CurrentScreen>('main');
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
+  const [activeTab, setActiveTab] = useState<'home' | 'profile'>('home');
 
   // Inicializar monitoramento de sincronização
   useEffect(() => {
@@ -44,8 +47,10 @@ function AppContent() {
   }, []);
 
   const handleTabPress = (tab: 'home' | 'profile') => {
+    setActiveTab(tab);
     if (tab === 'home') {
       setCurrentScreen('main');
+      setSelectedWorkOrder(null);
     } else if (tab === 'profile') {
       setCurrentScreen('profile');
     }
@@ -62,19 +67,65 @@ function AppContent() {
   };
 
   const handleStartService = () => {
-    // Navegar para a tela de iniciar serviço
-    setCurrentScreen('startService');
+    if (selectedWorkOrder) {
+      // Se a OS já está em progresso, ir direto para as etapas
+      if (selectedWorkOrder.status === 'em_progresso') {
+        console.log('OS já em progresso, indo direto para etapas');
+        setCurrentScreen('steps');
+      } else {
+        // Se não está em progresso, ir para a tela de iniciar serviço
+        console.log('OS aguardando, indo para tela de início');
+        setCurrentScreen('startService');
+      }
+    }
   };
 
   const handleConfirmStart = async (photo?: string) => {
-    // Implementar lógica para confirmar início (salvar foto, atualizar status, etc.)
     console.log('Confirmando início do serviço para OS:', selectedWorkOrder?.id);
     console.log('Foto:', photo ? 'Foto capturada' : 'Sem foto');
     
-    // Por exemplo, mudar o status para 'em_progresso'
     if (selectedWorkOrder) {
-      const updatedWorkOrder = { ...selectedWorkOrder, status: 'em_progresso' as const };
-      setSelectedWorkOrder(updatedWorkOrder);
+      try {
+        // Atualizar status da OS para 'em_progresso'
+        const { data, error } = await updateWorkOrderStatus(
+          selectedWorkOrder.id.toString(), 
+          'em_progresso'
+        );
+        
+        if (error) {
+          console.error('Erro ao atualizar status:', error);
+          // Continuar mesmo com erro, pois a foto já foi salva
+        }
+        
+        // Ir para a tela de etapas do serviço
+        setCurrentScreen('steps');
+      } catch (error) {
+        console.error('Erro ao confirmar início:', error);
+        // Mesmo com erro, continuar para a tela de etapas
+        setCurrentScreen('steps');
+      }
+    }
+  };
+
+  const handleFinishService = async () => {
+    console.log('Finalizando serviço para OS:', selectedWorkOrder?.id);
+    
+    if (selectedWorkOrder) {
+      try {
+        // Atualizar status da OS para 'finalizada'
+        const { data, error } = await updateWorkOrderStatus(
+          selectedWorkOrder.id.toString(), 
+          'finalizada'
+        );
+        
+        if (error) {
+          console.error('Erro ao finalizar serviço:', error);
+        } else {
+          console.log('✅ Serviço finalizado com sucesso');
+        }
+      } catch (error) {
+        console.error('Erro ao finalizar serviço:', error);
+      }
     }
     
     // Voltar para a tela principal
@@ -134,6 +185,20 @@ function AppContent() {
             onBackPress={() => setCurrentScreen('workOrderDetail')}
             onTabPress={handleTabPress}
             onConfirmStart={handleConfirmStart}
+          />
+        ) : null;
+      case 'steps':
+        return selectedWorkOrder ? (
+          <ServiceStepsScreen
+            workOrder={selectedWorkOrder}
+            user={appUser}
+            onBackPress={() => {
+              // Sempre voltar para a home
+              setCurrentScreen('main');
+              setSelectedWorkOrder(null);
+            }}
+            onTabPress={handleTabPress}
+            onFinishService={handleFinishService}
           />
         ) : null;
       default:

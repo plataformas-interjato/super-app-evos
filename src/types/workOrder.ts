@@ -10,6 +10,7 @@ export interface WorkOrder {
   createdAt: Date;
   updatedAt: Date;
   os_conteudo?: string;
+  tipo_os_id?: number; // FK para tipo_os
 }
 
 export interface User {

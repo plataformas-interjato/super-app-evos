@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
 import { savePhotoInicioOffline } from '../services/offlineService';
+import { hasInitialPhoto } from '../services/auditService';
 
 interface StartServiceScreenProps {
   workOrder: WorkOrder;
@@ -34,6 +35,37 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
 }) => {
   const [photo, setPhoto] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCheckingPhoto, setIsCheckingPhoto] = useState(true);
+
+  useEffect(() => {
+    checkExistingPhoto();
+  }, []);
+
+  const checkExistingPhoto = async () => {
+    try {
+      const { hasPhoto, error } = await hasInitialPhoto(workOrder.id);
+      
+      if (error) {
+        console.warn('⚠️ Erro ao verificar foto inicial:', error);
+        // Continua normalmente se houver erro
+        setIsCheckingPhoto(false);
+        return;
+      }
+
+      if (hasPhoto) {
+        console.log('✅ Foto inicial já existe, pulando tela...');
+        // Pula direto para a próxima tela
+        await onConfirmStart(undefined);
+        return;
+      }
+
+      // Não tem foto, continua na tela normalmente
+      setIsCheckingPhoto(false);
+    } catch (error) {
+      console.error('💥 Erro inesperado ao verificar foto:', error);
+      setIsCheckingPhoto(false);
+    }
+  };
 
   const requestCameraPermission = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -140,6 +172,19 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
       setIsLoading(false);
     }
   };
+
+  // Tela de loading enquanto verifica foto inicial
+  if (isCheckingPhoto) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar backgroundColor="#3b82f6" barStyle="light-content" />
+        <View style={styles.loadingContainer}>
+          <Ionicons name="camera" size={48} color="#3b82f6" />
+          <Text style={styles.loadingText}>Verificando foto inicial...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -420,6 +465,17 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: RFValue(16),
+    fontWeight: '600',
+    color: '#1f2937',
+    marginTop: 16,
   },
 });
 

@@ -137,7 +137,9 @@ const WorkOrderDetailScreen: React.FC<WorkOrderDetailScreenProps> = ({
 
         {/* Botão de Iniciar */}
         <TouchableOpacity style={styles.startButton} onPress={onStartService}>
-          <Text style={styles.startButtonText}>Iniciar Ordem de Serviço</Text>
+          <Text style={styles.startButtonText}>
+            {workOrder.status === 'em_progresso' ? 'Continuar Ordem de Serviço' : 'Iniciar Ordem de Serviço'}
+          </Text>
         </TouchableOpacity>
 
         {/* Espaço para o bottom navigation */}
