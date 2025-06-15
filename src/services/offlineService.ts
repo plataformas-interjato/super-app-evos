@@ -564,14 +564,11 @@ export const saveAuditoriaFinalOffline = async (
       }
       
       // ✅ Sucesso online: limpar status local para remover ícone de sincronização
-      console.log('✅ Auditoria salva online - OS finalizada');
+      console.log('✅ Auditoria salva online - aguardando finalização da OS na tela final');
       await clearAllLocalDataForWorkOrder(workOrderId);
       
       // Limpar especificamente ações offline desta OS para evitar "1 pendente"
       await clearOfflineActionsForWorkOrder(workOrderId);
-      
-      // 🔔 Notificar que a OS foi finalizada online para atualizar a home
-      notifyOSFinalizadaCallbacks(workOrderId);
       
       return { success: true, savedOffline: false };
     } else {

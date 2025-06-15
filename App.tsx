@@ -17,6 +17,7 @@ import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import { WorkOrder } from './src/types/workOrder';
 import { startAutoSync, syncAllPendingActions } from './src/services/offlineService';
 import { updateLocalWorkOrderStatus } from './src/services/localStatusService';
+import { updateWorkOrderStatus } from './src/services/workOrderService';
 
 type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'startService' | 'steps' | 'audit' | 'photoCollection' | 'auditSaving' | 'auditSuccess';
 
@@ -154,16 +155,25 @@ function AppContent() {
     
     if (selectedWorkOrder) {
       try {
-        // A auditoria final já deve ter finalizado a OS, então só precisamos atualizar o status local
-        console.log('✅ Auditoria final já processada, atualizando apenas status local...');
+        // Agora que chegamos na tela final, finalizamos a OS corretamente
+        console.log('✅ Finalizando OS na tela final conforme esperado...');
         await updateLocalWorkOrderStatus(selectedWorkOrder.id, 'finalizada', false);
         
-        // REMOVIDO: Não precisamos criar uma segunda ação offline para atualizar status
-        // A auditoria final já deve ter cuidado da finalização da OS
+        // Criar ação offline para finalizar a OS no servidor quando houver conexão
+        // Isso garantirá que a OS seja finalizada no servidor também
+        try {
+          await updateWorkOrderStatus(selectedWorkOrder.id.toString(), 'finalizada');
+          console.log('✅ OS finalizada no servidor com sucesso');
+          
+        } catch (serverError) {
+          console.warn('⚠️ Erro ao finalizar OS no servidor (será tentado offline):', serverError);
+          // Em caso de erro, a ação offline será criada automaticamente
+        }
+        
         console.log('✅ Status local atualizado para finalizada');
         
       } catch (error) {
-        console.error('Erro ao atualizar status local:', error);
+        console.error('Erro ao finalizar OS:', error);
       }
     }
     

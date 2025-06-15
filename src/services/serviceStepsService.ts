@@ -5,6 +5,7 @@ import {
   getCachedServiceStepsWithData,
   CachedServiceEntries 
 } from './cacheService';
+import * as FileSystem from 'expo-file-system';
 
 export interface ServiceStep {
   id: number;
@@ -18,10 +19,22 @@ export interface ServiceStepData {
   id: number;
   etapa_os_id: number;
   ordem_entrada: number;
+  titulo?: string;
   valor?: string;
   foto_base64?: string;
+  foto_modelo?: string; // Foto modelo do banco de dados
   completed: boolean;
   created_at?: string;
+}
+
+export interface DadosRecord {
+  id?: number;
+  ativo: number; // 1 para ativo, 0 para inativo
+  valor: string; // foto em base64
+  ordem_servico_id: number;
+  entrada_dados_id: number;
+  created_at?: string;
+  dt_edicao?: string;
 }
 
 /**
@@ -645,7 +658,7 @@ export const getAllStepsForDebug = async (): Promise<void> => {
 };
 
 /**
- * Busca etapas com cache - tenta cache primeiro, depois servidor
+ * Busca etapas com cache - prioriza dados locais se OS estiver em andamento
  */
 export const getServiceStepsWithDataCached = async (
   tipoOsId: number,
@@ -655,6 +668,32 @@ export const getServiceStepsWithDataCached = async (
     // Verificar conectividade
     const NetInfo = require('@react-native-community/netinfo');
     const netInfo = await NetInfo.fetch();
+    
+    // Verificar se a OS está em andamento (dados locais têm prioridade)
+    const { getLocalWorkOrderStatus } = await import('./localStatusService');
+    const localStatus = await getLocalWorkOrderStatus(ordemServicoId);
+    const isWorkOrderInProgress = localStatus?.status === 'em_progresso';
+    
+    if (isWorkOrderInProgress) {
+      console.log(`🚧 OS ${ordemServicoId} em andamento - priorizando dados locais/cache`);
+      
+      // Para OS em andamento, SEMPRE usar cache local se disponível
+      const cacheResult = await getCachedServiceStepsWithData(tipoOsId);
+      
+      if (cacheResult.fromCache && cacheResult.data) {
+        console.log(`✅ ${cacheResult.data.length} etapas carregadas do cache (OS em andamento)`);
+        return cacheResult;
+      }
+      
+      // Se não há cache e estamos offline, retornar erro apropriado
+      if (!netInfo.isConnected) {
+        console.log('❌ OS em andamento, mas sem cache e offline');
+        return { data: null, error: 'Dados não disponíveis offline para OS em andamento', fromCache: false };
+      }
+      
+      // Se não há cache mas estamos online, buscar do servidor apenas como último recurso
+      console.log('⚠️ OS em andamento sem cache, buscando do servidor como último recurso');
+    }
     
     // Se offline, tentar buscar do cache
     if (!netInfo.isConnected) {
@@ -670,13 +709,15 @@ export const getServiceStepsWithDataCached = async (
       }
     }
 
-    // Online: tentar cache primeiro, depois servidor
-    console.log('🌐 Online: verificando cache...');
-    const cacheResult = await getCachedServiceStepsWithData(tipoOsId);
-    
-    if (cacheResult.fromCache && cacheResult.data) {
-      console.log(`✅ ${cacheResult.data.length} etapas carregadas do cache`);
-      return cacheResult;
+    // Online: se OS NÃO está em andamento, tentar cache primeiro, depois servidor
+    if (!isWorkOrderInProgress) {
+      console.log('🌐 Online: verificando cache...');
+      const cacheResult = await getCachedServiceStepsWithData(tipoOsId);
+      
+      if (cacheResult.fromCache && cacheResult.data) {
+        console.log(`✅ ${cacheResult.data.length} etapas carregadas do cache`);
+        return cacheResult;
+      }
     }
 
     // Cache não disponível ou expirado, buscar do servidor
@@ -684,9 +725,13 @@ export const getServiceStepsWithDataCached = async (
     const serverResult = await getServiceStepsWithData(tipoOsId, ordemServicoId);
     
     if (serverResult.data && !serverResult.error) {
-      // Fazer cache dos dados para uso futuro
-      await cacheServerData(tipoOsId, serverResult.data);
-      console.log(`✅ ${serverResult.data.length} etapas carregadas do servidor e salvas no cache`);
+      // Só fazer cache se a OS NÃO estiver em andamento (para não sobrepor dados locais)
+      if (!isWorkOrderInProgress) {
+        await cacheServerData(tipoOsId, serverResult.data);
+        console.log(`✅ ${serverResult.data.length} etapas carregadas do servidor e salvas no cache`);
+      } else {
+        console.log(`⚠️ ${serverResult.data.length} etapas carregadas do servidor (cache não atualizado - OS em andamento)`);
+      }
     }
 
     return { ...serverResult, fromCache: false };
@@ -795,5 +840,84 @@ export const preloadAndCacheAllServiceSteps = async (): Promise<{
   } catch (error) {
     console.error('💥 Erro no pré-carregamento:', error);
     return { success: false, cached: 0, errors: [error?.toString() || 'Erro desconhecido'] };
+  }
+};
+
+/**
+ * Converte foto para base64 para salvar na tabela dados
+ */
+const convertPhotoToBase64 = async (photoUri: string): Promise<{ base64: string | null; error: string | null }> => {
+  try {
+    if (!photoUri || typeof photoUri !== 'string') {
+      return { base64: null, error: 'URI da foto inválido' };
+    }
+
+    const fileInfo = await FileSystem.getInfoAsync(photoUri);
+    if (!fileInfo.exists) {
+      return { base64: null, error: 'Arquivo de foto não encontrado' };
+    }
+
+    const base64 = await FileSystem.readAsStringAsync(photoUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+
+    if (!base64) {
+      return { base64: null, error: 'Falha ao converter foto para base64' };
+    }
+
+    return { base64, error: null };
+  } catch (error) {
+    console.error('💥 Erro ao converter foto para base64:', error);
+    return { base64: null, error: `Erro inesperado ao converter foto: ${error}` };
+  }
+};
+
+/**
+ * Salva dados de foto na tabela 'dados'
+ */
+export const saveDadosRecord = async (
+  ordemServicoId: number,
+  entradaDadosId: number,
+  photoUri: string
+): Promise<{ data: DadosRecord | null; error: string | null }> => {
+  try {
+    console.log('💾 Salvando dados na tabela dados...', {
+      ordemServicoId,
+      entradaDadosId,
+      photoUri: photoUri.substring(0, 50) + '...'
+    });
+
+    // Converter foto para base64
+    const { base64, error: conversionError } = await convertPhotoToBase64(photoUri);
+    if (conversionError || !base64) {
+      console.error('❌ Erro na conversão para base64:', conversionError);
+      return { data: null, error: `Erro na conversão da foto: ${conversionError}` };
+    }
+
+    // Salvar na tabela dados
+    const { data, error } = await supabase
+      .from('dados')
+      .insert({
+        ativo: 1,
+        valor: base64,
+        ordem_servico_id: ordemServicoId,
+        entrada_dados_id: entradaDadosId,
+        created_at: new Date().toISOString(),
+        dt_edicao: new Date().toISOString(),
+      })
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('❌ Erro ao salvar na tabela dados:', error);
+      return { data: null, error: error.message };
+    }
+
+    console.log('✅ Dados salvos com sucesso na tabela dados:', data?.id);
+    return { data, error: null };
+
+  } catch (error) {
+    console.error('💥 Erro inesperado ao salvar dados:', error);
+    return { data: null, error: 'Erro inesperado ao salvar dados' };
   }
 }; 

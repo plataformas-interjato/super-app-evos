@@ -322,17 +322,18 @@ export const saveAuditoriaFinal = async (
 
     console.log('✅ Auditoria final salva com sucesso');
     
-    // 4. Finalizar a ordem de serviço automaticamente
-    const { error: statusError } = await updateWorkOrderStatus(
-      workOrderId.toString(), 
-      'finalizada'
-    );
-    
-    if (statusError) {
-      console.warn('⚠️ Erro ao finalizar OS:', statusError);
-    } else {
-      console.log('✅ Ordem de serviço finalizada automaticamente');
-    }
+    // REMOVIDO: Não finalizar a OS aqui - deve ser finalizada apenas na tela final
+    // A finalização será feita no handleFinishAuditSaving após o loading screen
+    // const { error: statusError } = await updateWorkOrderStatus(
+    //   workOrderId.toString(), 
+    //   'finalizada'
+    // );
+    // 
+    // if (statusError) {
+    //   console.warn('⚠️ Erro ao finalizar OS:', statusError);
+    // } else {
+    //   console.log('✅ Ordem de serviço finalizada automaticamente');
+    // }
     
     return { data, error: null };
 

@@ -387,7 +387,7 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
                                 styles.entryText,
                                 completedSteps.has(entrada.id) && styles.entryTextCompleted
                               ]}>
-                                {entrada.valor || 'Item sem título'}
+                                {entrada.titulo || entrada.valor || 'Item sem título'}
                               </Text>
                               {entrada.foto_base64 && (
                                 <Text style={styles.entryPhotoIndicator}>
