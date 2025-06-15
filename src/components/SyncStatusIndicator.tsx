@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RFValue } from 'react-native-responsive-fontsize';
 import { 
@@ -11,7 +11,8 @@ import {
   forceStopSync,
   clearFailedActions,
   retryFailedActions,
-  clearAllOfflineActions
+  clearAllOfflineActions,
+  getRemainingActionsCount
 } from '../services/offlineService';
 
 interface SyncStatusIndicatorProps {
@@ -146,10 +147,33 @@ const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({ style }) => {
     checkStatus();
 
     // Verificar periodicamente
-    const interval = setInterval(checkStatus, 10000); // A cada 10 segundos
+    const interval = setInterval(checkStatus, 5000); // Reduzido para 5 segundos para ser mais responsivo
 
     return () => clearInterval(interval);
   }, []);
+
+  // Escutar mudanças nas ações offline para atualizar em tempo real
+  useEffect(() => {
+    const checkForChanges = async () => {
+      // Verificar se há mudanças nas ações offline
+      const currentStats = await getSyncStats();
+      
+      // Se as estatísticas mudaram, atualizar o status
+      if (
+        currentStats.pending !== syncStats.pending ||
+        currentStats.failed !== syncStats.failed ||
+        currentStats.total !== syncStats.total
+      ) {
+        console.log('📊 Mudança detectada nas ações offline, atualizando SyncStatusIndicator');
+        await checkStatus();
+      }
+    };
+
+    // Verificar mudanças a cada 2 segundos
+    const changeInterval = setInterval(checkForChanges, 2000);
+
+    return () => clearInterval(changeInterval);
+  }, [syncStats]);
 
   // Não mostrar se não há ações pendentes e está online
   if (pendingCount === 0 && isOnline && syncStats.failed === 0) {
@@ -166,7 +190,10 @@ const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({ style }) => {
 
   const getStatusText = () => {
     if (!isOnline) return 'Offline';
-    if (isSyncing) return `Sincronizando... (${syncStats.pending} restantes)`;
+    if (isSyncing) {
+      const remaining = getRemainingActionsCount();
+      return `Sincronizando... (${remaining} restantes)`;
+    }
     if (pendingCount > 0) return `${pendingCount} pendente${pendingCount > 1 ? 's' : ''}`;
     if (syncStats.failed > 0) return `${syncStats.failed} falharam`;
     return 'Sincronizado';

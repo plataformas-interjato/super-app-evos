@@ -15,7 +15,7 @@ import { RFValue } from 'react-native-responsive-fontsize';
 import * as ImagePicker from 'expo-image-picker';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
-import { savePhotoInicioOffline } from '../services/offlineService';
+import { savePhotoInicioOffline, checkNetworkConnection } from '../services/offlineService';
 import { hasInitialPhoto } from '../services/auditService';
 
 interface StartServiceScreenProps {
@@ -128,12 +128,19 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
 
           if (success) {
             if (savedOffline) {
-              console.log('📱 Foto salva offline, será sincronizada quando houver conexão');
-              Alert.alert(
-                'Foto Salva',
-                'Foto capturada e salva localmente. Será sincronizada automaticamente quando houver conexão com a internet.',
-                [{ text: 'OK' }]
-              );
+              // Verificar se está offline para mostrar o popup
+              const isOnline = await checkNetworkConnection();
+              
+              if (!isOnline) {
+                console.log('📱 App offline: mostrando popup de foto salva localmente');
+                Alert.alert(
+                  'Foto Salva',
+                  'Foto capturada e salva localmente. Será sincronizada automaticamente quando houver conexão com a internet.',
+                  [{ text: 'OK' }]
+                );
+              } else {
+                console.log('🌐 App online: foto salva mas não mostrando popup');
+              }
             } else {
               console.log('✅ Foto salva online com sucesso');
             }

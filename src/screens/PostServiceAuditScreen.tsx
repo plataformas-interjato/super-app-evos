@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,8 @@ import { Picker } from '@react-native-picker/picker';
 import * as ImagePicker from 'expo-image-picker';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
-import { saveAuditoriaFinalOffline } from '../services/offlineService';
+import { saveAuditoriaFinalOffline, savePhotoFinalOffline, checkNetworkConnection } from '../services/offlineService';
+import { hasFinalPhoto } from '../services/auditService';
 
 interface PostServiceAuditScreenProps {
   workOrder: WorkOrder;
@@ -25,6 +26,7 @@ interface PostServiceAuditScreenProps {
   onBackPress: () => void;
   onTabPress: (tab: 'home' | 'profile') => void;
   onFinishAudit: (auditData: AuditData) => void;
+  onBackToServiceSteps?: () => void;
 }
 
 interface AuditData {
@@ -40,12 +42,14 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
   onBackPress,
   onTabPress,
   onFinishAudit,
+  onBackToServiceSteps,
 }) => {
   const [workCompleted, setWorkCompleted] = useState<boolean | null>(true);
   const [selectedReason, setSelectedReason] = useState<string>('');
   const [additionalComments, setAdditionalComments] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
   const [finalPhoto, setFinalPhoto] = useState<string | null>(null);
+  const [isCheckingPhoto, setIsCheckingPhoto] = useState(true);
 
   const reasons = [
     'Cliente não recebeu',
@@ -55,6 +59,77 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
     'Reagendamento solicitado',
     'Outros'
   ];
+
+  useEffect(() => {
+    checkExistingFinalPhoto();
+  }, []);
+
+  // Função de back personalizada que considera se já existe foto final
+  const handleBackPress = async () => {
+    try {
+      // Verificar se já existe foto final
+      const { hasPhoto, error } = await hasFinalPhoto(workOrder.id);
+      
+      if (error) {
+        console.warn('⚠️ Erro ao verificar foto final, voltando normalmente:', error);
+        // Em caso de erro, voltar normalmente
+        onBackPress();
+        return;
+      }
+
+      if (hasPhoto && onBackToServiceSteps) {
+        console.log('✅ Foto final existe, voltando para etapas/entradas');
+        // Se tem foto final e a função foi fornecida, voltar para etapas/entradas
+        onBackToServiceSteps();
+      } else {
+        console.log('📱 Sem foto final ou função não fornecida, voltando normalmente');
+        // Se não tem foto final ou função não foi fornecida, voltar normalmente
+        onBackPress();
+      }
+    } catch (error) {
+      console.error('💥 Erro inesperado ao verificar foto final:', error);
+      // Em caso de erro, voltar normalmente
+      onBackPress();
+    }
+  };
+
+  const checkExistingFinalPhoto = async () => {
+    try {
+      setIsCheckingPhoto(true);
+      
+      // Timeout de 5 segundos para evitar travamento
+      const timeoutPromise = new Promise<{ hasPhoto: boolean; error: string | null }>((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout na verificação')), 5000)
+      );
+      
+      const checkPromise = hasFinalPhoto(workOrder.id);
+      
+      const { hasPhoto, error } = await Promise.race([checkPromise, timeoutPromise]);
+      
+      if (error) {
+        console.warn('⚠️ Erro ao verificar foto final:', error);
+        // Continua normalmente se houver erro
+        setIsCheckingPhoto(false);
+        return;
+      }
+
+      if (hasPhoto) {
+        console.log('✅ Foto final já existe, voltando usando handleBackPress...');
+        // Usar setTimeout para evitar problemas de navegação assíncrona
+        setTimeout(() => {
+          handleBackPress();
+        }, 100);
+        return;
+      }
+
+      // Não tem foto, continua na tela normalmente
+      setIsCheckingPhoto(false);
+    } catch (error) {
+      console.error('💥 Erro inesperado ao verificar foto final (timeout ou erro de rede):', error);
+      // Em caso de erro ou timeout, sempre continuar na tela normalmente
+      setIsCheckingPhoto(false);
+    }
+  };
 
   const handleFinalPhoto = async () => {
     // Solicitar permissão da câmera
@@ -76,31 +151,86 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
       if (!result.canceled && result.assets[0]) {
         const photoUri = result.assets[0].uri;
         setFinalPhoto(photoUri);
+
+        // Salvar foto final usando o serviço offline
+        try {
+          const { success, error, savedOffline } = await savePhotoFinalOffline(
+            workOrder.id,
+            user.id,
+            photoUri
+          );
+
+          if (success) {
+            if (savedOffline) {
+              // Verificar se está offline para mostrar o popup
+              const isOnline = await checkNetworkConnection();
+              
+              if (!isOnline) {
+                console.log('📱 App offline: mostrando popup de foto final salva localmente');
+                Alert.alert(
+                  'Foto Salva',
+                  'Foto capturada e salva localmente. Será sincronizada automaticamente quando houver conexão com a internet.',
+                  [{ text: 'OK' }]
+                );
+              } else {
+                console.log('🌐 App online: foto final salva mas não mostrando popup');
+              }
+            } else {
+              console.log('✅ Foto final salva online com sucesso');
+            }
+          } else {
+            console.error('❌ Erro ao salvar foto final:', error);
+            Alert.alert(
+              'Erro',
+              'Não foi possível salvar a foto. Tente novamente.'
+            );
+            setFinalPhoto(null); // Remove a foto se não conseguiu salvar
+          }
+        } catch (auditError) {
+          console.error('💥 Erro inesperado ao salvar foto final:', auditError);
+          Alert.alert(
+            'Erro',
+            'Erro inesperado ao salvar a foto. Tente novamente.'
+          );
+          setFinalPhoto(null);
+        }
       }
     } catch (error) {
+      console.error('💥 Erro na função handleFinalPhoto:', error);
       Alert.alert('Erro', 'Não foi possível tirar a foto. Tente novamente.');
     }
   };
 
   const handleFinish = async () => {
+    console.log('🔄 handleFinish chamado');
+    console.log('workCompleted:', workCompleted);
+    console.log('selectedReason:', selectedReason);
+    console.log('finalPhoto:', finalPhoto);
+    console.log('canProceed:', canProceed);
+    
     if (workCompleted === null) {
+      console.log('❌ Erro: workCompleted é null');
       Alert.alert('Campo obrigatório', 'Por favor, informe se o trabalho foi realizado.');
       return;
     }
 
     if (!workCompleted && !selectedReason) {
+      console.log('❌ Erro: trabalho não realizado e sem motivo');
       Alert.alert('Campo obrigatório', 'Por favor, selecione um motivo.');
       return;
     }
 
     if (!finalPhoto) {
+      console.log('❌ Erro: sem foto final');
       Alert.alert('Foto obrigatória', 'Por favor, tire uma foto final para concluir a auditoria.');
       return;
     }
 
+    console.log('✅ Todas as validações passaram, iniciando salvamento...');
     setIsLoading(true);
     
     try {
+      console.log('📤 Chamando saveAuditoriaFinalOffline...');
       // Salvar auditoria final com foto
       const { success, error, savedOffline } = await saveAuditoriaFinalOffline(
         workOrder.id,
@@ -111,32 +241,61 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
         additionalComments.trim() || undefined
       );
 
+      console.log('📥 Resultado do salvamento:', { success, error, savedOffline });
+
       if (success) {
         if (savedOffline) {
-          Alert.alert(
-            'Auditoria Salva',
-            'Auditoria salva localmente. Será sincronizada automaticamente quando houver conexão com a internet.',
-            [{ text: 'OK', onPress: () => onFinishAudit({ workCompleted, reason: selectedReason, additionalComments }) }]
-          );
+          // Verificar se está offline para mostrar o popup
+          const isOnline = await checkNetworkConnection();
+          
+          if (!isOnline) {
+            console.log('📱 App offline: mostrando popup de auditoria salva localmente');
+            Alert.alert(
+              'Auditoria Salva',
+              'Auditoria salva localmente. Será sincronizada automaticamente quando houver conexão com a internet.',
+              [{ text: 'OK', onPress: () => {
+                console.log('🚀 Chamando onFinishAudit após popup offline');
+                onFinishAudit({ workCompleted, reason: selectedReason, additionalComments });
+              }}]
+            );
+          } else {
+            console.log('🌐 App online: auditoria salva mas não mostrando popup');
+            console.log('🚀 Chamando onFinishAudit diretamente');
+            onFinishAudit({ workCompleted, reason: selectedReason, additionalComments });
+          }
         } else {
-          Alert.alert(
-            'Auditoria Concluída',
-            'Auditoria finalizada com sucesso!',
-            [{ text: 'OK', onPress: () => onFinishAudit({ workCompleted, reason: selectedReason, additionalComments }) }]
-          );
+          // Auditoria salva online com sucesso - ir direto para próxima tela sem popup
+          console.log('✅ Auditoria salva online com sucesso - indo direto para próxima tela');
+          console.log('🚀 Chamando onFinishAudit após salvamento online');
+          onFinishAudit({ workCompleted, reason: selectedReason, additionalComments });
         }
       } else {
+        console.log('❌ Erro no salvamento:', error);
         Alert.alert('Erro', error || 'Não foi possível salvar a auditoria. Tente novamente.');
       }
     } catch (error) {
-      console.error('Erro ao finalizar auditoria:', error);
+      console.error('💥 Erro ao finalizar auditoria:', error);
       Alert.alert('Erro', 'Erro inesperado ao finalizar auditoria.');
     } finally {
+      console.log('🏁 Finalizando handleFinish, setIsLoading(false)');
       setIsLoading(false);
     }
   };
 
   const canProceed = workCompleted !== null && (workCompleted || selectedReason) && finalPhoto;
+
+  // Tela de loading enquanto verifica foto final
+  if (isCheckingPhoto) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar backgroundColor="#3b82f6" barStyle="light-content" />
+        <View style={styles.loadingContainer}>
+          <Ionicons name="camera" size={48} color="#3b82f6" />
+          <Text style={styles.loadingText}>Verificando foto final...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -144,23 +303,10 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
       
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBackPress} style={styles.backButton}>
+        <TouchableOpacity onPress={handleBackPress} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Auditoria pós serviço</Text>
-      </View>
-
-      {/* Progress Indicator */}
-      <View style={styles.progressContainer}>
-        <View style={styles.progressStep}>
-          <View style={[styles.progressDot, styles.progressDotActive]} />
-          <Text style={[styles.progressLabel, styles.progressLabelActive]}>Confirmação</Text>
-        </View>
-        <View style={styles.progressLine} />
-        <View style={styles.progressStep}>
-          <View style={styles.progressDot} />
-          <Text style={styles.progressLabel}>Avançar</Text>
-        </View>
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
@@ -254,11 +400,17 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
         {/* Action Button */}
         <TouchableOpacity 
           style={[styles.actionButton, !canProceed && styles.actionButtonDisabled]} 
-          onPress={handleFinish}
+          onPress={() => {
+            console.log('🖱️ Botão Próximo clicado');
+            console.log('canProceed atual:', canProceed);
+            console.log('isLoading atual:', isLoading);
+            console.log('disabled atual:', !canProceed || isLoading);
+            handleFinish();
+          }}
           disabled={!canProceed || isLoading}
         >
           <Text style={[styles.actionButtonText, !canProceed && styles.actionButtonTextDisabled]}>
-            {isLoading ? 'Finalizando...' : 'Finalizar'}
+            {isLoading ? 'Processando...' : 'Próximo'}
           </Text>
         </TouchableOpacity>
 
@@ -303,42 +455,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: 'white',
     flex: 1,
-  },
-  progressContainer: {
-    backgroundColor: '#3b82f6',
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  progressStep: {
-    alignItems: 'center',
-  },
-  progressDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    marginBottom: 4,
-  },
-  progressDotActive: {
-    backgroundColor: '#E0ED54',
-  },
-  progressLabel: {
-    fontSize: RFValue(12),
-    color: 'rgba(255, 255, 255, 0.7)',
-  },
-  progressLabelActive: {
-    color: 'white',
-    fontWeight: '600',
-  },
-  progressLine: {
-    flex: 1,
-    height: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    marginHorizontal: 16,
-    marginBottom: 16,
   },
   content: {
     flex: 1,
@@ -498,6 +614,17 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: RFValue(16),
+    fontWeight: '600',
+    color: '#3b82f6',
+    marginTop: 16,
   },
 });
 

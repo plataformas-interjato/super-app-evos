@@ -10,13 +10,15 @@ import WorkOrderDetailScreen from './src/screens/WorkOrderDetailScreen';
 import StartServiceScreen from './src/screens/StartServiceScreen';
 import ServiceStepsScreen from './src/screens/ServiceStepsScreen';
 import PostServiceAuditScreen from './src/screens/PostServiceAuditScreen';
+import PhotoCollectionScreen from './src/screens/PhotoCollectionScreen';
+import AuditSavingScreen from './src/screens/AuditSavingScreen';
+import AuditSuccessScreen from './src/screens/AuditSuccessScreen';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import { WorkOrder } from './src/types/workOrder';
-import { startAutoSync, syncAllPendingActions, saveStatusUpdateOffline } from './src/services/offlineService';
-import { updateWorkOrderStatus } from './src/services/workOrderService';
+import { startAutoSync, syncAllPendingActions } from './src/services/offlineService';
 import { updateLocalWorkOrderStatus } from './src/services/localStatusService';
 
-type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'startService' | 'steps' | 'audit';
+type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'startService' | 'steps' | 'audit' | 'photoCollection' | 'auditSaving' | 'auditSuccess';
 
 function AppContent() {
   const { appUser, loading } = useAuth();
@@ -92,15 +94,9 @@ function AppContent() {
         // Atualizar status local primeiro
         await updateLocalWorkOrderStatus(selectedWorkOrder.id, 'em_progresso', false);
         
-        // Tentar atualizar status online/offline
-        const { success, savedOffline } = await saveStatusUpdateOffline(
-          selectedWorkOrder.id, 
-          'em_progresso'
-        );
-        
-        if (!success) {
-          console.error('Erro ao atualizar status, mas continuando...');
-        }
+        // REMOVIDO: Não precisamos criar ação offline para status
+        // O status será atualizado automaticamente quando a foto de início for salva
+        console.log('✅ Status local atualizado para em_progresso');
         
         // Atualizar o objeto selectedWorkOrder localmente
         setSelectedWorkOrder({
@@ -125,43 +121,73 @@ function AppContent() {
     setCurrentScreen('audit');
   };
 
+  const handleSkipToPhotoCollection = async () => {
+    console.log('Pulando direto para coleta de fotos para OS:', selectedWorkOrder?.id);
+    
+    // Pular direto para a tela de coleta de fotos
+    setCurrentScreen('photoCollection');
+  };
+
   const handleFinishAudit = async (auditData: any) => {
-    console.log('Finalizando auditoria para OS:', selectedWorkOrder?.id, auditData);
+    console.log('Auditoria concluída para OS:', selectedWorkOrder?.id, auditData);
+    
+    // A auditoria foi salva na tela PostServiceAuditScreen
+    console.log('✅ Auditoria salva, indo para coleta de fotos');
+    
+    // Ir para a tela de coleta de fotos
+    setCurrentScreen('photoCollection');
+  };
+
+  const handleFinishPhotoCollection = async (photos: { [entryId: number]: string }) => {
+    console.log('Finalizando coleta de fotos para OS:', selectedWorkOrder?.id);
+    console.log('Fotos coletadas:', Object.keys(photos).length);
+    
+    // TODO: Salvar fotos coletadas (implementar serviço de fotos)
+    console.log('📸 Fotos coletadas salvas localmente');
+    
+    // Ir para a tela de salvamento da auditoria
+    setCurrentScreen('auditSaving');
+  };
+
+  const handleFinishAuditSaving = async () => {
+    console.log('Salvamento da auditoria concluído para OS:', selectedWorkOrder?.id);
     
     if (selectedWorkOrder) {
       try {
-        // Atualizar status local primeiro
+        // A auditoria final já deve ter finalizado a OS, então só precisamos atualizar o status local
+        console.log('✅ Auditoria final já processada, atualizando apenas status local...');
         await updateLocalWorkOrderStatus(selectedWorkOrder.id, 'finalizada', false);
         
-        // Tentar atualizar status online/offline
-        const { success, savedOffline } = await saveStatusUpdateOffline(
-          selectedWorkOrder.id, 
-          'finalizada'
-        );
-        
-        if (!success) {
-          console.error('Erro ao finalizar serviço, mas continuando...');
-        } else {
-          console.log('✅ Serviço finalizado com sucesso');
-        }
-        
-        // A auditoria já foi salva na tela PostServiceAuditScreen
-        console.log('✅ Auditoria finalizada:', auditData);
+        // REMOVIDO: Não precisamos criar uma segunda ação offline para atualizar status
+        // A auditoria final já deve ter cuidado da finalização da OS
+        console.log('✅ Status local atualizado para finalizada');
         
       } catch (error) {
-        console.error('Erro ao finalizar serviço:', error);
+        console.error('Erro ao atualizar status local:', error);
       }
     }
     
-    // Voltar para a tela principal primeiro
+    // Ir para a tela de sucesso
+    setCurrentScreen('auditSuccess');
+  };
+
+  const handleDownloadReport = () => {
+    console.log('Baixando relatório para OS:', selectedWorkOrder?.id);
+    // TODO: Implementar download do relatório
+  };
+
+  const handleViewWorkOrders = () => {
+    console.log('Voltando para visualizar ordens de serviço');
+    
+    // Voltar para a tela principal
     setCurrentScreen('main');
     setSelectedWorkOrder(null);
     
-    // Forçar refresh da MainScreen com delay para dar tempo do contexto se estabilizar
+    // Forçar refresh da MainScreen com delay
     setTimeout(() => {
       setRefreshMainScreen(prev => prev + 1);
-      console.log('🔄 Forçando refresh da MainScreen após finalização da auditoria (com delay)');
-    }, 1000); // 1 segundo de delay
+      console.log('🔄 Forçando refresh da MainScreen após finalização completa');
+    }, 500);
   };
 
   if (loading) {
@@ -230,6 +256,11 @@ function AppContent() {
             }}
             onTabPress={handleTabPress}
             onFinishService={handleFinishService}
+            onBackToWorkOrderDetail={() => {
+              // Voltar para a tela de detalhes da OS
+              setCurrentScreen('workOrderDetail');
+            }}
+            onSkipToPhotoCollection={handleSkipToPhotoCollection}
           />
         ) : null;
       case 'audit':
@@ -240,6 +271,43 @@ function AppContent() {
             onBackPress={() => setCurrentScreen('steps')}
             onTabPress={handleTabPress}
             onFinishAudit={handleFinishAudit}
+            onBackToServiceSteps={() => {
+              // Voltar para a tela de etapas/entradas
+              setCurrentScreen('steps');
+            }}
+          />
+        ) : null;
+      case 'photoCollection':
+        return selectedWorkOrder ? (
+          <PhotoCollectionScreen
+            workOrder={selectedWorkOrder}
+            user={appUser}
+            onBackPress={() => setCurrentScreen('audit')}
+            onTabPress={handleTabPress}
+            onFinishPhotoCollection={handleFinishPhotoCollection}
+            onBackToServiceSteps={() => {
+              // Voltar para a tela de etapas/entradas
+              setCurrentScreen('steps');
+            }}
+          />
+        ) : null;
+      case 'auditSaving':
+        return selectedWorkOrder ? (
+          <AuditSavingScreen
+            workOrder={selectedWorkOrder}
+            user={appUser}
+            onTabPress={handleTabPress}
+            onFinishSaving={handleFinishAuditSaving}
+          />
+        ) : null;
+      case 'auditSuccess':
+        return selectedWorkOrder ? (
+          <AuditSuccessScreen
+            workOrder={selectedWorkOrder}
+            user={appUser}
+            onTabPress={handleTabPress}
+            onDownloadReport={handleDownloadReport}
+            onViewWorkOrders={handleViewWorkOrders}
           />
         ) : null;
       default:

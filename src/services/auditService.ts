@@ -202,6 +202,47 @@ export const hasInitialPhoto = async (
 };
 
 /**
+ * Verifica se já existe foto final para uma ordem de serviço
+ */
+export const hasFinalPhoto = async (
+  workOrderId: number
+): Promise<{ hasPhoto: boolean; error: string | null }> => {
+  try {
+    // Primeiro verificar se há conexão
+    const NetInfo = require('@react-native-community/netinfo');
+    const netInfo = await NetInfo.fetch();
+    
+    if (!netInfo.isConnected) {
+      // Offline: assumir que não há foto para permitir continuar
+      console.log('📱 Offline: assumindo que não há foto final');
+      return { hasPhoto: false, error: null };
+    }
+
+    // Online: verificar no banco
+    const { data, error } = await supabase
+      .from('auditoria_tecnico')
+      .select('id, foto_final')
+      .eq('ordem_servico_id', workOrderId)
+      .eq('ativo', 1)
+      .not('foto_final', 'is', null)
+      .limit(1);
+
+    if (error) {
+      console.error('❌ Erro ao verificar foto final:', error);
+      // Em caso de erro, assumir que não há foto para permitir continuar
+      return { hasPhoto: false, error: null };
+    }
+
+    const hasPhoto = data && data.length > 0 && data[0].foto_final;
+    return { hasPhoto: !!hasPhoto, error: null };
+  } catch (error) {
+    console.error('💥 Erro inesperado ao verificar foto final:', error);
+    // Em caso de erro, assumir que não há foto para permitir continuar
+    return { hasPhoto: false, error: null };
+  }
+};
+
+/**
  * Salva a auditoria final (foto final + dados da auditoria)
  */
 export const saveAuditoriaFinal = async (
@@ -214,11 +255,6 @@ export const saveAuditoriaFinal = async (
 ): Promise<{ data: AuditoriaTecnico | null; error: string | null }> => {
   try {
     console.log('📸 Salvando auditoria final...');
-    console.log('OS ID:', workOrderId);
-    console.log('Técnico ID:', technicoId);
-    console.log('Trabalho realizado:', trabalhoRealizado);
-    console.log('Motivo:', motivo);
-    console.log('Comentário:', comentario);
 
     // Validações de entrada
     if (!workOrderId || workOrderId <= 0) {
@@ -284,7 +320,20 @@ export const saveAuditoriaFinal = async (
       return { data: null, error: error.message };
     }
 
-    console.log('✅ Auditoria final salva com sucesso:', data?.id);
+    console.log('✅ Auditoria final salva com sucesso');
+    
+    // 4. Finalizar a ordem de serviço automaticamente
+    const { error: statusError } = await updateWorkOrderStatus(
+      workOrderId.toString(), 
+      'finalizada'
+    );
+    
+    if (statusError) {
+      console.warn('⚠️ Erro ao finalizar OS:', statusError);
+    } else {
+      console.log('✅ Ordem de serviço finalizada automaticamente');
+    }
+    
     return { data, error: null };
 
   } catch (error) {

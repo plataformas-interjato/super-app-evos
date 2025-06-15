@@ -13,19 +13,20 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import NetInfo from '@react-native-community/netinfo';
 import { RFValue } from 'react-native-responsive-fontsize';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import BottomNavigation from '../components/BottomNavigation';
 import WorkOrderModal from '../components/WorkOrderModal';
 import SyncStatusIndicator from '../components/SyncStatusIndicator';
 import { WorkOrder, User, FilterStatus } from '../types/workOrder';
-import { fetchWorkOrdersWithFilters, updateWorkOrderStatus } from '../services/workOrderService';
+import { fetchWorkOrdersWithFilters } from '../services/workOrderService';
 import { useAuth } from '../contexts/AuthContext';
-import { getLocalWorkOrderStatuses } from '../services/localStatusService';
+import { getLocalWorkOrderStatuses, cleanSyncedLocalStatuses } from '../services/localStatusService';
 import { preloadAndCacheAllServiceSteps } from '../services/serviceStepsService';
-import { getWorkOrdersWithCache, getWorkOrdersCacheStats } from '../services/workOrderCacheService';
+import { getWorkOrdersWithCache, getWorkOrdersCacheStats, updateCacheAfterOSFinalizada } from '../services/workOrderCacheService';
+import { registerSyncCallback, registerOSFinalizadaCallback } from '../services/offlineService';
 
 interface MainScreenProps {
   user: User;
@@ -64,10 +65,110 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     // Pré-carregar todos os dados quando online (em background)
     preloadAllData();
     
+    // Registrar callback para sincronização automática
+    const unsubscribeSync = registerSyncCallback(async (result) => {
+      if (result.synced > 0) {
+        console.log(`🔄 ${result.synced} ações sincronizadas - atualizando dados`);
+        
+        // Forçar atualização do servidor para pegar dados frescos
+        setTimeout(async () => {
+          const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
+          
+          try {
+            const { data: freshData, error: fetchError } = await fetchWorkOrdersWithFilters(
+              userId,
+              activeFilter,
+              searchText.trim() || undefined
+            );
+            
+            if (!fetchError && freshData) {
+              const mergedWorkOrders = await mergeWithLocalStatus(freshData);
+              setWorkOrders(mergedWorkOrders);
+            }
+          } catch (error) {
+            console.error('❌ Erro ao atualizar dados após sincronização:', error);
+          }
+        }, 1000);
+      }
+    });
+    
+    // Registrar callback para OS finalizada online
+    const unsubscribeOSFinalizada = registerOSFinalizadaCallback(async (workOrderId) => {
+      console.log(`✅ OS ${workOrderId} finalizada online - atualizando home completamente`);
+      
+      const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
+      
+      try {
+        // PRIMEIRO: Atualizar cache de forma inteligente preservando OS em andamento
+        const { success, error } = await updateCacheAfterOSFinalizada(
+          workOrderId,
+          () => fetchWorkOrdersWithFilters(
+            userId,
+            activeFilter,
+            searchText.trim() || undefined
+          ),
+          userId
+        );
+        
+        if (success) {
+          console.log(`✅ Cache atualizado após OS ${workOrderId} finalizada`);
+        }
+        
+        // SEGUNDO: Forçar recarregamento completo da tela (independente do cache)
+        console.log('🔄 Forçando recarregamento completo da home...');
+        setTimeout(async () => {
+          await loadWorkOrders();
+          console.log('✅ Home atualizada após OS finalizada online');
+        }, 500);
+        
+      } catch (error) {
+        console.error('❌ Erro ao processar OS finalizada:', error);
+        // Mesmo com erro, tentar recarregar
+        setTimeout(async () => {
+          await loadWorkOrders();
+        }, 500);
+      }
+    });
+
     return () => {
       unsubscribe();
+      unsubscribeSync();
+      unsubscribeOSFinalizada();
     };
   }, [appUser]);
+
+  // Sistema de refresh automático a cada 3 minutos quando online
+  useEffect(() => {
+    let refreshInterval: NodeJS.Timeout;
+
+    const startAutoRefresh = async () => {
+      const netInfo = await NetInfo.fetch();
+      
+      if (netInfo.isConnected && appUser) {
+        console.log('🔄 Iniciando refresh automático a cada 3 minutos...');
+        
+        refreshInterval = setInterval(async () => {
+          const currentNetInfo = await NetInfo.fetch();
+          
+          if (currentNetInfo.isConnected) {
+            console.log('⏰ Refresh automático: atualizando dados do servidor...');
+            await loadWorkOrders();
+          } else {
+            console.log('📱 Offline: pulando refresh automático');
+          }
+        }, 3 * 60 * 1000); // 3 minutos
+      }
+    };
+
+    startAutoRefresh();
+
+    return () => {
+      if (refreshInterval) {
+        console.log('🛑 Parando refresh automático');
+        clearInterval(refreshInterval);
+      }
+    };
+  }, [appUser, isConnected]);
 
   // Recarregar quando filtros mudarem
   useEffect(() => {
@@ -95,7 +196,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
         return;
       }
       
-      const userId = appUser?.userType === 'tecnico' ? appUser.id?.toString() : undefined;
+      const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
       
       console.log('🔍 Carregando ordens de serviço com cache...');
       console.log('👤 Usuário:', appUser?.name, '- Tipo:', appUser?.userType);
@@ -154,8 +255,100 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await loadWorkOrders();
-    setRefreshing(false);
+    
+    try {
+      console.log('🔄 Pull-to-refresh: forçando atualização do Supabase...');
+      
+      // Verificação de segurança: se não há usuário, não fazer refresh
+      if (!appUser) {
+        console.log('⚠️ Usuário não disponível, pulando refresh');
+        setRefreshing(false);
+        return;
+      }
+      
+      const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
+      console.log('👤 UserId para refresh:', userId);
+      
+      // Verificar conectividade
+      const netInfo = await NetInfo.fetch();
+      console.log('📶 Status de conectividade no refresh:', netInfo.isConnected ? 'Online' : 'Offline');
+      
+      if (!netInfo.isConnected) {
+        console.log('📱 Offline: não é possível atualizar do servidor');
+        Alert.alert(
+          'Sem Conexão',
+          'Não é possível atualizar os dados sem conexão com a internet.',
+          [{ text: 'OK' }]
+        );
+        setRefreshing(false);
+        return;
+      }
+      
+      // PRIMEIRO: Limpar o cache existente para garantir dados frescos
+      console.log('🗑️ Limpando cache antes do refresh...');
+      const { clearWorkOrdersCache } = require('../services/workOrderCacheService');
+      await clearWorkOrdersCache(userId);
+      
+      // SEGUNDO: Buscar dados frescos do servidor DIRETAMENTE
+      console.log('🌐 Buscando dados frescos do Supabase...');
+      const freshData = await fetchWorkOrdersWithFilters(
+        userId,
+        'todas', // Buscar todas para fazer cache completo
+        undefined // Sem filtro de busca para cache completo
+      );
+      
+      console.log('📊 Resultado da busca fresca:', {
+        success: !freshData.error,
+        dataCount: freshData.data?.length || 0,
+        error: freshData.error
+      });
+      
+      if (freshData.data && !freshData.error) {
+        // TERCEIRO: Fazer cache dos dados frescos
+        console.log('💾 Fazendo cache dos dados frescos...');
+        const { cacheWorkOrders } = require('../services/workOrderCacheService');
+        await cacheWorkOrders(freshData.data, userId);
+        
+        // QUARTO: Aplicar filtros nos dados frescos
+        console.log('🔍 Aplicando filtros nos dados frescos...');
+        const { filterCachedWorkOrders } = require('../services/workOrderCacheService');
+        const filteredData = filterCachedWorkOrders(
+          freshData.data,
+          activeFilter,
+          searchText.trim() || undefined
+        );
+        
+        console.log(`✅ ${filteredData.length} ordens filtradas de ${freshData.data.length} totais`);
+        
+        // QUINTO: Aplicar dados frescos diretamente na tela (SEM status locais no pull-to-refresh)
+        console.log('📱 Aplicando dados frescos do servidor (ignorando status locais)...');
+        setWorkOrders(filteredData);
+        
+        console.log('🎉 Pull-to-refresh concluído - dados frescos do servidor aplicados');
+      } else {
+        console.error('❌ Erro ao buscar dados frescos:', freshData.error);
+        Alert.alert(
+          'Erro na Atualização',
+          freshData.error || 'Não foi possível atualizar os dados do servidor.',
+          [{ text: 'OK' }]
+        );
+        
+        // Mesmo com erro, tentar recarregar do cache
+        await loadWorkOrders();
+      }
+    } catch (error) {
+      console.error('💥 Erro inesperado no pull-to-refresh:', error);
+      Alert.alert(
+        'Erro',
+        'Erro inesperado ao atualizar dados. Tente novamente.',
+        [{ text: 'OK' }]
+      );
+      
+      // Em caso de erro, tentar recarregar normalmente
+      await loadWorkOrders();
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const handleWorkOrderPress = (workOrder: WorkOrder) => {
@@ -323,16 +516,10 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
   // Função para pré-carregar etapas em background
   const preloadServiceSteps = async () => {
     try {
-      console.log('🔄 Iniciando pré-carregamento de etapas em background...');
       const result = await preloadAndCacheAllServiceSteps();
       
       if (result.success) {
-        console.log(`✅ Pré-carregamento concluído: ${result.cached} tipos de OS em cache`);
-      } else {
-        console.log('⚠️ Pré-carregamento falhou ou pulado (offline)');
-        if (result.errors.length > 0) {
-          console.log('❌ Erros no pré-carregamento:', result.errors);
-        }
+        console.log(`✅ ${result.cached} tipos de OS pré-carregados`);
       }
     } catch (error) {
       console.error('💥 Erro no pré-carregamento de etapas:', error);
@@ -342,15 +529,10 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
   // Função para mostrar estatísticas do cache (debug)
   const showCacheStats = async () => {
     try {
-      const userId = appUser?.userType === 'tecnico' ? appUser.id?.toString() : undefined;
+      const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
       const stats = await getWorkOrdersCacheStats(userId);
       
-      console.log('📊 Estatísticas do cache de OSs:', {
-        hasCache: stats.hasCache,
-        itemCount: stats.itemCount,
-        cacheAge: `${stats.cacheAge}h`,
-        lastUpdate: stats.lastUpdate
-      });
+      // Log removido para reduzir verbosidade
     } catch (error) {
       console.error('❌ Erro ao obter estatísticas do cache:', error);
     }
@@ -361,20 +543,97 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     try {
       const netInfo = await NetInfo.fetch();
       if (netInfo.isConnected) {
-        console.log('🌐 Online: iniciando pré-carregamento de dados...');
-        
         // Pré-carregar etapas
         await preloadServiceSteps();
         
         // Mostrar estatísticas do cache
         await showCacheStats();
       } else {
-        console.log('📱 Offline: pulando pré-carregamento');
         await showCacheStats(); // Mostrar stats mesmo offline
       }
     } catch (error) {
       console.error('💥 Erro no pré-carregamento:', error);
     }
+  };
+
+  // Função para limpar todo o cache/localStorage
+  const handleClearCache = async () => {
+    Alert.alert(
+      'Limpar Cache',
+      'Isso irá limpar todos os dados em cache do aplicativo. Deseja continuar?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Limpar', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              console.log('🗑️ Iniciando limpeza completa do cache...');
+              
+              // Limpar cache de work orders
+              const { clearWorkOrdersCache } = require('../services/workOrderCacheService');
+              const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
+              await clearWorkOrdersCache(userId);
+              
+              // Limpar cache de etapas (usando a função que existe)
+              const { clearServiceCache } = require('../services/cacheService');
+              await clearServiceCache();
+              
+              // Limpar ações offline
+              const { clearAllOfflineActions } = require('../services/offlineService');
+              await clearAllOfflineActions();
+              
+              // Limpar status locais manualmente
+              const keys = await AsyncStorage.getAllKeys();
+              const localStatusKeys = keys.filter(key => key.startsWith('local_work_order_status_'));
+              if (localStatusKeys.length > 0) {
+                await AsyncStorage.multiRemove(localStatusKeys);
+                console.log(`🗑️ Removidos ${localStatusKeys.length} status locais`);
+              }
+              
+              // Limpar outros dados específicos
+              const keysToRemove = [
+                'completed_steps_',
+                'user_preferences',
+                'app_settings'
+              ];
+              
+              // Buscar todas as chaves e remover as que começam com os prefixos
+              const allKeys = await AsyncStorage.getAllKeys();
+              const keysToDelete = allKeys.filter(key => 
+                keysToRemove.some(prefix => key.startsWith(prefix))
+              );
+              
+              if (keysToDelete.length > 0) {
+                await AsyncStorage.multiRemove(keysToDelete);
+                console.log(`🗑️ Removidas ${keysToDelete.length} chaves adicionais do AsyncStorage`);
+              }
+              
+              console.log('✅ Cache limpo com sucesso');
+              
+              Alert.alert(
+                'Cache Limpo',
+                'Todos os dados em cache foram removidos. O aplicativo irá recarregar os dados do servidor.',
+                [{ 
+                  text: 'OK', 
+                  onPress: () => {
+                    // Recarregar dados após limpar cache
+                    loadWorkOrders();
+                  }
+                }]
+              );
+            } catch (error) {
+              console.error('❌ Erro ao limpar cache:', error);
+              Alert.alert(
+                'Erro',
+                'Não foi possível limpar o cache completamente. Tente novamente.',
+                [{ text: 'OK' }]
+              );
+            }
+          }
+        }
+      ]
+    );
   };
 
   return (
@@ -405,6 +664,12 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
                 <Text style={styles.userName}>{user.name}</Text>
                 <Text style={styles.userRole}>{user.role}</Text>
               </View>
+              <TouchableOpacity 
+                style={styles.clearCacheButton}
+                onPress={handleClearCache}
+              >
+                <Ionicons name="trash-outline" size={20} color="white" />
+              </TouchableOpacity>
             </View>
           </View>
         </ImageBackground>
@@ -897,6 +1162,9 @@ const styles = StyleSheet.create({
   },
   localStatusIcon: {
     marginLeft: 4,
+  },
+  clearCacheButton: {
+    padding: 5,
   },
 });
 

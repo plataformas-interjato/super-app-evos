@@ -622,23 +622,21 @@ export const getServiceStepsByTypeIdTest = async (
  */
 export const getAllStepsForDebug = async (): Promise<void> => {
   try {
-    console.log('🔍 DEBUG - Buscando TODAS as etapas da tabela...');
-    
     const { data, error } = await supabase
       .from('etapa_os')
       .select('*')
       .limit(10);
 
-    console.log('📊 DEBUG - Todas as etapas encontradas:', { 
+    console.log('📊 Todas as etapas encontradas:', { 
       count: data?.length || 0, 
       error,
       data: data 
     });
 
     if (data && data.length > 0) {
-      console.log('📋 DEBUG - Tipos de OS únicos encontrados:', 
+      console.log('📋 Tipos de OS únicos encontrados:', 
         [...new Set(data.map(e => e.tipo_os_id))]);
-      console.log('📋 DEBUG - Valores do campo ativo:', 
+      console.log('📋 Valores do campo ativo:', 
         [...new Set(data.map(e => e.ativo))]);
     }
   } catch (error) {
@@ -776,17 +774,12 @@ export const preloadAndCacheAllServiceSteps = async (): Promise<{
     // Carregar e fazer cache para cada tipo
     for (const tipoId of uniqueTipos) {
       try {
-        console.log(`🔄 Carregando etapas para tipo ${tipoId}...`);
-        
         // Usar ordemServicoId = 0 para indicar pré-carregamento
         const result = await getServiceStepsWithData(tipoId, 0);
         
         if (result.data && !result.error && result.data.length > 0) {
           await cacheServerData(tipoId, result.data);
           cached++;
-          console.log(`✅ Tipo ${tipoId}: ${result.data.length} etapas em cache`);
-        } else {
-          console.log(`⚠️ Tipo ${tipoId}: nenhuma etapa encontrada`);
         }
       } catch (error) {
         const errorMsg = `Erro no tipo ${tipoId}: ${error}`;
@@ -795,7 +788,9 @@ export const preloadAndCacheAllServiceSteps = async (): Promise<{
       }
     }
 
-    console.log(`✅ Pré-carregamento concluído: ${cached}/${uniqueTipos.length} tipos em cache`);
+    if (cached > 0) {
+      console.log(`✅ ${cached} tipos de OS em cache`);
+    }
     return { success: cached > 0, cached, errors };
   } catch (error) {
     console.error('💥 Erro no pré-carregamento:', error);

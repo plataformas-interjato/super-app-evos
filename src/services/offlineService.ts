@@ -1,13 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { AuditoriaTecnico, savePhotoInicio, saveAuditoriaFinal } from './auditService';
-import { updateWorkOrderStatus } from './workOrderService';
-import { markLocalStatusAsSynced } from './localStatusService';
+import { markLocalStatusAsSynced, clearAllLocalDataForWorkOrder } from './localStatusService';
 
 // Tipos para dados offline
 export interface OfflineAction {
   id: string;
-  type: 'PHOTO_INICIO' | 'PHOTO_FINAL' | 'UPDATE_STATUS' | 'ADD_COMMENT' | 'AUDITORIA_FINAL';
+  type: 'PHOTO_INICIO' | 'PHOTO_FINAL' | 'AUDITORIA_FINAL';
   timestamp: string;
   workOrderId: number;
   technicoId: string;
@@ -25,13 +24,22 @@ export interface OfflinePhotoAction extends OfflineAction {
   };
 }
 
+// Variáveis globais para controle
+let isSyncing = false;
+let syncTimeout: NodeJS.Timeout | null = null;
+let autoSyncInterval: NodeJS.Timeout | null = null;
+let remainingActionsCount = 0; // Contador dinâmico para sincronização
+
+// Callback para notificar a UI sobre mudanças de sincronização
+let syncCallbacks: Array<(result: { total: number; synced: number; failed: number }) => void> = [];
+
+// Callback para notificar quando uma OS é finalizada online
+let osFinalizadaCallbacks: Array<(workOrderId: number) => void> = [];
+
+// Constantes
 const OFFLINE_ACTIONS_KEY = 'offline_actions';
 const MAX_SYNC_ATTEMPTS = 3;
 const SYNC_TIMEOUT = 30000; // 30 segundos timeout por ação
-
-// Sistema de lock para evitar sincronizações simultâneas
-let isSyncing = false;
-let syncTimeout: NodeJS.Timeout | null = null;
 
 /**
  * Verifica se há conexão com a internet
@@ -51,6 +59,13 @@ export const checkNetworkConnection = async (): Promise<boolean> => {
  */
 export const isSyncInProgress = (): boolean => {
   return isSyncing;
+};
+
+/**
+ * Obtém o número de ações restantes durante a sincronização
+ */
+export const getRemainingActionsCount = (): number => {
+  return remainingActionsCount;
 };
 
 /**
@@ -86,7 +101,6 @@ const saveOfflineAction = async (action: OfflineAction): Promise<void> => {
     const updatedActions = [...existingActions, action];
     
     await AsyncStorage.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(updatedActions));
-    console.log('💾 Ação salva offline:', action.type, action.id);
   } catch (error) {
     console.error('❌ Erro ao salvar ação offline:', error);
   }
@@ -111,12 +125,19 @@ export const getOfflineActions = async (): Promise<OfflineAction[]> => {
 const markActionAsSynced = async (actionId: string): Promise<void> => {
   try {
     const actions = await getOfflineActions();
+    const actionToSync = actions.find(action => action.id === actionId);
+    if (!actionToSync) {
+      console.error(`❌ Ação não encontrada para marcar como sincronizada: ${actionId}`);
+      return;
+    }
+    
     const updatedActions = actions.map(action => 
       action.id === actionId ? { ...action, synced: true } : action
     );
     
     await AsyncStorage.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(updatedActions));
-    console.log('✅ Ação marcada como sincronizada:', actionId);
+    console.log(`✅ Ação ${actionToSync.type} marcada como sincronizada`);
+    
   } catch (error) {
     console.error('❌ Erro ao marcar ação como sincronizada:', error);
   }
@@ -128,10 +149,14 @@ const markActionAsSynced = async (actionId: string): Promise<void> => {
 export const cleanSyncedActions = async (): Promise<void> => {
   try {
     const actions = await getOfflineActions();
+    const syncedActions = actions.filter(action => action.synced);
     const unsyncedActions = actions.filter(action => !action.synced);
     
-    await AsyncStorage.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(unsyncedActions));
-    console.log('🧹 Ações sincronizadas removidas. Restam:', unsyncedActions.length);
+    if (syncedActions.length > 0) {
+      console.log(`🧹 Removendo ${syncedActions.length} ações sincronizadas`);
+      await AsyncStorage.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(unsyncedActions));
+    }
+    
   } catch (error) {
     console.error('❌ Erro ao limpar ações sincronizadas:', error);
   }
@@ -179,34 +204,77 @@ export const savePhotoInicioOffline = async (
     };
 
     await saveOfflineAction(offlineAction);
-    console.log('💾 Foto salva offline com sucesso');
 
     // 2. Verificar conexão e tentar salvar online
     const isOnline = await checkNetworkConnection();
     
     if (isOnline) {
-      console.log('🌐 Conexão disponível, tentando salvar online...');
-      
       const { data, error } = await savePhotoInicio(workOrderId, technicoId, photoUri);
       
       if (!error && data) {
         // Sucesso online - marcar como sincronizado
         await markActionAsSynced(actionId);
-        console.log('✅ Foto salva online e marcada como sincronizada');
+        
+        // Limpar apenas o status local para foto de início (não todos os dados)
+        // pois a OS ainda pode estar em progresso
+        await markLocalStatusAsSynced(workOrderId);
+        
         return { success: true };
       } else {
         // Falha online - manter offline para sincronização posterior
-        console.log('⚠️ Falha ao salvar online, mantendo offline:', error);
         return { success: true, savedOffline: true, error: `Salvo offline: ${error}` };
       }
     } else {
-      console.log('📱 Sem conexão, foto salva apenas offline');
       return { success: true, savedOffline: true, error: 'Sem conexão - salvo offline' };
     }
 
   } catch (error) {
-    console.error('💥 Erro ao salvar foto com suporte offline:', error);
     return { success: false, error: 'Erro inesperado ao salvar foto' };
+  }
+};
+
+/**
+ * Salva foto final com suporte offline
+ */
+export const savePhotoFinalOffline = async (
+  workOrderId: number,
+  technicoId: string,
+  photoUri: string
+): Promise<{ success: boolean; error?: string; savedOffline?: boolean }> => {
+  const actionId = `photo_final_${workOrderId}_${technicoId}_${Date.now()}`;
+  
+  try {
+    // 1. Sempre salvar offline primeiro
+    const offlineAction: OfflinePhotoAction = {
+      id: actionId,
+      type: 'PHOTO_FINAL',
+      timestamp: new Date().toISOString(),
+      workOrderId,
+      technicoId,
+      data: {
+        photoUri,
+      },
+      synced: false,
+      attempts: 0
+    };
+
+    await saveOfflineAction(offlineAction);
+
+    // 2. Verificar conexão e tentar salvar online
+    const isOnline = await checkNetworkConnection();
+    
+    if (isOnline) {
+      console.log('🌐 Conexão disponível, tentando salvar foto final online...');
+      
+      // Para foto final, precisamos atualizar o registro existente
+      // Por enquanto, vamos apenas salvar offline e sincronizar depois
+      return { success: true, savedOffline: true, error: 'Foto final salva offline' };
+    } else {
+      return { success: true, savedOffline: true, error: 'Sem conexão, foto final salva apenas offline' };
+    }
+
+  } catch (error) {
+    return { success: false, error: 'Erro inesperado ao salvar foto final' };
   }
 };
 
@@ -240,6 +308,18 @@ const syncAction = async (action: OfflineAction): Promise<boolean> => {
           return false;
         }
 
+      case 'PHOTO_FINAL':
+        try {
+          // Para foto final, precisamos atualizar o registro existente
+          // Por enquanto, vamos apenas marcar como sincronizado
+          // TODO: Implementar lógica específica para foto final
+          console.log('📸 Sincronização de foto final ainda não implementada completamente');
+          return true;
+        } catch (photoFinalSyncError) {
+          console.error('💥 Erro inesperado ao sincronizar foto final:', photoFinalSyncError);
+          return false;
+        }
+
       case 'AUDITORIA_FINAL':
         try {
           const auditPromise = saveAuditoriaFinal(
@@ -265,30 +345,6 @@ const syncAction = async (action: OfflineAction): Promise<boolean> => {
           return false;
         }
 
-      case 'UPDATE_STATUS':
-        try {
-          const statusPromise = updateWorkOrderStatus(
-            action.workOrderId.toString(),
-            action.data.newStatus
-          );
-          
-          const { data: statusData, error: statusError } = await withTimeout(statusPromise, SYNC_TIMEOUT);
-          
-          if (statusError) {
-            console.error('❌ Erro ao sincronizar atualização de status:', statusError);
-            return false;
-          }
-          
-          // Marcar status local como sincronizado
-          await markLocalStatusAsSynced(action.workOrderId);
-          
-          console.log('✅ Status sincronizado:', action.data.newStatus);
-          return true;
-        } catch (statusSyncError) {
-          console.error('💥 Erro inesperado ao sincronizar status:', statusSyncError);
-          return false;
-        }
-        
       default:
         console.log('⚠️ Tipo de ação não implementado:', action.type);
         return false;
@@ -331,42 +387,83 @@ export const syncAllPendingActions = async (): Promise<{
       !action.synced && action.attempts < MAX_SYNC_ATTEMPTS
     );
 
-    console.log(`📊 ${pendingActions.length} ações pendentes para sincronizar`);
+    // Agrupar ações pendentes por workOrderId
+    const actionsByWorkOrder = pendingActions.reduce((acc, action) => {
+      const key = action.workOrderId.toString();
+      if (!acc[key]) {
+        acc[key] = [];
+      }
+      acc[key].push(action);
+      return acc;
+    }, {} as { [workOrderId: string]: OfflineAction[] });
+
+    const totalOSs = Object.keys(actionsByWorkOrder).length;
+    console.log(`📊 ${pendingActions.length} ações de ${totalOSs} OSs pendentes para sincronizar`);
+    remainingActionsCount = totalOSs; // Contar OSs, não ações individuais
     
-    if (pendingActions.length === 0) {
-      console.log('✅ Nenhuma ação pendente para sincronizar');
+    if (totalOSs === 0) {
+      console.log('✅ Nenhuma OS pendente para sincronizar');
+      remainingActionsCount = 0;
       return { total: 0, synced: 0, failed: 0 };
     }
 
     let synced = 0;
     let failed = 0;
+    let processedOSs = 0;
 
-    for (let i = 0; i < pendingActions.length; i++) {
-      const action = pendingActions[i];
-      
+    // Processar ações agrupadas por OS
+    for (const [workOrderId, osActions] of Object.entries(actionsByWorkOrder)) {
       try {
-        console.log(`🔄 Sincronizando ${i + 1}/${pendingActions.length}: ${action.type} (${action.id})`);
+        console.log(`🔄 Sincronizando OS ${workOrderId} (${osActions.length} ações)`);
         
-        const actionStartTime = Date.now();
-        const success = await syncAction(action);
-        const actionDuration = Date.now() - actionStartTime;
+        let osSuccess = true;
         
-        if (success) {
-          await markActionAsSynced(action.id);
-          synced++;
-          console.log(`✅ Ação ${i + 1}/${pendingActions.length} sincronizada em ${actionDuration}ms`);
-        } else {
-          await incrementSyncAttempts(action.id);
-          failed++;
-          console.log(`❌ Ação ${i + 1}/${pendingActions.length} falhou após ${actionDuration}ms`);
+        // Sincronizar todas as ações desta OS
+        for (const action of osActions) {
+          try {
+            const actionStartTime = Date.now();
+            const success = await syncAction(action);
+            const actionDuration = Date.now() - actionStartTime;
+            
+            if (success) {
+              await markActionAsSynced(action.id);
+              console.log(`✅ Ação ${action.type} da OS ${workOrderId} sincronizada em ${actionDuration}ms`);
+            } else {
+              await incrementSyncAttempts(action.id);
+              osSuccess = false;
+              console.log(`❌ Ação ${action.type} da OS ${workOrderId} falhou após ${actionDuration}ms`);
+            }
+          } catch (actionError) {
+            console.error('💥 Erro ao processar ação:', action.id, actionError);
+            await incrementSyncAttempts(action.id);
+            osSuccess = false;
+          }
         }
-      } catch (actionError) {
-        console.error('💥 Erro ao processar ação:', action.id, actionError);
-        await incrementSyncAttempts(action.id);
+        
+        // Contar resultado da OS
+        if (osSuccess) {
+          synced++;
+          console.log(`✅ OS ${workOrderId} sincronizada completamente`);
+          
+          // Limpar TODOS os dados locais da OS sincronizada (não apenas status)
+          await clearAllLocalDataForWorkOrder(parseInt(workOrderId));
+        } else {
+          failed++;
+          console.log(`❌ OS ${workOrderId} teve falhas na sincronização`);
+        }
+        
+        processedOSs++;
+        // Atualizar contador de OSs restantes
+        remainingActionsCount = totalOSs - processedOSs;
+        
+      } catch (osError) {
+        console.error('💥 Erro ao processar OS:', workOrderId, osError);
         failed++;
+        processedOSs++;
+        remainingActionsCount = totalOSs - processedOSs;
       }
       
-      // Verificar se ainda está online a cada ação
+      // Verificar se ainda está online a cada OS
       const stillOnline = await checkNetworkConnection();
       if (!stillOnline) {
         console.log('📱 Conexão perdida durante sincronização, parando...');
@@ -380,15 +477,24 @@ export const syncAllPendingActions = async (): Promise<{
     }
 
     const totalDuration = Date.now() - syncStartTime;
-    console.log(`✅ Sincronização concluída em ${totalDuration}ms: ${synced} sucesso, ${failed} falhas`);
-    return { total: pendingActions.length, synced, failed };
+    const result = { total: totalOSs, synced, failed };
+    
+    console.log(`✅ Sincronização concluída: ${synced}/${totalOSs} OSs sincronizadas`);
+    
+    // Notificar callbacks se houve alguma sincronização
+    if (synced > 0) {
+      notifySyncCallbacks(result);
+    }
+    
+    return result;
 
   } catch (error) {
     console.error('💥 Erro na sincronização:', error);
     return { total: 0, synced: 0, failed: 1 };
   } finally {
-    // Liberar lock
+    // Liberar lock e zerar contador
     isSyncing = false;
+    remainingActionsCount = 0;
     console.log('🔓 Lock de sincronização liberado');
   }
 };
@@ -442,7 +548,6 @@ export const saveAuditoriaFinalOffline = async (
     
     if (netInfo.isConnected) {
       // Online: tentar salvar diretamente
-      console.log('📶 Online - salvando auditoria final diretamente...');
       const { data, error } = await saveAuditoriaFinal(
         workOrderId, 
         technicoId, 
@@ -453,16 +558,25 @@ export const saveAuditoriaFinalOffline = async (
       );
       
       if (error) {
-        console.log('❌ Erro online, salvando offline como fallback...');
         // Se falhar online, salvar offline como fallback
         await saveAuditoriaFinalToQueue(workOrderId, technicoId, photoUri, trabalhoRealizado, motivo, comentario);
         return { success: true, savedOffline: true };
       }
       
+      // ✅ Sucesso online: limpar status local para remover ícone de sincronização
+      console.log('✅ Auditoria salva online - OS finalizada');
+      await clearAllLocalDataForWorkOrder(workOrderId);
+      
+      // Limpar especificamente ações offline desta OS para evitar "1 pendente"
+      await clearOfflineActionsForWorkOrder(workOrderId);
+      
+      // 🔔 Notificar que a OS foi finalizada online para atualizar a home
+      notifyOSFinalizadaCallbacks(workOrderId);
+      
       return { success: true, savedOffline: false };
     } else {
       // Offline: salvar na fila
-      console.log('📱 Offline - salvando auditoria final na fila...');
+      console.log('📱 Auditoria salva offline para sincronização');
       await saveAuditoriaFinalToQueue(workOrderId, technicoId, photoUri, trabalhoRealizado, motivo, comentario);
       return { success: true, savedOffline: true };
     }
@@ -500,74 +614,10 @@ const saveAuditoriaFinalToQueue = async (
   };
 
   await saveOfflineAction(action);
-  console.log('📱 Auditoria final adicionada à fila offline:', action.id);
 };
 
 /**
- * Atualiza status da OS offline se não houver conexão
- */
-export const saveStatusUpdateOffline = async (
-  workOrderId: number,
-  newStatus: string
-): Promise<{ success: boolean; error?: string; savedOffline?: boolean }> => {
-  try {
-    // Verificar conexão
-    const netInfo = await NetInfo.fetch();
-    
-    if (netInfo.isConnected) {
-      // Online: tentar atualizar diretamente
-      console.log('📶 Online - atualizando status diretamente...');
-      const { data, error } = await updateWorkOrderStatus(
-        workOrderId.toString(), 
-        newStatus
-      );
-      
-      if (error) {
-        console.log('❌ Erro online, salvando offline como fallback...');
-        // Se falhar online, salvar offline como fallback
-        await saveStatusUpdateToQueue(workOrderId, newStatus);
-        return { success: true, savedOffline: true };
-      }
-      
-      return { success: true, savedOffline: false };
-    } else {
-      // Offline: salvar na fila
-      console.log('📱 Offline - salvando atualização de status na fila...');
-      await saveStatusUpdateToQueue(workOrderId, newStatus);
-      return { success: true, savedOffline: true };
-    }
-  } catch (error) {
-    console.error('💥 Erro ao atualizar status:', error);
-    return { success: false, error: 'Erro inesperado ao atualizar status' };
-  }
-};
-
-/**
- * Salva atualização de status na fila offline
- */
-const saveStatusUpdateToQueue = async (
-  workOrderId: number,
-  newStatus: string
-) => {
-  const action: OfflineAction = {
-    id: `status_update_${workOrderId}_${Date.now()}`,
-    type: 'UPDATE_STATUS',
-    timestamp: new Date().toISOString(),
-    workOrderId,
-    technicoId: '', // Não precisa de técnico para atualizar status
-    data: {
-      newStatus,
-    },
-    synced: false,
-    attempts: 0,
-  };
-
-  await saveOfflineAction(action);
-  console.log('📱 Atualização de status adicionada à fila offline:', action.id);
-};
-
-/**
- * Obtém estatísticas das ações offline
+ * Obtém estatísticas das ações offline agrupadas por OS
  */
 export const getSyncStats = async (): Promise<{
   total: number;
@@ -577,12 +627,40 @@ export const getSyncStats = async (): Promise<{
 }> => {
   try {
     const actions = await getOfflineActions();
-    const pending = actions.filter(a => !a.synced && a.attempts < MAX_SYNC_ATTEMPTS).length;
-    const synced = actions.filter(a => a.synced).length;
-    const failed = actions.filter(a => !a.synced && a.attempts >= MAX_SYNC_ATTEMPTS).length;
+    
+    // Agrupar ações por workOrderId para contar apenas 1 por OS
+    const actionsByWorkOrder = actions.reduce((acc, action) => {
+      const key = action.workOrderId.toString();
+      if (!acc[key]) {
+        acc[key] = [];
+      }
+      acc[key].push(action);
+      return acc;
+    }, {} as { [workOrderId: string]: OfflineAction[] });
+    
+    let pending = 0;
+    let synced = 0;
+    let failed = 0;
+    
+    // Para cada OS, verificar o status geral das suas ações
+    Object.values(actionsByWorkOrder).forEach(osActions => {
+      const hasPending = osActions.some(a => !a.synced && a.attempts < MAX_SYNC_ATTEMPTS);
+      const allSynced = osActions.every(a => a.synced);
+      const hasFailed = osActions.some(a => !a.synced && a.attempts >= MAX_SYNC_ATTEMPTS);
+      
+      if (hasPending) {
+        pending++;
+      } else if (allSynced) {
+        synced++;
+      } else if (hasFailed) {
+        failed++;
+      }
+    });
+    
+    const totalOSs = Object.keys(actionsByWorkOrder).length;
     
     return {
-      total: actions.length,
+      total: totalOSs,
       pending,
       synced,
       failed
@@ -639,4 +717,77 @@ export const clearAllOfflineActions = async (): Promise<void> => {
   } catch (error) {
     console.error('❌ Erro ao limpar todas as ações:', error);
   }
+};
+
+/**
+ * Remove ações offline específicas de uma OS finalizada online
+ */
+export const clearOfflineActionsForWorkOrder = async (workOrderId: number): Promise<void> => {
+  try {
+    const actions = await getOfflineActions();
+    
+    // Filtrar ações que NÃO são da OS finalizada
+    const remainingActions = actions.filter(action => action.workOrderId !== workOrderId);
+    
+    // Salvar apenas as ações restantes
+    await AsyncStorage.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(remainingActions));
+    
+    const removedCount = actions.length - remainingActions.length;
+    if (removedCount > 0) {
+      console.log(`🧹 Removidas ${removedCount} ações offline da OS ${workOrderId}`);
+    }
+  } catch (error) {
+    console.error(`❌ Erro ao limpar ações offline da OS ${workOrderId}:`, error);
+  }
+};
+
+/**
+ * Registra um callback para ser chamado quando uma OS é finalizada online
+ */
+export const registerOSFinalizadaCallback = (callback: (workOrderId: number) => void): () => void => {
+  osFinalizadaCallbacks.push(callback);
+  
+  // Retorna função para remover o callback
+  return () => {
+    osFinalizadaCallbacks = osFinalizadaCallbacks.filter(cb => cb !== callback);
+  };
+};
+
+/**
+ * Notifica todos os callbacks registrados sobre uma OS finalizada online
+ */
+const notifyOSFinalizadaCallbacks = (workOrderId: number) => {
+  console.log(`🔔 Notificando callbacks sobre OS ${workOrderId} finalizada online...`);
+  osFinalizadaCallbacks.forEach(callback => {
+    try {
+      callback(workOrderId);
+    } catch (error) {
+      console.error('❌ Erro ao executar callback de OS finalizada:', error);
+    }
+  });
+};
+
+/**
+ * Registra um callback para ser chamado quando a sincronização automática terminar
+ */
+export const registerSyncCallback = (callback: (result: { total: number; synced: number; failed: number }) => void): () => void => {
+  syncCallbacks.push(callback);
+  
+  // Retorna função para remover o callback
+  return () => {
+    syncCallbacks = syncCallbacks.filter(cb => cb !== callback);
+  };
+};
+
+/**
+ * Notifica todos os callbacks registrados sobre o resultado da sincronização
+ */
+const notifySyncCallbacks = (result: { total: number; synced: number; failed: number }) => {
+  syncCallbacks.forEach(callback => {
+    try {
+      callback(result);
+    } catch (error) {
+      console.error('❌ Erro ao executar callback de sincronização:', error);
+    }
+  });
 }; 

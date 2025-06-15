@@ -14,6 +14,7 @@ import { RFValue } from 'react-native-responsive-fontsize';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
+import { hasFinalPhoto, hasInitialPhoto } from '../services/auditService';
 import { 
   ServiceStep, 
   ServiceStepData, 
@@ -33,6 +34,8 @@ interface ServiceStepsScreenProps {
   onBackPress: () => void;
   onTabPress: (tab: 'home' | 'profile') => void;
   onFinishService: () => void;
+  onBackToWorkOrderDetail?: () => void;
+  onSkipToPhotoCollection?: () => void;
 }
 
 const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
@@ -41,6 +44,8 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
   onBackPress,
   onTabPress,
   onFinishService,
+  onBackToWorkOrderDetail,
+  onSkipToPhotoCollection,
 }) => {
   const [steps, setSteps] = useState<ServiceStep[]>([]);
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
@@ -53,9 +58,32 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
   }, []);
 
   // Função de back personalizada que considera se pulou a tela de início
-  const handleBackPress = () => {
-    // Comportamento normal
-    onBackPress();
+  const handleBackPress = async () => {
+    try {
+      // Verificar se já existe foto inicial
+      const { hasPhoto, error } = await hasInitialPhoto(workOrder.id);
+      
+      if (error) {
+        console.warn('⚠️ Erro ao verificar foto inicial, voltando normalmente:', error);
+        // Em caso de erro, voltar normalmente
+        onBackPress();
+        return;
+      }
+
+      if (hasPhoto && onBackToWorkOrderDetail) {
+        console.log('✅ Foto inicial existe, voltando para detalhes da OS');
+        // Se tem foto inicial e a função foi fornecida, voltar para detalhes da OS
+        onBackToWorkOrderDetail();
+      } else {
+        console.log('📱 Sem foto inicial ou função não fornecida, voltando normalmente');
+        // Se não tem foto inicial ou função não foi fornecida, voltar normalmente
+        onBackPress();
+      }
+    } catch (error) {
+      console.error('💥 Erro inesperado ao verificar foto inicial:', error);
+      // Em caso de erro, voltar normalmente
+      onBackPress();
+    }
   };
 
   const loadServiceSteps = async () => {
@@ -133,8 +161,31 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
   };
 
   const handleFinishService = async () => {
-    // Navegar para a tela de auditoria pós-serviço
-    onFinishService();
+    try {
+      // Verificar se já existe foto final
+      const { hasPhoto, error } = await hasFinalPhoto(workOrder.id);
+      
+      if (error) {
+        console.warn('⚠️ Erro ao verificar foto final, continuando normalmente:', error);
+        // Em caso de erro, continuar normalmente para auditoria
+        onFinishService();
+        return;
+      }
+
+      if (hasPhoto && onSkipToPhotoCollection) {
+        console.log('✅ Foto final já existe, pulando direto para coleta de fotos');
+        // Se já tem foto final, pular direto para coleta de fotos
+        onSkipToPhotoCollection();
+      } else {
+        console.log('📱 Sem foto final, indo para auditoria normalmente');
+        // Se não tem foto final, ir para auditoria normalmente
+        onFinishService();
+      }
+    } catch (error) {
+      console.error('💥 Erro inesperado ao verificar foto final:', error);
+      // Em caso de erro, continuar normalmente
+      onFinishService();
+    }
   };
 
   const getCompletionStats = () => {
@@ -336,7 +387,7 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
                                 styles.entryText,
                                 completedSteps.has(entrada.id) && styles.entryTextCompleted
                               ]}>
-                                {entrada.titulo || entrada.valor || 'Item sem título'}
+                                {entrada.valor || 'Item sem título'}
                               </Text>
                               {entrada.foto_base64 && (
                                 <Text style={styles.entryPhotoIndicator}>

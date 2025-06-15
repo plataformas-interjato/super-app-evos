@@ -59,7 +59,6 @@ export const cacheServiceSteps = async (
     // Atualizar timestamp
     await AsyncStorage.setItem(CACHE_KEYS.CACHE_TIMESTAMP, new Date().toISOString());
 
-    console.log(`✅ Etapas do tipo ${tipoOsId} salvas no cache (${steps.length} etapas)`);
     return { success: true, error: null };
   } catch (error) {
     console.error('❌ Erro ao salvar etapas no cache:', error);
@@ -90,7 +89,6 @@ export const cacheServiceEntries = async (
     await AsyncStorage.setItem(CACHE_KEYS.CACHE_TIMESTAMP, new Date().toISOString());
 
     const totalEntries = Object.values(entriesByStep).reduce((sum, entries) => sum + entries.length, 0);
-    console.log(`✅ ${totalEntries} entradas salvas no cache`);
     return { success: true, error: null };
   } catch (error) {
     console.error('❌ Erro ao salvar entradas no cache:', error);
