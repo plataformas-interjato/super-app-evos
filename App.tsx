@@ -306,7 +306,6 @@ function AppContent() {
           <AuditSavingScreen
             workOrder={selectedWorkOrder}
             user={appUser}
-            onTabPress={handleTabPress}
             onFinishSaving={handleFinishAuditSaving}
           />
         ) : null;

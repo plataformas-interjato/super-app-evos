@@ -1,32 +1,63 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RFValue } from 'react-native-responsive-fontsize';
-import BottomNavigation from '../components/BottomNavigation';
 import { User, WorkOrder } from '../types/workOrder';
 
 interface AuditSavingScreenProps {
   workOrder: WorkOrder;
   user: User;
-  onTabPress: (tab: 'home' | 'profile') => void;
   onFinishSaving: () => void;
 }
 
 const AuditSavingScreen: React.FC<AuditSavingScreenProps> = ({
   workOrder,
   user,
-  onTabPress,
   onFinishSaving,
 }) => {
+  const animationValues = useRef([
+    new Animated.Value(0.3),
+    new Animated.Value(0.3),
+    new Animated.Value(0.3),
+    new Animated.Value(0.3),
+    new Animated.Value(0.3),
+  ]).current;
+
   useEffect(() => {
     // Simular processo de salvamento por 3 segundos
     const timer = setTimeout(() => {
       onFinishSaving();
     }, 3000);
+
+    // Iniciar animação dos pontos
+    const startAnimation = () => {
+      const animations = animationValues.map((value, index) => {
+        return Animated.loop(
+          Animated.sequence([
+            Animated.timing(value, {
+              toValue: 1,
+              duration: 600,
+              delay: index * 200,
+              useNativeDriver: true,
+            }),
+            Animated.timing(value, {
+              toValue: 0.3,
+              duration: 600,
+              useNativeDriver: true,
+            }),
+          ])
+        );
+      });
+
+      Animated.stagger(100, animations).start();
+    };
+
+    startAnimation();
 
     return () => clearTimeout(timer);
   }, [onFinishSaving]);
@@ -37,22 +68,28 @@ const AuditSavingScreen: React.FC<AuditSavingScreenProps> = ({
       <View style={styles.content}>
         <Text style={styles.title}>Salvando a auditoria realizada</Text>
         
-        {/* Indicador de progresso com pontos */}
+        {/* Indicador de progresso com pontos animados */}
         <View style={styles.progressContainer}>
-          <View style={[styles.progressDot, styles.activeDot]} />
-          <View style={[styles.progressDot, styles.activeDot]} />
-          <View style={[styles.progressDot, styles.activeDot]} />
-          <View style={[styles.progressDot, styles.activeDot]} />
-          <View style={[styles.progressDot, styles.inactiveDot]} />
+          {animationValues.map((animValue, index) => (
+            <Animated.View
+              key={index}
+              style={[
+                styles.progressDot,
+                {
+                  opacity: animValue,
+                  transform: [
+                    {
+                      scale: animValue.interpolate({
+                        inputRange: [0.3, 1],
+                        outputRange: [0.8, 1.2],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            />
+          ))}
         </View>
-      </View>
-
-      {/* Bottom Navigation */}
-      <View style={styles.bottomNavigationContainer}>
-        <BottomNavigation 
-          activeTab="home" 
-          onTabPress={onTabPress}
-        />
       </View>
     </SafeAreaView>
   );
@@ -80,21 +117,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 12,
   },
   progressDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-  activeDot: {
-    backgroundColor: '#000',
-  },
-  inactiveDot: {
-    backgroundColor: '#d1d5db',
-  },
-  bottomNavigationContainer: {
-    backgroundColor: 'white',
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#3b82f6',
   },
 });
 

@@ -9,6 +9,7 @@ import {
   Image,
   Dimensions,
   Modal,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,7 +17,7 @@ import { RFValue } from 'react-native-responsive-fontsize';
 import * as ImagePicker from 'expo-image-picker';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
-import { ServiceStep, ServiceStepData, getServiceStepsWithDataCached, saveDadosRecord } from '../services/serviceStepsService';
+import { ServiceStep, ServiceStepData, getServiceStepsWithDataCached, saveDadosRecord, saveComentarioEtapa, getComentarioEtapa, getFotosSalvasUsuario } from '../services/serviceStepsService';
 import { hasFinalPhoto } from '../services/auditService';
 
 const { width } = Dimensions.get('window');
@@ -55,6 +56,8 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   const [showModelPhotoModal, setShowModelPhotoModal] = useState(false);
   const [selectedEntryForModel, setSelectedEntryForModel] = useState<PhotoEntry | null>(null);
   const stageScrollViewRef = useRef<ScrollView>(null);
+  const [comentarios, setComentarios] = useState<{ [stepId: number]: string }>({});
+  const [fotosSalvasUsuario, setFotosSalvasUsuario] = useState<{ [entryId: number]: string }>({});
 
   useEffect(() => {
     loadServiceSteps();
@@ -64,6 +67,13 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   useEffect(() => {
     if (steps.length > 0 && stageScrollViewRef.current) {
       centerCurrentStage();
+    }
+  }, [activeStepIndex, steps.length]);
+
+  // Carregar comentário quando a etapa ativa mudar
+  useEffect(() => {
+    if (steps.length > 0 && activeStepIndex < steps.length) {
+      loadComentarioEtapa(activeStepIndex);
     }
   }, [activeStepIndex, steps.length]);
 
@@ -84,6 +94,56 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
           animated: true,
         });
       }, 150);
+    }
+  };
+
+  // Função para carregar comentário de uma etapa
+  const loadComentarioEtapa = async (stepIndex: number) => {
+    if (stepIndex >= 0 && stepIndex < steps.length) {
+      const currentStep = steps[stepIndex];
+      try {
+        const { data: comentario, error } = await getComentarioEtapa(workOrder.id, currentStep.id);
+        if (!error && comentario) {
+          setComentarios(prev => ({
+            ...prev,
+            [currentStep.id]: comentario.comentario
+          }));
+        }
+      } catch (error) {
+        console.error('Erro ao carregar comentário da etapa:', error);
+      }
+    }
+  };
+
+  // Função para salvar comentário da etapa atual
+  const saveCurrentComentario = async () => {
+    if (activeStepIndex >= 0 && activeStepIndex < steps.length) {
+      const currentStep = steps[activeStepIndex];
+      const comentario = comentarios[currentStep.id] || '';
+      
+      if (comentario.trim()) {
+        try {
+          const { error } = await saveComentarioEtapa(workOrder.id, currentStep.id, comentario.trim());
+          if (error) {
+            console.error('Erro ao salvar comentário:', error);
+          } else {
+            console.log('✅ Comentário salvo para etapa:', currentStep.titulo);
+          }
+        } catch (error) {
+          console.error('Erro ao salvar comentário:', error);
+        }
+      }
+    }
+  };
+
+  // Função para atualizar comentário da etapa atual
+  const updateComentario = (text: string) => {
+    if (activeStepIndex >= 0 && activeStepIndex < steps.length) {
+      const currentStep = steps[activeStepIndex];
+      setComentarios(prev => ({
+        ...prev,
+        [currentStep.id]: text
+      }));
     }
   };
 
@@ -155,6 +215,19 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
         
         setPhotoEntries(entries);
         console.log(`📸 ${entries.length} entradas de foto carregadas`);
+        
+        // Carregar fotos já salvas pelo usuário
+        if (entries.length > 0) {
+          const entradaIds = entries.map(entry => entry.id);
+          const { data: fotosSalvas, error: fotosError } = await getFotosSalvasUsuario(workOrder.id, entradaIds);
+          
+          if (!fotosError && fotosSalvas) {
+            setFotosSalvasUsuario(fotosSalvas);
+            console.log(`📸 ${Object.keys(fotosSalvas).length} fotos do usuário carregadas`);
+          } else {
+            console.warn('⚠️ Erro ao carregar fotos salvas do usuário:', fotosError);
+          }
+        }
       } else {
         console.warn('⚠️ Nenhuma etapa encontrada:', error);
         setSteps([]);
@@ -312,6 +385,9 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
 
   // Função de back personalizada que considera a etapa atual
   const handleBackPress = async () => {
+    // Salvar comentário da etapa atual antes de qualquer ação
+    await saveCurrentComentario();
+
     // Se não estiver na primeira etapa, voltar para a etapa anterior
     if (activeStepIndex > 0) {
       console.log(`📱 Voltando da etapa ${activeStepIndex + 1} para etapa ${activeStepIndex}`);
@@ -351,29 +427,27 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
 
   const handleNext = () => {
     if (activeStepIndex < steps.length - 1) {
+      // Salvar comentário da etapa atual antes de avançar
+      saveCurrentComentario();
       setActiveStepIndex(activeStepIndex + 1);
     }
   };
 
   const handlePrevious = () => {
     if (activeStepIndex > 0) {
+      // Salvar comentário da etapa atual antes de voltar
+      saveCurrentComentario();
       setActiveStepIndex(activeStepIndex - 1);
     }
   };
 
   const handleFinish = () => {
+    // Salvar comentário da etapa atual antes de finalizar
+    saveCurrentComentario();
+    
     const totalEntries = photoEntries.length;
     const photosCollected = Object.keys(collectedPhotos).length;
     
-    if (photosCollected === 0) {
-      Alert.alert(
-        'Fotos Obrigatórias',
-        'É necessário tirar pelo menos uma foto para continuar.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
     Alert.alert(
       'Continuar para Finalização',
       `Você coletou ${photosCollected} de ${totalEntries} fotos possíveis.\n\nDeseja continuar para a finalização da ordem de serviço?`,
@@ -388,29 +462,33 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   };
 
   const handleStepPress = (index: number) => {
+    // Salvar comentário da etapa atual antes de trocar
+    saveCurrentComentario();
     setActiveStepIndex(index);
   };
 
   const renderPhotoCard = (entry: PhotoEntry) => {
-    const hasPhoto = collectedPhotos[entry.id];
-    const hasFotoModelo = entry.fotoModelo;
+    const hasPhoto = collectedPhotos[entry.id]; // Foto da sessão atual
+    const hasFotoSalva = fotosSalvasUsuario[entry.id]; // Foto já salva pelo usuário
+    const hasFotoModelo = entry.fotoModelo; // Foto modelo do banco
     
     // Debug log para verificar prioridade das fotos
     console.log(`🔍 Renderizando card para entrada ${entry.id}:`, {
       titulo: entry.titulo,
       hasPhoto: !!hasPhoto,
+      hasFotoSalva: !!hasFotoSalva,
       hasFotoModelo: !!hasFotoModelo,
       photoUri: hasPhoto ? hasPhoto.substring(0, 30) + '...' : 'Nenhuma'
     });
     
-    // Debug log para foto modelo
-    if (hasFotoModelo) {
-      console.log(`📸 Foto modelo para entrada ${entry.id}:`, {
-        titulo: entry.titulo,
-        fotoModeloLength: hasFotoModelo.length,
-        isBase64: !hasFotoModelo.startsWith('http'),
-        preview: hasFotoModelo.substring(0, 50) + '...'
-      });
+    // Definir qual foto exibir (prioridade: sessão atual > salva > modelo)
+    let photoToShow = null;
+    if (hasPhoto) {
+      photoToShow = hasPhoto; // Foto da sessão atual
+    } else if (hasFotoSalva) {
+      photoToShow = hasFotoSalva; // Foto já salva pelo usuário
+    } else if (hasFotoModelo) {
+      photoToShow = formatPhotoUri(hasFotoModelo); // Foto modelo
     }
     
     return (
@@ -420,17 +498,17 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
         <View style={styles.photoContainer}>
           <TouchableOpacity
             style={[
-              styles.photoArea, 
-              hasPhoto && styles.photoAreaWithCapturedImage, // Verde para foto capturada
-              !hasPhoto && hasFotoModelo && styles.photoAreaWithModelImage // Vermelha para foto modelo
+              styles.photoArea,
+              (hasPhoto || hasFotoSalva) && styles.photoAreaWithCapturedImage, // Verde para fotos do usuário
+              !hasPhoto && !hasFotoSalva && hasFotoModelo && styles.photoAreaWithModelImage // Vermelha para foto modelo
             ]}
             onPress={() => {
-              // Se tem foto capturada, sempre abrir câmera para nova captura
+              // Se tem foto da sessão atual, sempre abrir câmera para nova captura
               if (hasPhoto) {
-                console.log(`📷 Foto já capturada - abrindo câmera para nova captura (entrada ${entry.id})`);
+                console.log(`📷 Foto da sessão - abrindo câmera para nova captura (entrada ${entry.id})`);
                 takePhoto(entry.id);
               }
-              // Se tem foto modelo mas não tem foto capturada, abrir modal da foto modelo
+              // Se tem foto salva ou foto modelo, abrir modal da foto modelo (se existir)
               else if (hasFotoModelo) {
                 console.log(`🖼️ Abrindo modal da foto modelo (entrada ${entry.id})`);
                 openModelPhotoModal(entry);
@@ -442,23 +520,9 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
               }
             }}
           >
-            {hasPhoto ? (
-              // PRIORIDADE: Se tem foto capturada, exibe ela
-              <Image source={{ uri: hasPhoto }} style={styles.photoImage} />
-            ) : hasFotoModelo ? (
-              // SEGUNDA OPÇÃO: Se não tem foto capturada mas tem foto modelo, exibe a foto modelo
-              <Image 
-                source={{ uri: formatPhotoUri(hasFotoModelo) }} 
-                style={styles.photoImage}
-                onError={(error) => {
-                  console.error(`❌ Erro ao carregar foto modelo para entrada ${entry.id}:`, error);
-                }}
-                onLoad={() => {
-                  console.log(`✅ Foto modelo carregada para entrada ${entry.id}`);
-                }}
-              />
+            {photoToShow ? (
+              <Image source={{ uri: photoToShow }} style={styles.photoImage} />
             ) : (
-              // TERCEIRA OPÇÃO: Se não tem nenhuma das duas, exibe o ícone da câmera
               <Ionicons name="camera" size={40} color="#000000" />
             )}
           </TouchableOpacity>
@@ -579,17 +643,23 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
         )}
       </ScrollView>
 
+      {/* Campo de Comentário */}
+      <View style={styles.commentContainer}>
+        <Text style={styles.commentLabel}>Deseja falar mais sobre esta etapa?</Text>
+        <TextInput
+          style={styles.commentInput}
+          placeholder="Digite aqui..."
+          placeholderTextColor="#9CA3AF"
+          multiline
+          numberOfLines={3}
+          value={comentarios[steps[activeStepIndex]?.id] || ''}
+          onChangeText={updateComentario}
+          textAlignVertical="top"
+        />
+      </View>
+
       {/* Navigation Buttons */}
       <View style={styles.navigationContainer}>
-        <TouchableOpacity
-          style={[styles.navButton, styles.previousButton]}
-          onPress={handleBackPress}
-        >
-          <Text style={styles.navButtonText}>
-            Voltar
-          </Text>
-        </TouchableOpacity>
-
         {activeStepIndex === steps.length - 1 ? (
           <TouchableOpacity
             style={[styles.navButton, styles.finishButton]}
@@ -605,6 +675,15 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
             <Text style={styles.nextButtonText}>Próximo</Text>
           </TouchableOpacity>
         )}
+
+        <TouchableOpacity
+          style={[styles.navButton, styles.previousButton]}
+          onPress={handleBackPress}
+        >
+          <Text style={styles.previousButtonText}>
+            Voltar
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* Bottom Navigation */}
@@ -700,13 +779,13 @@ const styles = StyleSheet.create({
   },
   navigationIndicators: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     justifyContent: 'center',
     paddingHorizontal: 10,
   },
   leftIndicator: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     justifyContent: 'flex-end',
     paddingRight: 8,
     width: 88, // Largura fixa para sempre reservar espaço (80px + 8px padding)
@@ -718,7 +797,7 @@ const styles = StyleSheet.create({
   },
   rightIndicator: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     justifyContent: 'flex-start',
     paddingLeft: 8,
     width: 88, // Largura fixa para sempre reservar espaço (80px + 8px padding)
@@ -726,27 +805,28 @@ const styles = StyleSheet.create({
   translucentButtonContainer: {
     alignItems: 'center',
     justifyContent: 'center',
+    flex: 1,
   },
   translucentButtonPart: {
     paddingHorizontal: 8,
-    paddingVertical: 8, // Reduzido para acomodar duas linhas
+    paddingVertical: 8,
     borderRadius: 8,
-    backgroundColor: 'rgba(59, 130, 246, 0.3)', // Aumentei a opacidade
+    backgroundColor: 'rgba(59, 130, 246, 0.3)',
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.5)', // Aumentei a opacidade da borda
+    borderColor: 'rgba(59, 130, 246, 0.5)',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 80, // Largura fixa para os pedaços
-    height: 48, // Altura fixa para manter alinhamento
+    width: 80,
+    flex: 1,
     overflow: 'hidden',
-    marginBottom: 4, // Espaço para a linha embaixo
+    marginBottom: 4,
   },
   translucentButtonText: {
     fontSize: RFValue(8),
     fontWeight: '600',
-    color: '#ffffff', // Mudei para branco para contrastar melhor
+    color: '#ffffff',
     textAlign: 'center',
-    lineHeight: 12, // Altura da linha para duas linhas
+    lineHeight: 12,
   },
   content: {
     flex: 1,
@@ -837,7 +917,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   navigationContainer: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     paddingHorizontal: 20,
     paddingVertical: 15,
     backgroundColor: 'white',
@@ -846,25 +926,25 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   navButton: {
-    flex: 1,
-    paddingVertical: 12,
+    width: '100%',
+    paddingVertical: 15,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
   },
   previousButton: {
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#3b82f6',
   },
   nextButton: {
     backgroundColor: '#22c55e',
   },
   finishButton: {
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#22c55e',
   },
-  navButtonText: {
+  previousButtonText: {
     fontSize: RFValue(14),
     fontWeight: '600',
-    color: '#374151',
+    color: 'white',
   },
   nextButtonText: {
     fontSize: RFValue(14),
@@ -984,7 +1064,7 @@ const styles = StyleSheet.create({
   },
   centerStageButton: {
     paddingHorizontal: 20,
-    paddingVertical: 8, // Ajustado para manter altura similar
+    paddingVertical: 8,
     borderRadius: 12,
     backgroundColor: '#3b82f6',
     borderWidth: 2,
@@ -995,10 +1075,10 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
     width: 250,
-    minHeight: 48, // Altura mínima para manter alinhamento
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4, // Espaço para a linha embaixo
+    marginBottom: 4,
   },
   centerStageButtonText: {
     fontSize: RFValue(14),
@@ -1017,6 +1097,7 @@ const styles = StyleSheet.create({
   centerButtonWrapper: {
     alignItems: 'center',
     justifyContent: 'center',
+    minHeight: 56, // Altura mínima para o container inteiro (botão + linha)
   },
   currentIndicatorLine: {
     width: 250,
@@ -1035,6 +1116,26 @@ const styles = StyleSheet.create({
     height: 3,
     backgroundColor: '#e5e7eb',
     borderRadius: 1,
+  },
+  commentContainer: {
+    padding: 20,
+    backgroundColor: 'white',
+  },
+  commentLabel: {
+    fontSize: RFValue(14),
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  commentInput: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 8,
+    padding: 12,
+    minHeight: 80,
+    fontSize: RFValue(14),
+    color: '#374151',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
 });
 

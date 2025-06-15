@@ -37,6 +37,15 @@ export interface DadosRecord {
   dt_edicao?: string;
 }
 
+export interface ComentarioEtapa {
+  id?: number;
+  ordem_servico_id: number;
+  etapa_id: number;
+  comentario: string;
+  created_at?: string;
+  dt_edicao?: string;
+}
+
 /**
  * Busca as etapas de serviço baseado no tipo_os_id
  */
@@ -919,5 +928,156 @@ export const saveDadosRecord = async (
   } catch (error) {
     console.error('💥 Erro inesperado ao salvar dados:', error);
     return { data: null, error: 'Erro inesperado ao salvar dados' };
+  }
+};
+
+/**
+ * Salva comentário de uma etapa na tabela comentario_etapa
+ */
+export const saveComentarioEtapa = async (
+  ordemServicoId: number,
+  etapaId: number,
+  comentario: string
+): Promise<{ data: ComentarioEtapa | null; error: string | null }> => {
+  try {
+    console.log('💬 Salvando comentário da etapa...', {
+      ordemServicoId,
+      etapaId,
+      comentarioLength: comentario.length
+    });
+
+    // Verificar se já existe comentário para esta etapa e OS
+    const { data: existingComment, error: searchError } = await supabase
+      .from('comentario_etapa')
+      .select('*')
+      .eq('ordem_servico_id', ordemServicoId)
+      .eq('etapa_id', etapaId)
+      .single();
+
+    if (searchError && searchError.code !== 'PGRST116') { // PGRST116 = no rows found
+      console.error('❌ Erro ao buscar comentário existente:', searchError);
+      return { data: null, error: searchError.message };
+    }
+
+    if (existingComment) {
+      // Atualizar comentário existente
+      const { data, error } = await supabase
+        .from('comentario_etapa')
+        .update({
+          comentario: comentario,
+          dt_edicao: new Date().toISOString(),
+        })
+        .eq('id', existingComment.id)
+        .select('*')
+        .single();
+
+      if (error) {
+        console.error('❌ Erro ao atualizar comentário da etapa:', error);
+        return { data: null, error: error.message };
+      }
+
+      console.log('✅ Comentário da etapa atualizado com sucesso:', data?.id);
+      return { data, error: null };
+    } else {
+      // Criar novo comentário
+      const { data, error } = await supabase
+        .from('comentario_etapa')
+        .insert({
+          ordem_servico_id: ordemServicoId,
+          etapa_id: etapaId,
+          comentario: comentario,
+          created_at: new Date().toISOString(),
+          dt_edicao: new Date().toISOString(),
+        })
+        .select('*')
+        .single();
+
+      if (error) {
+        console.error('❌ Erro ao salvar comentário da etapa:', error);
+        return { data: null, error: error.message };
+      }
+
+      console.log('✅ Comentário da etapa salvo com sucesso:', data?.id);
+      return { data, error: null };
+    }
+
+  } catch (error) {
+    console.error('💥 Erro inesperado ao salvar comentário da etapa:', error);
+    return { data: null, error: 'Erro inesperado ao salvar comentário da etapa' };
+  }
+};
+
+/**
+ * Busca comentário de uma etapa específica
+ */
+export const getComentarioEtapa = async (
+  ordemServicoId: number,
+  etapaId: number
+): Promise<{ data: ComentarioEtapa | null; error: string | null }> => {
+  try {
+    const { data, error } = await supabase
+      .from('comentario_etapa')
+      .select('*')
+      .eq('ordem_servico_id', ordemServicoId)
+      .eq('etapa_id', etapaId)
+      .single();
+
+    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows found
+      console.error('❌ Erro ao buscar comentário da etapa:', error);
+      return { data: null, error: error.message };
+    }
+
+    return { data: data || null, error: null };
+  } catch (error) {
+    console.error('💥 Erro inesperado ao buscar comentário da etapa:', error);
+    return { data: null, error: 'Erro inesperado ao buscar comentário da etapa' };
+  }
+};
+
+/**
+ * Busca fotos já salvas pelo usuário na tabela dados
+ */
+export const getFotosSalvasUsuario = async (
+  ordemServicoId: number,
+  entradaDadosIds: number[]
+): Promise<{ data: { [entradaId: number]: string } | null; error: string | null }> => {
+  try {
+    if (!entradaDadosIds || entradaDadosIds.length === 0) {
+      return { data: {}, error: null };
+    }
+
+    const { data, error } = await supabase
+      .from('dados')
+      .select('entrada_dados_id, valor')
+      .eq('ordem_servico_id', ordemServicoId)
+      .in('entrada_dados_id', entradaDadosIds)
+      .eq('ativo', 1)
+      .order('created_at', { ascending: false }); // Mais recente primeiro
+
+    if (error) {
+      console.error('❌ Erro ao buscar fotos salvas do usuário:', error);
+      return { data: null, error: error.message };
+    }
+
+    // Organizar por entrada_dados_id (se houver múltiplas fotos, pega a mais recente)
+    const fotosPorEntrada: { [entradaId: number]: string } = {};
+    
+    data?.forEach(registro => {
+      if (!fotosPorEntrada[registro.entrada_dados_id] && registro.valor) {
+        // Formatar foto para exibição (adicionar prefixo se necessário)
+        const fotoFormatada = registro.valor.startsWith('data:image/') 
+          ? registro.valor 
+          : `data:image/jpeg;base64,${registro.valor}`;
+        
+        fotosPorEntrada[registro.entrada_dados_id] = fotoFormatada;
+      }
+    });
+
+    console.log(`📸 ${Object.keys(fotosPorEntrada).length} fotos do usuário carregadas`);
+    return { data: fotosPorEntrada, error: null };
+
+  } catch (error) {
+    console.error('💥 Erro inesperado ao buscar fotos salvas do usuário:', error);
+    return { data: null, error: 'Erro inesperado ao buscar fotos salvas do usuário' };
   }
 }; 
