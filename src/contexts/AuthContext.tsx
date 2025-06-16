@@ -3,6 +3,13 @@ import { Session, User as SupabaseUser } from '@supabase/supabase-js';
 import { supabase } from '../services/supabase';
 import { AuthContextType } from '../types/auth';
 import { User } from '../types/workOrder';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { 
+  performInitialDataLoad, 
+  isInitialSyncCompleted,
+  InitialLoadProgress,
+  clearInitialCache
+} from '../services/initialDataService';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -19,6 +26,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null);
   const [appUser, setAppUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(false);
+  const [initialProgress, setInitialProgress] = useState<InitialLoadProgress>({
+    current: 0,
+    total: 9,
+    currentTable: '',
+    completed: false
+  });
 
   // Função para mapear usuário do Supabase para usuário do app
   const mapSupabaseUserToAppUser = async (supabaseUser: SupabaseUser): Promise<User | null> => {
@@ -68,6 +82,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  /**
+   * Executa carga inicial de dados se necessário
+   */
+  const performInitialLoadIfNeeded = async (userId: string): Promise<void> => {
+    try {
+      // Verificar se já foi executada
+      const isCompleted = await isInitialSyncCompleted(userId);
+      
+      if (isCompleted) {
+        console.log('✅ Carga inicial já executada para este usuário');
+        return;
+      }
+
+      console.log('🚀 Iniciando carga inicial de dados...');
+      setInitialLoading(true);
+
+      // Executar carga inicial com callback de progresso
+      const result = await performInitialDataLoad(userId, (progress) => {
+        setInitialProgress(progress);
+      });
+
+      if (result.success && result.stats) {
+        console.log('🎉 Carga inicial concluída:', result.stats);
+      } else {
+        console.error('❌ Erro na carga inicial:', result.error);
+        // Em caso de erro, não bloquear o acesso
+      }
+
+    } catch (error) {
+      console.error('💥 Erro inesperado na carga inicial:', error);
+      // Em caso de erro, não bloquear o acesso
+    } finally {
+      // Aguardar um pouco para mostrar a mensagem de sucesso
+      setTimeout(() => {
+        setInitialLoading(false);
+        setInitialProgress({
+          current: 0,
+          total: 9,
+          currentTable: '',
+          completed: false
+        });
+      }, 2500);
+    }
+  };
+
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(async ({ data: { session } }) => {
@@ -77,6 +136,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (session?.user) {
         const mappedUser = await mapSupabaseUserToAppUser(session.user);
         setAppUser(mappedUser);
+        
+        // Executar carga inicial se necessário (apenas para técnicos)
+        if (mappedUser && mappedUser.userType === 'tecnico') {
+          await performInitialLoadIfNeeded(mappedUser.id);
+        }
       }
       
       setLoading(false);
@@ -92,8 +156,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (session?.user) {
         const mappedUser = await mapSupabaseUserToAppUser(session.user);
         setAppUser(mappedUser);
+        
+        // Executar carga inicial se necessário (apenas para técnicos)
+        if (mappedUser && mappedUser.userType === 'tecnico') {
+          await performInitialLoadIfNeeded(mappedUser.id);
+        }
       } else {
         setAppUser(null);
+        // Limpar dados de carga inicial no logout
+        setInitialLoading(false);
+        setInitialProgress({
+          current: 0,
+          total: 9,
+          currentTable: '',
+          completed: false
+        });
       }
       
       setLoading(false);
@@ -124,8 +201,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signOut = async () => {
     setLoading(true);
+    
+    // Limpar cache da carga inicial no logout
+    if (appUser) {
+      await clearInitialCache(appUser.id);
+    }
+    
     await supabase.auth.signOut();
     setAppUser(null);
+    setInitialLoading(false);
+    setInitialProgress({
+      current: 0,
+      total: 9,
+      currentTable: '',
+      completed: false
+    });
     setLoading(false);
   };
 
@@ -134,6 +224,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     session,
     appUser,
     loading,
+    initialLoading,
+    initialProgress,
     signIn,
     signOut,
   };

@@ -296,7 +296,6 @@ export const getWorkOrdersWithCache = async (
             .then(async (serverResult) => {
               if (serverResult.data && !serverResult.error) {
                 await cacheWorkOrders(serverResult.data, userId);
-                console.log('🔄 Cache atualizado em background com dados do servidor');
               }
             })
             .catch((error) => {
@@ -326,7 +325,6 @@ export const getWorkOrdersWithCache = async (
       
       // Aplicar filtros nos dados do servidor
       const filteredData = filterCachedWorkOrders(serverResult.data, status, search);
-      console.log(`✅ ${filteredData.length} ordens de serviço filtradas do servidor (total: ${serverResult.data.length})`);
       return { data: filteredData, error: null, fromCache: false };
     }
 
@@ -435,6 +433,21 @@ export const getWorkOrdersCacheStats = async (userId?: string): Promise<{
     const now = new Date();
     const ageHours = (now.getTime() - cacheTime.getTime()) / (1000 * 60 * 60);
 
+    // Verificar se workOrders existe e é um array
+    if (!parsed.workOrders || !Array.isArray(parsed.workOrders)) {
+      console.log('⚠️ Cache mal formado - workOrders não é um array válido');
+      return {
+        hasCache: false,
+        cacheAge: 0,
+        itemCount: 0,
+        completedCount: 0,
+        activeCount: 0,
+        lastUpdate: null,
+        lastCleanup,
+        nextCleanupDue: true,
+      };
+    }
+
     // Contar OS por status
     const completedCount = parsed.workOrders.filter(wo => 
       wo.status === 'finalizada' || wo.status === 'cancelada'
@@ -490,6 +503,12 @@ export const updateWorkOrderInCache = async (
     }
 
     const parsed: CachedWorkOrders = JSON.parse(cachedData);
+    
+    // Verificar se workOrders existe e é um array
+    if (!parsed.workOrders || !Array.isArray(parsed.workOrders)) {
+      console.log('⚠️ Cache mal formado - workOrders não é um array válido');
+      return;
+    }
     
     // Converter datas de string para Date
     const workOrders = parsed.workOrders.map(wo => ({
@@ -582,20 +601,25 @@ export const updateCacheAfterOSFinalizada = async (
       try {
         const parsed: CachedWorkOrders = JSON.parse(cachedData);
         
-        // Converter datas e filtrar OS em andamento (exceto a que foi finalizada)
-        osEmAndamento = parsed.workOrders
-          .map(wo => ({
-            ...wo,
-            scheduling_date: new Date(wo.scheduling_date),
-            createdAt: new Date(wo.createdAt),
-            updatedAt: new Date(wo.updatedAt),
-          }))
-          .filter(wo => 
-            wo.status === 'em_progresso' && 
-            wo.id !== finalizadaWorkOrderId
-          );
-        
-        console.log(`📱 Preservando ${osEmAndamento.length} OS em andamento no cache`);
+        // Verificar se workOrders existe e é um array
+        if (parsed.workOrders && Array.isArray(parsed.workOrders)) {
+          // Converter datas e filtrar OS em andamento (exceto a que foi finalizada)
+          osEmAndamento = parsed.workOrders
+            .map(wo => ({
+              ...wo,
+              scheduling_date: new Date(wo.scheduling_date),
+              createdAt: new Date(wo.createdAt),
+              updatedAt: new Date(wo.updatedAt),
+            }))
+            .filter(wo => 
+              wo.status === 'em_progresso' && 
+              wo.id !== finalizadaWorkOrderId
+            );
+          
+          console.log(`📱 Preservando ${osEmAndamento.length} OS em andamento no cache`);
+        } else {
+          console.log('⚠️ Cache mal formado - workOrders não é um array válido');
+        }
       } catch (parseError) {
         console.error('❌ Erro ao parsear cache atual:', parseError);
       }

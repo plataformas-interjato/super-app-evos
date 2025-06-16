@@ -1,10 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ServiceStep, ServiceStepData } from './serviceStepsService';
+import { WorkOrder } from '../types/workOrder';
 
 const CACHE_KEYS = {
   SERVICE_STEPS: 'cached_service_steps',
   SERVICE_ENTRIES: 'cached_service_entries',
   CACHE_TIMESTAMP: 'cache_timestamp',
+  WORK_ORDERS_CACHE: 'cached_work_orders',
+  PRELOAD_STATUS: 'preload_status',
 };
 
 const CACHE_EXPIRY_HOURS = 24; // Cache válido por 24 horas
@@ -15,6 +18,13 @@ export interface CachedServiceSteps {
 
 export interface CachedServiceEntries {
   [etapaId: number]: ServiceStepData[];
+}
+
+export interface PreloadStatus {
+  lastPreload: string;
+  workOrderIds: number[];
+  success: boolean;
+  errors: string[];
 }
 
 /**
@@ -97,19 +107,14 @@ export const cacheServiceEntries = async (
 };
 
 /**
- * Busca etapas do cache local
+ * Busca etapas do cache local - VERSÃO OFFLINE (sem verificação de validade)
  */
 export const getCachedServiceSteps = async (
   tipoOsId: number
 ): Promise<{ data: ServiceStep[] | null; error: string | null; fromCache: boolean }> => {
   try {
-    // Verificar se cache é válido
-    const isValid = await isCacheValid();
-    if (!isValid) {
-      console.log('⏰ Cache expirado ou inválido');
-      return { data: null, error: 'Cache expirado', fromCache: false };
-    }
-
+    console.log(`🔍 Buscando etapas no cache para tipo ${tipoOsId}...`);
+    
     const cacheStr = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_STEPS);
     if (!cacheStr) {
       console.log('📭 Nenhum cache de etapas encontrado');
@@ -124,7 +129,7 @@ export const getCachedServiceSteps = async (
       return { data: null, error: 'Etapas não encontradas no cache', fromCache: false };
     }
 
-    console.log(`📱 ${steps.length} etapas carregadas do cache para tipo ${tipoOsId}`);
+    console.log(`📱 ${steps.length} etapas encontradas no cache para tipo ${tipoOsId}`);
     return { data: steps, error: null, fromCache: true };
   } catch (error) {
     console.error('❌ Erro ao buscar etapas do cache:', error);
@@ -133,19 +138,14 @@ export const getCachedServiceSteps = async (
 };
 
 /**
- * Busca entradas do cache local
+ * Busca entradas do cache local - VERSÃO OFFLINE (sem verificação de validade)
  */
 export const getCachedServiceEntries = async (
   etapaIds: number[]
 ): Promise<{ data: CachedServiceEntries | null; error: string | null; fromCache: boolean }> => {
   try {
-    // Verificar se cache é válido
-    const isValid = await isCacheValid();
-    if (!isValid) {
-      console.log('⏰ Cache de entradas expirado ou inválido');
-      return { data: null, error: 'Cache expirado', fromCache: false };
-    }
-
+    console.log(`🔍 Buscando entradas no cache para ${etapaIds.length} etapas...`);
+    
     const cacheStr = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_ENTRIES);
     if (!cacheStr) {
       console.log('📭 Nenhum cache de entradas encontrado');
@@ -165,7 +165,7 @@ export const getCachedServiceEntries = async (
       }
     });
 
-    console.log(`📱 ${totalEntries} entradas carregadas do cache para ${etapaIds.length} etapas`);
+    console.log(`📱 ${totalEntries} entradas encontradas no cache para ${etapaIds.length} etapas`);
     return { data: filteredEntries, error: null, fromCache: true };
   } catch (error) {
     console.error('❌ Erro ao buscar entradas do cache:', error);
@@ -261,5 +261,234 @@ export const getCacheInfo = async (): Promise<{
   } catch (error) {
     console.error('❌ Erro ao obter informações do cache:', error);
     return { isValid: false, timestamp: null, stepsCount: 0, entriesCount: 0 };
+  }
+};
+
+/**
+ * Pré-carrega TODAS as informações necessárias para as OSs trabalharem offline
+ */
+export const preloadAllWorkOrdersData = async (workOrders: WorkOrder[]): Promise<{
+  success: boolean;
+  cached: number;
+  errors: string[];
+}> => {
+  const errors: string[] = [];
+  let cached = 0;
+
+  try {
+    // Agrupar por tipo_os_id para otimizar
+    const tiposOsIds = [...new Set(workOrders.map(wo => wo.tipo_os_id))];
+
+    // Carregar dados para cada tipo de OS
+    for (const tipoOsId of tiposOsIds) {
+      try {
+        // Importar a função dinamicamente
+        const { getServiceStepsWithDataCached } = await import('./serviceStepsService');
+        
+        // Carregar etapas com dados (usando ordemServicoId = 0 para pré-carregamento)
+        const result = await getServiceStepsWithDataCached(tipoOsId, 0);
+        
+        if (result.data && result.data.length > 0) {
+          cached++;
+        }
+      } catch (stepError) {
+        const errorMsg = `Erro ao carregar tipo OS ${tipoOsId}: ${stepError}`;
+        errors.push(errorMsg);
+      }
+    }
+
+    return {
+      success: errors.length === 0,
+      cached,
+      errors
+    };
+  } catch (error) {
+    const errorMsg = `Erro geral no pré-carregamento: ${error}`;
+    errors.push(errorMsg);
+    return {
+      success: false,
+      cached,
+      errors
+    };
+  }
+};
+
+/**
+ * Verifica se o pré-carregamento é necessário
+ */
+export const shouldPreload = async (currentWorkOrders: WorkOrder[]): Promise<boolean> => {
+  try {
+    const preloadStatusStr = await AsyncStorage.getItem(CACHE_KEYS.PRELOAD_STATUS);
+    
+    if (!preloadStatusStr) {
+      console.log('📱 Nenhum pré-carregamento anterior encontrado');
+      return true;
+    }
+
+    const preloadStatus: PreloadStatus = JSON.parse(preloadStatusStr);
+    
+    // Verificar se o cache expirou
+    const isValid = await isCacheValid();
+    if (!isValid) {
+      console.log('⏰ Cache expirado, pré-carregamento necessário');
+      return true;
+    }
+
+    // Verificar se há novas OSs
+    const currentIds = currentWorkOrders.map(wo => wo.id).sort();
+    const cachedIds = preloadStatus.workOrderIds.sort();
+    
+    const hasNewWorkOrders = !arraysEqual(currentIds, cachedIds);
+    
+    if (hasNewWorkOrders) {
+      console.log('🆕 Novas OSs detectadas, pré-carregamento necessário');
+      return true;
+    }
+
+    // Verificar se o último pré-carregamento teve sucesso
+    if (!preloadStatus.success) {
+      console.log('❌ Último pré-carregamento teve falhas, tentando novamente');
+      return true;
+    }
+
+    console.log('✅ Pré-carregamento ainda válido');
+    return false;
+
+  } catch (error) {
+    console.error('💥 Erro ao verificar necessidade de pré-carregamento:', error);
+    return true; // Em caso de erro, sempre pré-carregar
+  }
+};
+
+/**
+ * Obtém OSs do cache local
+ */
+export const getCachedWorkOrders = async (): Promise<WorkOrder[] | null> => {
+  try {
+    const cachedStr = await AsyncStorage.getItem(CACHE_KEYS.WORK_ORDERS_CACHE);
+    
+    if (!cachedStr) {
+      return null;
+    }
+
+    const workOrders: WorkOrder[] = JSON.parse(cachedStr);
+    console.log(`📱 ${workOrders.length} OSs carregadas do cache`);
+    
+    return workOrders;
+  } catch (error) {
+    console.error('❌ Erro ao carregar OSs do cache:', error);
+    return null;
+  }
+};
+
+/**
+ * Obtém status do pré-carregamento
+ */
+export const getPreloadStatus = async (): Promise<PreloadStatus | null> => {
+  try {
+    const statusStr = await AsyncStorage.getItem(CACHE_KEYS.PRELOAD_STATUS);
+    
+    if (!statusStr) {
+      return null;
+    }
+
+    return JSON.parse(statusStr);
+  } catch (error) {
+    console.error('❌ Erro ao obter status do pré-carregamento:', error);
+    return null;
+  }
+};
+
+/**
+ * Força limpeza completa do cache
+ */
+export const clearAllCache = async (): Promise<void> => {
+  try {
+    await Promise.all([
+      AsyncStorage.removeItem(CACHE_KEYS.SERVICE_STEPS),
+      AsyncStorage.removeItem(CACHE_KEYS.SERVICE_ENTRIES),
+      AsyncStorage.removeItem(CACHE_KEYS.CACHE_TIMESTAMP),
+      AsyncStorage.removeItem(CACHE_KEYS.WORK_ORDERS_CACHE),
+      AsyncStorage.removeItem(CACHE_KEYS.PRELOAD_STATUS),
+    ]);
+    
+    console.log('🧹 Cache completo limpo');
+  } catch (error) {
+    console.error('❌ Erro ao limpar cache:', error);
+  }
+};
+
+// Função auxiliar para comparar arrays
+const arraysEqual = (a: number[], b: number[]): boolean => {
+  if (a.length !== b.length) return false;
+  return a.every((val, index) => val === b[index]);
+};
+
+/**
+ * Lista todos os dados do cache para debug
+ */
+export const debugCacheContents = async (): Promise<void> => {
+  try {
+    console.log('🔍 === DEBUG DO CACHE ===');
+    
+    // 1. Verificar cache de etapas
+    const stepsCache = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_STEPS);
+    if (stepsCache) {
+      const steps: CachedServiceSteps = JSON.parse(stepsCache);
+      console.log('📋 ETAPAS NO CACHE:');
+      Object.keys(steps).forEach(tipoOsId => {
+        console.log(`  - Tipo OS ${tipoOsId}: ${steps[parseInt(tipoOsId)].length} etapas`);
+        steps[parseInt(tipoOsId)].forEach((step, index) => {
+          console.log(`    ${index + 1}. ${step.titulo} (ID: ${step.id})`);
+        });
+      });
+    } else {
+      console.log('❌ Nenhum cache de etapas encontrado');
+    }
+    
+    // 2. Verificar cache de entradas
+    const entriesCache = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_ENTRIES);
+    if (entriesCache) {
+      const entries: CachedServiceEntries = JSON.parse(entriesCache);
+      console.log('📝 ENTRADAS NO CACHE:');
+      Object.keys(entries).forEach(etapaId => {
+        console.log(`  - Etapa ${etapaId}: ${entries[parseInt(etapaId)].length} entradas`);
+      });
+    } else {
+      console.log('❌ Nenhum cache de entradas encontrado');
+    }
+    
+    // 3. Verificar timestamp
+    const timestamp = await AsyncStorage.getItem(CACHE_KEYS.CACHE_TIMESTAMP);
+    if (timestamp) {
+      const date = new Date(timestamp);
+      const now = new Date();
+      const diffHours = (now.getTime() - date.getTime()) / (1000 * 60 * 60);
+      console.log(`⏰ Cache criado em: ${date.toLocaleString()}`);
+      console.log(`⏰ Idade do cache: ${diffHours.toFixed(1)} horas`);
+      console.log(`⏰ Cache válido: ${diffHours < CACHE_EXPIRY_HOURS ? 'SIM' : 'NÃO'}`);
+    } else {
+      console.log('❌ Nenhum timestamp de cache encontrado');
+    }
+    
+    // 4. Verificar status de pré-carregamento
+    const preloadStatus = await AsyncStorage.getItem(CACHE_KEYS.PRELOAD_STATUS);
+    if (preloadStatus) {
+      const status: PreloadStatus = JSON.parse(preloadStatus);
+      console.log('🚀 STATUS DO PRÉ-CARREGAMENTO:');
+      console.log(`  - Último pré-carregamento: ${new Date(status.lastPreload).toLocaleString()}`);
+      console.log(`  - Sucesso: ${status.success ? 'SIM' : 'NÃO'}`);
+      console.log(`  - OSs incluídas: ${status.workOrderIds.length}`);
+      console.log(`  - Erros: ${status.errors.length}`);
+      if (status.errors.length > 0) {
+        status.errors.forEach(error => console.log(`    - ${error}`));
+      }
+    } else {
+      console.log('❌ Nenhum status de pré-carregamento encontrado');
+    }
+    
+    console.log('🔍 === FIM DEBUG DO CACHE ===');
+  } catch (error) {
+    console.error('💥 Erro ao fazer debug do cache:', error);
   }
 }; 

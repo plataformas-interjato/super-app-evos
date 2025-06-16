@@ -27,6 +27,7 @@ import { getLocalWorkOrderStatuses, cleanSyncedLocalStatuses } from '../services
 import { preloadAndCacheAllServiceSteps } from '../services/serviceStepsService';
 import { getWorkOrdersWithCache, getWorkOrdersCacheStats, updateCacheAfterOSFinalizada } from '../services/workOrderCacheService';
 import { registerSyncCallback, registerOSFinalizadaCallback } from '../services/offlineService';
+import { preloadAllWorkOrdersData, shouldPreload, getCachedWorkOrders, getPreloadStatus } from '../services/cacheService';
 
 interface MainScreenProps {
   user: User;
@@ -46,6 +47,13 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
   const [error, setError] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
+  const [isPreloading, setIsPreloading] = useState(false);
+  const [preloadStatus, setPreloadStatus] = useState<string>('');
+
+  // Flags de controle para prevenir loops infinitos
+  const [isLoadingWorkOrders, setIsLoadingWorkOrders] = useState(false);
+  const [lastRefreshTrigger, setLastRefreshTrigger] = useState<number>(0);
+  const [lastFilterKey, setLastFilterKey] = useState<string>('');
 
   const { appUser } = useAuth();
 
@@ -70,8 +78,14 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
       if (result.synced > 0) {
         console.log(`🔄 ${result.synced} ações sincronizadas - atualizando dados`);
         
-        // Forçar atualização do servidor para pegar dados frescos
+        // Usar debounce para evitar múltiplas atualizações simultâneas
         setTimeout(async () => {
+          // Verificar se ainda não está carregando para evitar conflitos
+          if (isLoadingWorkOrders) {
+            console.log('⚠️ loadWorkOrders em execução, pulando atualização pós-sync');
+            return;
+          }
+          
           const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
           
           try {
@@ -82,13 +96,13 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
             );
             
             if (!fetchError && freshData) {
-              const mergedWorkOrders = await mergeWithLocalStatus(freshData);
+              const mergedWorkOrders = await mergeLocalStatus(freshData);
               setWorkOrders(mergedWorkOrders);
             }
           } catch (error) {
             console.error('❌ Erro ao atualizar dados após sincronização:', error);
           }
-        }, 1000);
+        }, 2000); // Aumentado de 1000ms para 2000ms
       }
     });
     
@@ -170,23 +184,36 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     };
   }, [appUser, isConnected]);
 
-  // Recarregar quando filtros mudarem
+  // Recarregar quando filtros mudarem - COM PROTEÇÃO CONTRA LOOPS
   useEffect(() => {
-    if (!loading) {
+    const newFilterKey = `${activeFilter}_${searchText}`;
+    
+    // Proteção contra loop: só recarregar se a chave de filtro realmente mudou
+    if (!loading && !isLoadingWorkOrders && newFilterKey !== lastFilterKey) {
+      console.log('🔄 Filtros mudaram:', { activeFilter, searchText, oldKey: lastFilterKey, newKey: newFilterKey });
+      setLastFilterKey(newFilterKey);
       loadWorkOrders();
     }
-  }, [activeFilter, searchText]);
+  }, [activeFilter, searchText, loading, isLoadingWorkOrders, lastFilterKey]);
 
-  // Recarregar quando refreshTrigger mudar (forçado pelo App)
+  // Recarregar quando refreshTrigger mudar (forçado pelo App) - COM PROTEÇÃO CONTRA LOOPS
   useEffect(() => {
-    if (refreshTrigger && refreshTrigger > 0) {
-      console.log('🔄 Refresh forçado da MainScreen, recarregando OSs...');
+    if (refreshTrigger && refreshTrigger > 0 && refreshTrigger !== lastRefreshTrigger && !isLoadingWorkOrders) {
+      console.log('🔄 Refresh forçado da MainScreen, recarregando OSs...', { refreshTrigger, lastRefreshTrigger });
+      setLastRefreshTrigger(refreshTrigger);
       loadWorkOrders();
     }
-  }, [refreshTrigger]);
+  }, [refreshTrigger, lastRefreshTrigger, isLoadingWorkOrders]);
 
   const loadWorkOrders = async () => {
+    // Proteção contra execuções simultâneas
+    if (isLoadingWorkOrders) {
+      console.log('⚠️ loadWorkOrders já em execução, ignorando nova chamada');
+      return;
+    }
+
     try {
+      setIsLoadingWorkOrders(true);
       setError(null);
       
       // Verificação de segurança: se não há usuário, não carregar
@@ -229,18 +256,19 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
       } else {
         console.log(`✅ ${data?.length || 0} ordens de serviço carregadas ${fromCache ? 'do cache' : 'do servidor'}`);
         
-        // Log para verificar as datas de agendamento
-        data?.forEach(workOrder => {
-          console.log(`OS #${workOrder.id} - Data agendamento:`, new Date(workOrder.scheduling_date).toLocaleDateString());
-        });
-        
         // Mesclar com status locais (importante para refletir mudanças offline)
-        const mergedWorkOrders = await mergeWithLocalStatus(data || []);
+        const mergedWorkOrders = await mergeLocalStatus(data || []);
         setWorkOrders(mergedWorkOrders);
         
         // Mostrar indicador se dados vieram do cache
         if (fromCache) {
           console.log(`📱 Dados carregados do cache ${netInfo.isConnected ? 'online' : 'offline'}`);
+        }
+        
+        // 🚀 NOVO: Pré-carregar todas as informações das OSs automaticamente
+        if (data && data.length > 0) {
+          console.log('🚀 Iniciando pré-carregamento automático das OSs...');
+          preloadWorkOrdersData(data, fromCache);
         }
       }
     } catch (err) {
@@ -250,6 +278,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
       setWorkOrders([]);
     } finally {
       setLoading(false);
+      setIsLoadingWorkOrders(false);
     }
   };
 
@@ -470,38 +499,36 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
   };
 
   // Função para mesclar status locais com dados das OSs
-  const mergeWithLocalStatus = async (workOrders: WorkOrder[]): Promise<WorkOrder[]> => {
+  const mergeLocalStatus = async (workOrders: WorkOrder[]): Promise<WorkOrder[]> => {
     try {
-      console.log(`🔄 Mesclando status locais com ${workOrders.length} ordens de serviço...`);
-      
-      const localStatuses = await getLocalWorkOrderStatuses();
-      const localStatusCount = Object.keys(localStatuses).length;
-      console.log('📱 Status locais encontrados:', localStatusCount);
-      
-      if (localStatusCount > 0) {
-        console.log('📱 Status locais detalhados:', localStatuses);
+      // Buscar todos os status locais
+      const allLocalStatus = await getLocalWorkOrderStatuses();
+      const localStatusCount = Object.keys(allLocalStatus).length;
+
+      if (localStatusCount === 0) {
+        setWorkOrders(workOrders);
+        return workOrders;
       }
-      
-      const mergedWorkOrders = workOrders.map(workOrder => {
-        const localStatus = localStatuses[workOrder.id.toString()];
+
+      // Aplicar status locais às ordens de serviço
+      let localStatusApplied = 0;
+      const workOrdersWithLocalStatus = workOrders.map(workOrder => {
+        const localStatus = allLocalStatus[workOrder.id.toString()];
         
         if (localStatus && !localStatus.synced) {
-          // Se há status local não sincronizado, usar ele
-          console.log(`📱 Aplicando status local para OS ${workOrder.id}: ${workOrder.status} → ${localStatus.status}`);
+          localStatusApplied++;
           return {
             ...workOrder,
-            status: localStatus.status as any, // Cast para o tipo correto
-            isLocalStatus: true, // Adicionar flag para indicar status local
+            status: localStatus.status as any,
           };
         }
         
         return workOrder;
       });
+
+      setWorkOrders(workOrdersWithLocalStatus);
       
-      const localStatusApplied = mergedWorkOrders.filter(wo => (wo as any).isLocalStatus).length;
-      console.log(`✅ ${localStatusApplied} status locais aplicados de ${workOrders.length} ordens`);
-      
-      return mergedWorkOrders;
+      return workOrdersWithLocalStatus;
     } catch (error) {
       console.error('❌ Erro ao mesclar status locais:', error);
       return workOrders;
@@ -516,43 +543,107 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
   // Função para pré-carregar etapas em background
   const preloadServiceSteps = async () => {
     try {
-      const result = await preloadAndCacheAllServiceSteps();
-      
-      if (result.success) {
-        console.log(`✅ ${result.cached} tipos de OS pré-carregados`);
-      }
+      await preloadAndCacheAllServiceSteps();
     } catch (error) {
-      console.error('💥 Erro no pré-carregamento de etapas:', error);
+      console.error('❌ Erro no pré-carregamento de etapas:', error);
     }
   };
 
   // Função para mostrar estatísticas do cache (debug)
   const showCacheStats = async () => {
-    try {
-      const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
-      const stats = await getWorkOrdersCacheStats(userId);
-      
-      // Log removido para reduzir verbosidade
-    } catch (error) {
-      console.error('❌ Erro ao obter estatísticas do cache:', error);
-    }
+    const stats = await getWorkOrdersCacheStats();
+    Alert.alert(
+      'Cache Stats',
+      `Cached OSs: ${stats.itemCount}\nLast Update: ${stats.lastUpdate || 'Never'}\nHas Cache: ${stats.hasCache ? 'Yes' : 'No'}\nCache Age: ${stats.cacheAge}h`,
+      [{ text: 'OK' }]
+    );
   };
 
   // Pré-carregamento inicial quando online
   const preloadAllData = async () => {
     try {
+      // Verificar se há conexão
       const netInfo = await NetInfo.fetch();
-      if (netInfo.isConnected) {
-        // Pré-carregar etapas
-        await preloadServiceSteps();
-        
-        // Mostrar estatísticas do cache
-        await showCacheStats();
-      } else {
-        await showCacheStats(); // Mostrar stats mesmo offline
+      if (!netInfo.isConnected) {
+        return;
       }
+      
+      // Aguardar um pouco para não atrapalhar o carregamento principal
+      setTimeout(async () => {
+        await preloadServiceSteps();
+      }, 2000);
     } catch (error) {
-      console.error('💥 Erro no pré-carregamento:', error);
+      console.error('❌ Erro no pré-carregamento:', error);
+    }
+  };
+
+  // 🆕 NOVA FUNÇÃO: Pré-carrega dados específicos das OSs
+  const preloadWorkOrdersData = async (workOrders: WorkOrder[], wasFromCache: boolean = false) => {
+    try {
+      // Verificar se o pré-carregamento é necessário
+      const needsPreload = await shouldPreload(workOrders);
+      
+      if (!needsPreload && !wasFromCache) {
+        return;
+      }
+      
+      // Verificar conexão
+      const netInfo = await NetInfo.fetch();
+      if (!netInfo.isConnected) {
+        return;
+      }
+      
+      // Mostrar status na UI
+      setIsPreloading(true);
+      setPreloadStatus('Preparando dados offline...');
+      
+      // Executar pré-carregamento em background (não bloquear UI)
+      setTimeout(async () => {
+        try {
+          const startTime = Date.now();
+          
+          setPreloadStatus('Carregando etapas e fotos modelo...');
+          const { success, cached, errors } = await preloadAllWorkOrdersData(workOrders);
+          
+          const duration = Date.now() - startTime;
+          
+          if (success) {
+            // Mostrar sucesso na UI
+            setPreloadStatus(`✅ ${cached} tipos de OS preparados para uso offline`);
+            
+            // Esconder após 3 segundos
+            setTimeout(() => {
+              setIsPreloading(false);
+              setPreloadStatus('');
+            }, 3000);
+          } else {
+            // Mostrar status parcial na UI
+            setPreloadStatus(`⚠️ ${cached} de ${cached + errors.length} tipos preparados`);
+            
+            // Esconder após 4 segundos
+            setTimeout(() => {
+              setIsPreloading(false);
+              setPreloadStatus('');
+            }, 4000);
+          }
+        } catch (preloadError) {
+          console.error('💥 Erro no pré-carregamento em background:', preloadError);
+          
+          // Mostrar erro na UI
+          setPreloadStatus('❌ Erro no pré-carregamento');
+          
+          // Esconder após 3 segundos
+          setTimeout(() => {
+            setIsPreloading(false);
+            setPreloadStatus('');
+          }, 3000);
+        }
+      }, 1000); // Aguardar 1 segundo para não impactar a UI
+      
+    } catch (error) {
+      console.error('💥 Erro na função preloadWorkOrdersData:', error);
+      setIsPreloading(false);
+      setPreloadStatus('');
     }
   };
 
@@ -733,6 +824,16 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
             </TouchableOpacity>
           ))}
         </View>
+        
+        {/* Indicador de Pré-carregamento */}
+        {isPreloading && (
+          <View style={styles.preloadIndicator}>
+            <View style={styles.preloadContent}>
+              <Ionicons name="cloud-download-outline" size={16} color="#3b82f6" />
+              <Text style={styles.preloadText}>{preloadStatus}</Text>
+            </View>
+          </View>
+        )}
         
         {/* Lista de WorkOrders - APENAS ESTA PARTE TEM SCROLL */}
         <ScrollView
@@ -1165,6 +1266,29 @@ const styles = StyleSheet.create({
   },
   clearCacheButton: {
     padding: 5,
+  },
+  preloadIndicator: {
+    padding: 10,
+    backgroundColor: 'white',
+    borderRadius: 10,
+    marginHorizontal: 15,
+    marginVertical: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  preloadContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  preloadText: {
+    fontSize: RFValue(12),
+    fontWeight: 'bold',
+    color: '#374151',
+    marginLeft: 10,
   },
 });
 

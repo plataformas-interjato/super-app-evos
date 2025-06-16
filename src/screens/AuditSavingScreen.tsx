@@ -7,17 +7,15 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RFValue } from 'react-native-responsive-fontsize';
-import { User, WorkOrder } from '../types/workOrder';
+import { WorkOrder } from '../types/workOrder';
 
 interface AuditSavingScreenProps {
   workOrder: WorkOrder;
-  user: User;
   onFinishSaving: () => void;
 }
 
 const AuditSavingScreen: React.FC<AuditSavingScreenProps> = ({
   workOrder,
-  user,
   onFinishSaving,
 }) => {
   const animationValues = useRef([
@@ -28,14 +26,26 @@ const AuditSavingScreen: React.FC<AuditSavingScreenProps> = ({
     new Animated.Value(0.3),
   ]).current;
 
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
+    console.log('🔄 AuditSavingScreen useEffect iniciado');
+    
+    // Limpar timer anterior se existir (proteção contra múltiplas execuções)
+    if (timerRef.current) {
+      console.log('⚠️ Limpando timer anterior');
+      clearTimeout(timerRef.current);
+    }
+    
     // Simular processo de salvamento por 3 segundos
-    const timer = setTimeout(() => {
+    timerRef.current = setTimeout(() => {
+      console.log('✅ Timer de 3s concluído, chamando onFinishSaving');
       onFinishSaving();
     }, 3000);
 
     // Iniciar animação dos pontos
     const startAnimation = () => {
+      console.log('🎬 Iniciando animação dos pontos');
       const animations = animationValues.map((value, index) => {
         return Animated.loop(
           Animated.sequence([
@@ -59,7 +69,14 @@ const AuditSavingScreen: React.FC<AuditSavingScreenProps> = ({
 
     startAnimation();
 
-    return () => clearTimeout(timer);
+    // Cleanup na desmontagem
+    return () => {
+      console.log('🧹 AuditSavingScreen cleanup - removendo timer');
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
   }, [onFinishSaving]);
 
   return (

@@ -161,84 +161,110 @@ export const getAuditoriasByWorkOrder = async (
 };
 
 /**
- * Verifica se já existe foto inicial para uma ordem de serviço
+ * Verifica se já existe foto inicial para uma ordem de serviço (online + offline)
  */
 export const hasInitialPhoto = async (
   workOrderId: number
 ): Promise<{ hasPhoto: boolean; error: string | null }> => {
   try {
-    // Primeiro verificar se há conexão
+    // Verificar conectividade primeiro
     const NetInfo = require('@react-native-community/netinfo');
     const netInfo = await NetInfo.fetch();
     
+    // Se offline, verificar dados offline primeiro
     if (!netInfo.isConnected) {
-      // Offline: assumir que não há foto para permitir continuar
-      console.log('📱 Offline: assumindo que não há foto inicial');
-      return { hasPhoto: false, error: null };
+      try {
+        const { getOfflineActions } = await import('./offlineService');
+        const offlineActions = await getOfflineActions();
+        
+        // Procurar por ação de foto inicial para esta OS
+        const hasOfflinePhoto = offlineActions.some(action => 
+          action.type === 'PHOTO_INICIO' && 
+          action.workOrderId === workOrderId
+        );
+        
+        if (hasOfflinePhoto) {
+          console.log('✅ Foto inicial encontrada offline');
+          return { hasPhoto: true, error: null };
+        }
+        
+        return { hasPhoto: false, error: null };
+      } catch (offlineError) {
+        return { hasPhoto: false, error: null };
+      }
     }
-
-    // Online: verificar no banco
+    
+    // Se online, verificar no servidor
     const { data, error } = await supabase
       .from('auditoria_tecnico')
       .select('id, foto_inicial')
       .eq('ordem_servico_id', workOrderId)
-      .eq('ativo', 1)
       .not('foto_inicial', 'is', null)
       .limit(1);
 
     if (error) {
-      console.error('❌ Erro ao verificar foto inicial:', error);
-      // Em caso de erro, assumir que não há foto para permitir continuar
-      return { hasPhoto: false, error: null };
+      return { hasPhoto: false, error: error.message };
     }
 
     const hasPhoto = data && data.length > 0 && data[0].foto_inicial;
+    
     return { hasPhoto: !!hasPhoto, error: null };
   } catch (error) {
-    console.error('💥 Erro inesperado ao verificar foto inicial:', error);
-    // Em caso de erro, assumir que não há foto para permitir continuar
-    return { hasPhoto: false, error: null };
+    return { hasPhoto: false, error: 'Erro inesperado ao verificar foto inicial' };
   }
 };
 
 /**
- * Verifica se já existe foto final para uma ordem de serviço
+ * Verifica se já existe foto final para uma ordem de serviço (online + offline)
  */
 export const hasFinalPhoto = async (
   workOrderId: number
 ): Promise<{ hasPhoto: boolean; error: string | null }> => {
   try {
-    // Primeiro verificar se há conexão
+    // Verificar conectividade primeiro
     const NetInfo = require('@react-native-community/netinfo');
     const netInfo = await NetInfo.fetch();
     
+    // Se offline, verificar dados offline primeiro
     if (!netInfo.isConnected) {
-      // Offline: assumir que não há foto para permitir continuar
-      console.log('📱 Offline: assumindo que não há foto final');
-      return { hasPhoto: false, error: null };
+      try {
+        const { getOfflineActions } = await import('./offlineService');
+        const offlineActions = await getOfflineActions();
+        
+        // Procurar por ação de foto final para esta OS
+        const hasOfflinePhoto = offlineActions.some(action => 
+          (action.type === 'PHOTO_FINAL' || action.type === 'AUDITORIA_FINAL') && 
+          action.workOrderId === workOrderId
+        );
+        
+        if (hasOfflinePhoto) {
+          console.log('✅ Foto final encontrada offline');
+          return { hasPhoto: true, error: null };
+        }
+        
+        return { hasPhoto: false, error: null };
+      } catch (offlineError) {
+        return { hasPhoto: false, error: null };
+      }
     }
-
-    // Online: verificar no banco
+    
+    // Se online, verificar no servidor
     const { data, error } = await supabase
       .from('auditoria_tecnico')
       .select('id, foto_final')
       .eq('ordem_servico_id', workOrderId)
-      .eq('ativo', 1)
       .not('foto_final', 'is', null)
       .limit(1);
 
     if (error) {
-      console.error('❌ Erro ao verificar foto final:', error);
-      // Em caso de erro, assumir que não há foto para permitir continuar
-      return { hasPhoto: false, error: null };
+      return { hasPhoto: false, error: error.message };
     }
 
     const hasPhoto = data && data.length > 0 && data[0].foto_final;
+    
     return { hasPhoto: !!hasPhoto, error: null };
   } catch (error) {
-    console.error('💥 Erro inesperado ao verificar foto final:', error);
-    // Em caso de erro, assumir que não há foto para permitir continuar
-    return { hasPhoto: false, error: null };
+    return { hasPhoto: false, error: 'Erro inesperado ao verificar foto final' };
   }
 };
 

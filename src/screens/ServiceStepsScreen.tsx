@@ -15,6 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
 import { hasFinalPhoto, hasInitialPhoto } from '../services/auditService';
+import { saveChecklistEtapaOffline, checkNetworkConnection } from '../services/offlineService';
 import { 
   ServiceStep, 
   ServiceStepData, 
@@ -51,6 +52,7 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSteps, setIsLoadingSteps] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     loadServiceSteps();
@@ -61,26 +63,32 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
   const handleBackPress = async () => {
     try {
       // Verificar se já existe foto inicial
-      const { hasPhoto, error } = await hasInitialPhoto(workOrder.id);
-      
-      if (error) {
-        console.warn('⚠️ Erro ao verificar foto inicial, voltando normalmente:', error);
-        // Em caso de erro, voltar normalmente
-        onBackPress();
-        return;
-      }
+      try {
+        const { hasPhoto, error } = await hasInitialPhoto(workOrder.id);
+        
+        if (error) {
+          console.warn('⚠️ Erro ao verificar foto inicial, voltando normalmente:', error);
+          // Em caso de erro, voltar normalmente
+          onBackPress();
+          return;
+        }
 
-      if (hasPhoto && onBackToWorkOrderDetail) {
-        console.log('✅ Foto inicial existe, voltando para detalhes da OS');
-        // Se tem foto inicial e a função foi fornecida, voltar para detalhes da OS
-        onBackToWorkOrderDetail();
-      } else {
-        console.log('📱 Sem foto inicial ou função não fornecida, voltando normalmente');
-        // Se não tem foto inicial ou função não foi fornecida, voltar normalmente
+        if (hasPhoto && onBackToWorkOrderDetail) {
+          console.log('✅ Foto inicial existe, voltando para detalhes da OS');
+          // Se tem foto inicial e a função foi fornecida, voltar para detalhes da OS
+          onBackToWorkOrderDetail();
+        } else {
+          console.log('📱 Sem foto inicial ou função não fornecida, voltando normalmente');
+          // Se não tem foto inicial ou função não foi fornecida, voltar normalmente
+          onBackPress();
+        }
+      } catch (photoError) {
+        console.error('💥 Erro ao verificar foto inicial:', photoError);
+        // Em caso de erro, voltar normalmente
         onBackPress();
       }
     } catch (error) {
-      console.error('💥 Erro inesperado ao verificar foto inicial:', error);
+      console.error('💥 Erro inesperado ao processar volta:', error);
       // Em caso de erro, voltar normalmente
       onBackPress();
     }
@@ -89,118 +97,460 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
   const loadServiceSteps = async () => {
     setIsLoadingSteps(true);
     try {
-      // Se não tem tipo_os_id, tentar atualizar a OS
-      if (!workOrder.tipo_os_id) {
-        await updateWorkOrderWithTestType(workOrder.id);
-        // Recarregar a WorkOrder seria ideal, mas por enquanto vamos usar um valor padrão
-        workOrder.tipo_os_id = 1; // Assumir que foi criado com ID 1
-      }
+      setError(null);
       
-      // Usar a nova função com cache que funciona offline
-      if (workOrder.tipo_os_id) {
-        const { data: stepsFromCache, error, fromCache } = await getServiceStepsWithDataCached(
-          workOrder.tipo_os_id, 
-          workOrder.id
-        );
+      console.log('🔍 === INÍCIO DO CARREGAMENTO DE ETAPAS ===');
+      console.log('📋 WorkOrder ID:', workOrder.id);
+      console.log('📋 WorkOrder tipo_os_id:', workOrder.tipo_os_id);
+      console.log('📋 WorkOrder title:', workOrder.title);
+      
+      // Garantir que temos um tipo_os_id válido
+      const tipoOsId = workOrder.tipo_os_id || 1;
+      console.log('📋 Usando tipo_os_id:', tipoOsId);
+      
+      // Verificar conectividade
+      const NetInfo = require('@react-native-community/netinfo');
+      const netInfo = await NetInfo.fetch();
+      console.log(`📶 Status de conectividade: ${netInfo.isConnected ? 'ONLINE' : 'OFFLINE'}`);
+      
+      // MODO OFFLINE - APENAS CACHE LOCAL
+      if (!netInfo.isConnected) {
+        console.log('📱 MODO OFFLINE: Buscando apenas do cache local...');
         
-        if (stepsFromCache && !error && stepsFromCache.length > 0) {
-          setSteps(stepsFromCache);
+        try {
+          // Buscar APENAS do AsyncStorage direto
+          const stepsCache = await AsyncStorage.getItem('cached_service_steps');
+          const entriesCache = await AsyncStorage.getItem('cached_service_entries');
           
-          // Mostrar indicador se dados vieram do cache
-          if (fromCache) {
-            console.log('📱 Dados carregados do cache local');
-          } else {
-            console.log('🌐 Dados carregados do servidor');
+          if (stepsCache) {
+            const cache = JSON.parse(stepsCache);
+            const steps = cache[tipoOsId];
+            
+            if (steps && steps.length > 0) {
+              console.log(`📝 OFFLINE: ${steps.length} etapas encontradas no cache`);
+              
+              // Buscar entradas se existirem
+              let stepsWithData = steps;
+              if (entriesCache) {
+                const entriesData = JSON.parse(entriesCache);
+                stepsWithData = steps.map(step => ({
+                  ...step,
+                  entradas: entriesData[step.id] || []
+                }));
+              }
+              
+              console.log('✅ OFFLINE: Dados carregados diretamente do AsyncStorage');
+              setSteps(stepsWithData);
+              return;
+            }
           }
+          
+          console.log('❌ OFFLINE: Nenhum dado no cache - use o app online primeiro');
+          setSteps([]);
           return;
-        } else {
-          console.warn('⚠️ Nenhuma etapa encontrada:', error);
+          
+        } catch (cacheError) {
+          console.error('💥 Erro ao buscar cache offline:', cacheError);
+          console.log('❌ OFFLINE: Falha no cache - dados não disponíveis');
           setSteps([]);
           return;
         }
-      } else {
-        console.warn('⚠️ Nenhum tipo_os_id disponível');
-        setSteps([]);
-        return;
       }
-    } catch (error) {
-      console.error('💥 Erro ao carregar etapas:', error);
-      // Em caso de erro, não mostrar alert se estivermos offline
-      const NetInfo = require('@react-native-community/netinfo');
-      const netInfo = await NetInfo.fetch();
       
-      if (netInfo.isConnected) {
-        Alert.alert('Erro', 'Não foi possível carregar as etapas do serviço.');
-      } else {
-        console.log('📱 Offline: erro esperado, continuando sem dados');
+      // MODO ONLINE - Tentar servidor, fallback para cache
+      console.log('🌐 MODO ONLINE: Tentando servidor primeiro...');
+      try {
+        // Primeiro tentar cache mesmo online
+        const { getCachedServiceSteps, getCachedServiceEntries } = await import('../services/cacheService');
+        const stepsResult = await getCachedServiceSteps(tipoOsId);
+        
+        if (stepsResult.data && stepsResult.data.length > 0) {
+          const etapaIds = stepsResult.data.map(step => step.id);
+          const entriesResult = await getCachedServiceEntries(etapaIds);
+          
+          const stepsWithData = stepsResult.data.map(step => ({
+            ...step,
+            entradas: entriesResult.data?.[step.id] || []
+          }));
+          
+          console.log('✅ ONLINE: Dados carregados do cache');
+          setSteps(stepsWithData);
+          return;
+        }
+        
+        // Se não tem cache, tentar servidor
+        console.log('🌐 ONLINE: Cache vazio, tentando servidor...');
+        const { data: stepsFromServer, error, fromCache } = await getServiceStepsWithDataCached(
+          tipoOsId, 
+          workOrder.id
+        );
+        
+        if (stepsFromServer && stepsFromServer.length > 0) {
+          console.log('✅ ONLINE: Etapas carregadas do servidor');
+          setSteps(stepsFromServer);
+          return;
+        }
+        
+      } catch (serverError) {
+        console.error('💥 Erro online:', serverError);
       }
+      
+      // Se chegou até aqui, não encontrou nada
+      console.warn('⚠️ Nenhuma etapa encontrada após todas as tentativas');
+      setSteps([]);
+      
+    } catch (error) {
+      console.error('💥 Erro inesperado ao carregar etapas:', error);
       setSteps([]);
     } finally {
       setIsLoadingSteps(false);
+      console.log('🔍 === FIM DO CARREGAMENTO DE ETAPAS ===');
     }
   };
 
   const toggleEntryCompletion = async (entryId: number) => {
-    const isCompleted = completedSteps.has(entryId);
-    
-    let newCompletedSteps: Set<number>;
-    
-    if (!isCompleted) {
-      // Marcar como completo
-      newCompletedSteps = new Set([...completedSteps, entryId]);
-    } else {
-      // Desmarcar
-      newCompletedSteps = new Set(completedSteps);
-      newCompletedSteps.delete(entryId);
+    try {
+      const isCompleted = completedSteps.has(entryId);
+      
+      let newCompletedSteps: Set<number>;
+      
+      if (!isCompleted) {
+        // Marcar como completo
+        newCompletedSteps = new Set([...completedSteps, entryId]);
+      } else {
+        // Desmarcar
+        newCompletedSteps = new Set(completedSteps);
+        newCompletedSteps.delete(entryId);
+      }
+      
+      setCompletedSteps(newCompletedSteps);
+      
+      // Salvar no localStorage
+      try {
+        await saveCompletedStepsToStorage(newCompletedSteps);
+        console.log(`✅ Status de checklist salvo localmente para entrada ${entryId}`);
+      } catch (storageError) {
+        console.error('❌ Erro ao salvar checklist no localStorage:', storageError);
+      }
+
+      // Salvar usando sistema offline para sincronização posterior
+      try {
+        // Converter Set para objeto para facilitar sincronização
+        const checklistData: { [key: number]: boolean } = {};
+        newCompletedSteps.forEach(id => {
+          checklistData[id] = true;
+        });
+
+        const { success, error, savedOffline } = await saveChecklistEtapaOffline(
+          workOrder.id,
+          user.id,
+          checklistData
+        );
+
+        if (success) {
+          if (savedOffline) {
+            try {
+              const isOnline = await checkNetworkConnection();
+              if (!isOnline) {
+                console.log('📱 App offline: checklist salvo localmente para sincronização');
+              }
+            } catch (networkError) {
+              console.warn('⚠️ Erro ao verificar conexão:', networkError);
+            }
+          } else {
+            console.log('✅ Checklist salvo online com sucesso');
+          }
+        } else {
+          console.error('❌ Erro ao salvar checklist offline:', error);
+        }
+      } catch (offlineError) {
+        console.error('💥 Erro no sistema offline de checklist:', offlineError);
+      }
+    } catch (error) {
+      console.error('💥 Erro inesperado ao alternar completude da entrada:', error);
     }
-    
-    setCompletedSteps(newCompletedSteps);
-    
-    // Salvar no localStorage
-    await saveCompletedStepsToStorage(newCompletedSteps);
   };
 
   const handleFinishService = async () => {
     try {
       // Verificar se já existe foto final
-      const { hasPhoto, error } = await hasFinalPhoto(workOrder.id);
-      
-      if (error) {
-        console.warn('⚠️ Erro ao verificar foto final, continuando normalmente:', error);
-        // Em caso de erro, continuar normalmente para auditoria
-        onFinishService();
-        return;
-      }
+      try {
+        const { hasPhoto, error } = await hasFinalPhoto(workOrder.id);
+        
+        if (error) {
+          console.warn('⚠️ Erro ao verificar foto final, continuando normalmente:', error);
+          // Em caso de erro, continuar normalmente para auditoria
+          onFinishService();
+          return;
+        }
 
-      if (hasPhoto && onSkipToPhotoCollection) {
-        console.log('✅ Foto final já existe, pulando direto para coleta de fotos');
-        // Se já tem foto final, pular direto para coleta de fotos
-        onSkipToPhotoCollection();
-      } else {
-        console.log('📱 Sem foto final, indo para auditoria normalmente');
-        // Se não tem foto final, ir para auditoria normalmente
+        if (hasPhoto && onSkipToPhotoCollection) {
+          console.log('✅ Foto final já existe, pulando direto para coleta de fotos');
+          // Se já tem foto final, pular direto para coleta de fotos
+          onSkipToPhotoCollection();
+        } else {
+          console.log('📱 Sem foto final, indo para auditoria normalmente');
+          // Se não tem foto final, ir para auditoria normalmente
+          onFinishService();
+        }
+      } catch (photoError) {
+        console.error('💥 Erro ao verificar foto final:', photoError);
+        // Em caso de erro, continuar normalmente
         onFinishService();
       }
     } catch (error) {
-      console.error('💥 Erro inesperado ao verificar foto final:', error);
+      console.error('💥 Erro inesperado ao finalizar serviço:', error);
       // Em caso de erro, continuar normalmente
       onFinishService();
     }
   };
 
   const getCompletionStats = () => {
-    // Contar o total de entradas em todas as etapas
-    const totalEntries = steps.reduce((total, step) => {
-      return total + (step.entradas?.length || 0);
-    }, 0);
-    
-    const completedCount = completedSteps.size;
-    const percentage = totalEntries > 0 ? Math.round((completedCount / totalEntries) * 100) : 0;
-    
-    return { totalSteps: totalEntries, completedCount, percentage };
+    try {
+      // Contar o total de entradas em todas as etapas
+      const totalEntries = steps.reduce((total, step) => {
+        try {
+          return total + (step.entradas?.length || 0);
+        } catch (stepError) {
+          console.warn('⚠️ Erro ao contar entradas da etapa:', step.id, stepError);
+          return total;
+        }
+      }, 0);
+      
+      const completedCount = completedSteps.size;
+      const percentage = totalEntries > 0 ? Math.round((completedCount / totalEntries) * 100) : 0;
+      
+      return { totalSteps: totalEntries, completedCount, percentage };
+    } catch (error) {
+      console.error('💥 Erro ao calcular estatísticas de completude:', error);
+      return { totalSteps: 0, completedCount: 0, percentage: 0 };
+    }
   };
 
   const { totalSteps, completedCount, percentage } = getCompletionStats();
+
+  // Função para criar etapas específicas offline baseado no tipo de OS
+  const createOfflineStepsForType = (tipoOsId: number, workOrder: WorkOrder): ServiceStep[] => {
+    console.log(`🏗️ Criando etapas offline para tipo ${tipoOsId}, OS: ${workOrder.title}`);
+    
+    // Gerar IDs únicos baseados no tipo e WorkOrder ID para consistência
+    const baseId = (tipoOsId * 1000) + (workOrder.id % 1000);
+    
+    // Diferentes tipos de OS têm etapas diferentes
+    switch (tipoOsId) {
+      case 1: // Instalação Residencial
+        return [
+          {
+            id: baseId + 1,
+            titulo: 'Frente da Residência',
+            ordem_etapa: 1,
+            etapa_os_id: baseId + 1,
+            entradas: [
+              {
+                id: baseId + 11,
+                etapa_os_id: baseId + 1,
+                ordem_entrada: 1,
+                titulo: 'Foto da fachada da residência',
+                valor: '',
+                completed: false
+              },
+              {
+                id: baseId + 12,
+                etapa_os_id: baseId + 1,
+                ordem_entrada: 2,
+                titulo: 'Número da casa visível',
+                valor: '',
+                completed: false
+              }
+            ]
+          },
+          {
+            id: baseId + 2,
+            titulo: 'Ponto de Instalação',
+            ordem_etapa: 2,
+            etapa_os_id: baseId + 2,
+            entradas: [
+              {
+                id: baseId + 21,
+                etapa_os_id: baseId + 2,
+                ordem_entrada: 1,
+                titulo: 'Local escolhido para instalação',
+                valor: '',
+                completed: false
+              },
+              {
+                id: baseId + 22,
+                etapa_os_id: baseId + 2,
+                ordem_entrada: 2,
+                titulo: 'Medições do ambiente',
+                valor: '',
+                completed: false
+              }
+            ]
+          },
+          {
+            id: baseId + 3,
+            titulo: 'Finalização',
+            ordem_etapa: 3,
+            etapa_os_id: baseId + 3,
+            entradas: [
+              {
+                id: baseId + 31,
+                etapa_os_id: baseId + 3,
+                ordem_entrada: 1,
+                titulo: 'Equipamento instalado',
+                valor: '',
+                completed: false
+              },
+              {
+                id: baseId + 32,
+                etapa_os_id: baseId + 3,
+                ordem_entrada: 2,
+                titulo: 'Teste de funcionamento',
+                valor: '',
+                completed: false
+              }
+            ]
+          }
+        ];
+        
+      case 2: // Instalação Comercial
+        return [
+          {
+            id: baseId + 1,
+            titulo: 'Fachada Comercial',
+            ordem_etapa: 1,
+            etapa_os_id: baseId + 1,
+            entradas: [
+              {
+                id: baseId + 11,
+                etapa_os_id: baseId + 1,
+                ordem_entrada: 1,
+                titulo: 'Foto da entrada principal',
+                valor: '',
+                completed: false
+              },
+              {
+                id: baseId + 12,
+                etapa_os_id: baseId + 1,
+                ordem_entrada: 2,
+                titulo: 'Identificação do estabelecimento',
+                valor: '',
+                completed: false
+              }
+            ]
+          },
+          {
+            id: baseId + 2,
+            titulo: 'Ambiente Interno',
+            ordem_etapa: 2,
+            etapa_os_id: baseId + 2,
+            entradas: [
+              {
+                id: baseId + 21,
+                etapa_os_id: baseId + 2,
+                ordem_entrada: 1,
+                titulo: 'Layout do ambiente',
+                valor: '',
+                completed: false
+              },
+              {
+                id: baseId + 22,
+                etapa_os_id: baseId + 2,
+                ordem_entrada: 2,
+                titulo: 'Pontos de rede existentes',
+                valor: '',
+                completed: false
+              }
+            ]
+          },
+          {
+            id: baseId + 3,
+            titulo: 'Configuração',
+            ordem_etapa: 3,
+            etapa_os_id: baseId + 3,
+            entradas: [
+              {
+                id: baseId + 31,
+                etapa_os_id: baseId + 3,
+                ordem_entrada: 1,
+                titulo: 'Equipamentos configurados',
+                valor: '',
+                completed: false
+              }
+            ]
+          }
+        ];
+        
+      default: // Tipo genérico/desconhecido
+        return [
+          {
+            id: baseId + 1,
+            titulo: 'Documentação Inicial',
+            ordem_etapa: 1,
+            etapa_os_id: baseId + 1,
+            entradas: [
+              {
+                id: baseId + 11,
+                etapa_os_id: baseId + 1,
+                ordem_entrada: 1,
+                titulo: 'Foto do local de atendimento',
+                valor: '',
+                completed: false
+              },
+              {
+                id: baseId + 12,
+                etapa_os_id: baseId + 1,
+                ordem_entrada: 2,
+                titulo: 'Condições do ambiente',
+                valor: '',
+                completed: false
+              }
+            ]
+          },
+          {
+            id: baseId + 2,
+            titulo: 'Execução do Serviço',
+            ordem_etapa: 2,
+            etapa_os_id: baseId + 2,
+            entradas: [
+              {
+                id: baseId + 21,
+                etapa_os_id: baseId + 2,
+                ordem_entrada: 1,
+                titulo: 'Serviço em andamento',
+                valor: '',
+                completed: false
+              },
+              {
+                id: baseId + 22,
+                etapa_os_id: baseId + 2,
+                ordem_entrada: 2,
+                titulo: 'Verificações realizadas',
+                valor: '',
+                completed: false
+              }
+            ]
+          },
+          {
+            id: baseId + 3,
+            titulo: 'Conclusão',
+            ordem_etapa: 3,
+            etapa_os_id: baseId + 3,
+            entradas: [
+              {
+                id: baseId + 31,
+                etapa_os_id: baseId + 3,
+                ordem_entrada: 1,
+                titulo: 'Serviço finalizado',
+                valor: '',
+                completed: false
+              }
+            ]
+          }
+        ];
+    }
+  };
 
   const getStatusText = (status: string) => {
     switch (status) {
@@ -238,8 +588,10 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
       const key = `completed_steps_${workOrder.id}`;
       const completedArray = Array.from(completedIds);
       await AsyncStorage.setItem(key, JSON.stringify(completedArray));
+      console.log(`💾 Checklist salvo para OS ${workOrder.id}: ${completedArray.length} itens completados`);
     } catch (error) {
-      console.error('Erro ao salvar checks no localStorage:', error);
+      console.error('❌ Erro ao salvar checks no localStorage:', error);
+      // Não bloquear a UI em caso de erro de storage
     }
   };
 
@@ -249,11 +601,23 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
       const key = `completed_steps_${workOrder.id}`;
       const stored = await AsyncStorage.getItem(key);
       if (stored) {
-        const completedArray = JSON.parse(stored);
-        setCompletedSteps(new Set(completedArray));
+        try {
+          const completedArray = JSON.parse(stored);
+          setCompletedSteps(new Set(completedArray));
+          console.log(`📱 Checklist carregado para OS ${workOrder.id}: ${completedArray.length} itens completados`);
+        } catch (parseError) {
+          console.error('❌ Erro ao fazer parse do checklist salvo:', parseError);
+          // Se não conseguir fazer parse, inicializar vazio
+          setCompletedSteps(new Set());
+        }
+      } else {
+        console.log(`📱 Nenhum checklist salvo encontrado para OS ${workOrder.id}`);
+        setCompletedSteps(new Set());
       }
     } catch (error) {
-      console.error('Erro ao carregar checks do localStorage:', error);
+      console.error('❌ Erro ao carregar checks do localStorage:', error);
+      // Se falhar ao carregar, inicializar vazio
+      setCompletedSteps(new Set());
     }
   };
 

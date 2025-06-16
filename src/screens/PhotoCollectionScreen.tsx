@@ -17,8 +17,8 @@ import { RFValue } from 'react-native-responsive-fontsize';
 import * as ImagePicker from 'expo-image-picker';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
-import { ServiceStep, ServiceStepData, getServiceStepsWithDataCached, saveDadosRecord, saveComentarioEtapa, getComentarioEtapa, getFotosSalvasUsuario } from '../services/serviceStepsService';
-import { hasFinalPhoto } from '../services/auditService';
+import { ServiceStep, ServiceStepData } from '../services/serviceStepsService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 
@@ -59,41 +59,78 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   const [comentarios, setComentarios] = useState<{ [stepId: number]: string }>({});
   const [fotosSalvasUsuario, setFotosSalvasUsuario] = useState<{ [entryId: number]: string }>({});
 
-  useEffect(() => {
-    loadServiceSteps();
-  }, []);
+  // Flags de controle para prevenir loops infinitos e execuções simultâneas
+  const [isLoadingSteps, setIsLoadingSteps] = useState(false);
+  const [isSavingComment, setIsSavingComment] = useState(false);
+  const [lastActiveStepIndex, setLastActiveStepIndex] = useState(-1);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [isChangingStep, setIsChangingStep] = useState(false);
 
-  // Centralizar o step ativo quando mudar
   useEffect(() => {
-    if (steps.length > 0 && stageScrollViewRef.current) {
-      centerCurrentStage();
-    }
-  }, [activeStepIndex, steps.length]);
-
-  // Carregar comentário quando a etapa ativa mudar
-  useEffect(() => {
-    if (steps.length > 0 && activeStepIndex < steps.length) {
-      loadComentarioEtapa(activeStepIndex);
-    }
-  }, [activeStepIndex, steps.length]);
-
-  // Função para centralizar a etapa atual
-  const centerCurrentStage = () => {
-    if (steps.length > 0 && stageScrollViewRef.current) {
-      const scrollToIndex = activeStepIndex;
-      const buttonWidth = 200; // Largura do botão centralizado
-      const buttonMargin = 20; // Espaçamento entre botões
-      const containerWidth = width;
+    if (!isInitialized) {
+      // Usar timeout para evitar execução imediata que pode causar problemas
+      const timeoutId = setTimeout(() => {
+        loadServiceSteps();
+        setIsInitialized(true);
+      }, 100);
       
-      // Calcular posição para centralizar o botão ativo exatamente no centro da tela
+      return () => clearTimeout(timeoutId);
+    }
+  }, [isInitialized]);
+
+  // Centralizar o step ativo quando mudar - COM PROTEÇÃO CONTRA LOOPS
+  useEffect(() => {
+    if (steps.length > 0 && stageScrollViewRef.current && activeStepIndex !== lastActiveStepIndex && !isChangingStep) {
+      console.log('🎯 Centralizando step:', { activeStepIndex, lastActiveStepIndex });
+      
+      // Usar timeout para evitar conflitos
+      const timeoutId = setTimeout(() => {
+        setLastActiveStepIndex(activeStepIndex);
+        centerCurrentStage();
+      }, 50);
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [activeStepIndex, steps.length, lastActiveStepIndex, isChangingStep]);
+
+  // Carregar comentário quando a etapa ativa mudar - COM PROTEÇÃO CONTRA LOOPS
+  useEffect(() => {
+    if (steps.length > 0 && activeStepIndex < steps.length && activeStepIndex !== lastActiveStepIndex && !isSavingComment && !isChangingStep) {
+      console.log('💬 Carregando comentário para step:', activeStepIndex);
+      
+      // Usar timeout para evitar conflitos
+      const timeoutId = setTimeout(() => {
+        loadComentarioEtapa(activeStepIndex);
+      }, 100);
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [activeStepIndex, steps.length, lastActiveStepIndex, isSavingComment, isChangingStep]);
+
+  // Função para centralizar a etapa atual - COM PROTEÇÃO CONTRA LOOPS
+  const centerCurrentStage = () => {
+    if (steps.length > 0 && stageScrollViewRef.current && activeStepIndex >= 0 && activeStepIndex < steps.length) {
+      const scrollToIndex = activeStepIndex;
+      const buttonWidth = 200;
+      const buttonMargin = 20;
+      const containerWidth = 375; // Largura fixa para cálculo consistente
+      
       const scrollToX = (scrollToIndex * (buttonWidth + buttonMargin)) - (containerWidth / 2) + (buttonWidth / 2);
       
-      setTimeout(() => {
-        stageScrollViewRef.current?.scrollTo({
-          x: Math.max(0, scrollToX),
-          animated: true,
-        });
-      }, 150);
+      // Usar timeout para evitar conflitos com renderização
+      const timeoutId = setTimeout(() => {
+        try {
+          stageScrollViewRef.current?.scrollTo({
+            x: Math.max(0, scrollToX),
+            animated: true,
+          });
+        } catch (scrollError) {
+          console.warn('⚠️ Erro ao centralizar step:', scrollError);
+        }
+      }, 200);
+      
+      // Limpar timeout se componente for desmontado
+      return () => clearTimeout(timeoutId);
     }
   };
 
@@ -102,41 +139,79 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
     if (stepIndex >= 0 && stepIndex < steps.length) {
       const currentStep = steps[stepIndex];
       try {
-        const { data: comentario, error } = await getComentarioEtapa(workOrder.id, currentStep.id);
-        if (!error && comentario) {
-          setComentarios(prev => ({
-            ...prev,
-            [currentStep.id]: comentario.comentario
-          }));
+        // BUSCAR COMENTÁRIO DIRETO DO ASYNCSTORAGE - SEM REQUISIÇÕES ONLINE
+        const offlineKey = 'offline_comentarios_etapa';
+        const existingDataStr = await AsyncStorage.getItem(offlineKey);
+        
+        if (existingDataStr) {
+          const existingData = JSON.parse(existingDataStr);
+          const recordKey = `${workOrder.id}-${currentStep.id}`;
+          const comentario = existingData[recordKey];
+          
+          if (comentario && comentario.comentario) {
+            setComentarios(prev => ({
+              ...prev,
+              [currentStep.id]: comentario.comentario
+            }));
+            console.log('💬 Comentário carregado do cache offline');
+          }
         }
       } catch (error) {
-        console.error('Erro ao carregar comentário da etapa:', error);
+        console.error('Erro ao carregar comentário da etapa offline:', error);
       }
     }
   };
 
-  // Função para salvar comentário da etapa atual
+  // Função para salvar comentário da etapa atual - COM PROTEÇÃO CONTRA LOOPS
   const saveCurrentComentario = async () => {
-    if (activeStepIndex >= 0 && activeStepIndex < steps.length) {
-      const currentStep = steps[activeStepIndex];
-      const comentario = comentarios[currentStep.id] || '';
+    // Proteção contra execuções simultâneas
+    if (isSavingComment) {
+      console.log('⚠️ saveCurrentComentario já em execução, ignorando nova chamada');
+      return;
+    }
+
+    try {
+      setIsSavingComment(true);
       
-      if (comentario.trim()) {
-        try {
-          const { error } = await saveComentarioEtapa(workOrder.id, currentStep.id, comentario.trim());
-          if (error) {
-            console.error('Erro ao salvar comentário:', error);
-          } else {
-            console.log('✅ Comentário salvo para etapa:', currentStep.titulo);
+      if (activeStepIndex >= 0 && activeStepIndex < steps.length) {
+        const currentStep = steps[activeStepIndex];
+        const comentario = comentarios[currentStep.id] || '';
+        
+        if (comentario.trim()) {
+          console.log('💬 Salvando comentário da etapa atual OFFLINE:', { stepId: currentStep.id, comentarioLength: comentario.length });
+          
+          try {
+            // SALVAR DIRETO NO ASYNCSTORAGE - SEM IMPORTS DINÂMICOS
+            const offlineKey = 'offline_comentarios_etapa';
+            const existingDataStr = await AsyncStorage.getItem(offlineKey);
+            const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
+            
+            const recordKey = `${workOrder.id}-${currentStep.id}`;
+            existingData[recordKey] = {
+              ordem_servico_id: workOrder.id,
+              etapa_id: currentStep.id,
+              comentario: comentario.trim(),
+              created_at: new Date().toISOString(),
+              synced: false
+            };
+            
+            await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
+            console.log('✅ Comentário salvo offline com sucesso');
+          } catch (offlineError) {
+            console.error('💥 Erro ao salvar comentário offline:', offlineError);
           }
-        } catch (error) {
-          console.error('Erro ao salvar comentário:', error);
+        } else {
+          console.log('💬 Comentário vazio, não salvando');
         }
       }
+    } catch (error) {
+      console.error('💥 Erro inesperado ao salvar comentário:', error);
+    } finally {
+      setIsSavingComment(false);
     }
   };
 
-  // Função para atualizar comentário da etapa atual
+  // Função para atualizar comentário - SEM SALVAMENTO AUTOMÁTICO
   const updateComentario = (text: string) => {
     if (activeStepIndex >= 0 && activeStepIndex < steps.length) {
       const currentStep = steps[activeStepIndex];
@@ -148,97 +223,122 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   };
 
   const loadServiceSteps = async () => {
+    // Proteção contra execuções simultâneas
+    if (isLoadingSteps) {
+      console.log('⚠️ loadServiceSteps já em execução, ignorando nova chamada');
+      return;
+    }
+
+    setIsLoadingSteps(true);
     setIsLoading(true);
+    
     try {
       if (!workOrder.tipo_os_id) {
         console.warn('⚠️ Nenhum tipo_os_id disponível');
         setSteps([]);
+        setPhotoEntries([]);
         return;
       }
 
-      console.log('🔍 Carregando etapas para tipo_os_id:', workOrder.tipo_os_id);
-      const { data: stepsFromCache, error, fromCache } = await getServiceStepsWithDataCached(
-        workOrder.tipo_os_id, 
-        workOrder.id
-      );
+      console.log('🔍 Carregando etapas DIRETO do AsyncStorage para evitar loops...');
       
-      console.log('📋 Dados carregados:', {
-        hasData: !!stepsFromCache,
-        error,
-        fromCache,
-        stepsCount: stepsFromCache?.length || 0
-      });
-      
-      if (stepsFromCache && !error && stepsFromCache.length > 0) {
-        setSteps(stepsFromCache);
+      try {
+        // BUSCAR DIRETAMENTE DO ASYNCSTORAGE - SEM IMPORTS DINÂMICOS
+        const stepsCache = await AsyncStorage.getItem('cached_service_steps');
+        const entriesCache = await AsyncStorage.getItem('cached_service_entries');
         
-        // Debug: verificar estrutura dos dados
-        stepsFromCache.forEach((step, index) => {
-          console.log(`📌 Etapa ${index + 1}:`, {
-            id: step.id,
-            titulo: step.titulo,
-            entradasCount: step.entradas?.length || 0
-          });
+        if (stepsCache) {
+          const cache = JSON.parse(stepsCache);
+          const stepsData = cache[workOrder.tipo_os_id];
           
-          step.entradas?.forEach((entry, entryIndex) => {
-            console.log(`   📝 Entrada ${entryIndex + 1}:`, {
-              id: entry.id,
-              valor: entry.valor,
-              ordem_entrada: entry.ordem_entrada
-            });
-          });
-        });
-        
-        // Criar lista de entradas para fotos
-        const entries: PhotoEntry[] = [];
-        stepsFromCache.forEach(step => {
-          step.entradas?.forEach(entry => {
-            const titulo = entry.titulo || entry.valor || `Entrada ${entry.ordem_entrada}`;
-            console.log(`📸 Criando entrada de foto:`, {
-              id: entry.id,
-              titulo,
-              stepTitle: step.titulo,
-              originalTitulo: entry.titulo,
-              originalValor: entry.valor,
-              fotoModelo: entry.foto_modelo ? 'Possui foto modelo' : 'Sem foto modelo'
+          if (stepsData && stepsData.length > 0) {
+            console.log(`📝 ${stepsData.length} etapas encontradas no cache direto`);
+            
+            // Processar entradas se existirem
+            let finalSteps = stepsData;
+            if (entriesCache) {
+              try {
+                const entriesData = JSON.parse(entriesCache);
+                finalSteps = stepsData.map((step: ServiceStep) => ({
+                  ...step,
+                  entradas: entriesData[step.id] || []
+                }));
+              } catch (entriesError) {
+                console.warn('⚠️ Erro ao processar entradas, usando etapas sem entradas:', entriesError);
+                finalSteps = stepsData.map((step: ServiceStep) => ({ ...step, entradas: [] }));
+              }
+            } else {
+              finalSteps = stepsData.map((step: ServiceStep) => ({ ...step, entradas: [] }));
+            }
+            
+            setSteps(finalSteps);
+            
+            // Criar lista de entradas para fotos
+            const entries: PhotoEntry[] = [];
+            finalSteps.forEach((step: ServiceStep) => {
+              step.entradas?.forEach((entry: ServiceStepData) => {
+                const titulo = entry.titulo || entry.valor || `Entrada ${entry.ordem_entrada}`;
+                
+                entries.push({
+                  id: entry.id,
+                  titulo,
+                  stepTitle: step.titulo,
+                  stepId: step.id,
+                  fotoModelo: entry.foto_modelo,
+                });
+              });
             });
             
-            entries.push({
-              id: entry.id,
-              titulo,
-              stepTitle: step.titulo,
-              stepId: step.id,
-              fotoModelo: entry.foto_modelo,
-            });
-          });
-        });
-        
-        setPhotoEntries(entries);
-        console.log(`📸 ${entries.length} entradas de foto carregadas`);
-        
-        // Carregar fotos já salvas pelo usuário
-        if (entries.length > 0) {
-          const entradaIds = entries.map(entry => entry.id);
-          const { data: fotosSalvas, error: fotosError } = await getFotosSalvasUsuario(workOrder.id, entradaIds);
-          
-          if (!fotosError && fotosSalvas) {
-            setFotosSalvasUsuario(fotosSalvas);
-            console.log(`📸 ${Object.keys(fotosSalvas).length} fotos do usuário carregadas`);
-          } else {
-            console.warn('⚠️ Erro ao carregar fotos salvas do usuário:', fotosError);
+            setPhotoEntries(entries);
+            console.log(`📸 ${entries.length} entradas de foto processadas`);
+            
+            // Tentar carregar fotos salvas sem bloquear
+            if (entries.length > 0) {
+              try {
+                // Buscar dados da tabela offline primeiro
+                const offlineData = await AsyncStorage.getItem('offline_dados_records');
+                const offlinePhotos: { [entradaId: number]: string } = {};
+                
+                if (offlineData) {
+                  const records = JSON.parse(offlineData);
+                  Object.values(records).forEach((record: any) => {
+                    if (record.ordem_servico_id === workOrder.id && record.valor) {
+                      offlinePhotos[record.entrada_dados_id] = record.valor;
+                    }
+                  });
+                }
+                
+                setFotosSalvasUsuario(offlinePhotos);
+                console.log(`📸 ${Object.keys(offlinePhotos).length} fotos offline carregadas`);
+              } catch (fotosError) {
+                console.warn('⚠️ Erro ao carregar fotos offline:', fotosError);
+                setFotosSalvasUsuario({});
+              }
+            }
+            
+            return;
           }
         }
-      } else {
-        console.warn('⚠️ Nenhuma etapa encontrada:', error);
+        
+        console.log('❌ Nenhum dado no cache encontrado');
         setSteps([]);
         setPhotoEntries([]);
+        setFotosSalvasUsuario({});
+        
+      } catch (cacheError) {
+        console.error('💥 Erro ao buscar cache:', cacheError);
+        setSteps([]);
+        setPhotoEntries([]);
+        setFotosSalvasUsuario({});
       }
     } catch (error) {
-      console.error('💥 Erro ao carregar etapas:', error);
+      console.error('💥 Erro inesperado no carregamento:', error);
       setSteps([]);
       setPhotoEntries([]);
+      setFotosSalvasUsuario({});
     } finally {
       setIsLoading(false);
+      setIsLoadingSteps(false);
     }
   };
 
@@ -311,67 +411,84 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   };
 
   const takePhotoFromModal = async () => {
-    if (!selectedEntryForModel) return;
-    
-    // Fechar modal primeiro
-    closeModelPhotoModal();
-    
-    // Solicitar permissão da câmera
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert(
-        'Permissão Necessária',
-        'É necessário permitir o acesso à câmera para tirar fotos.'
-      );
-      return;
-    }
-
     try {
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.8,
-        allowsEditing: false,
-      });
-
-      if (!result.canceled && result.assets[0]) {
-        const photoUri = result.assets[0].uri;
-        
-        // Salvar na tabela dados
-        console.log('💾 Salvando foto na tabela dados...');
-        const { data, error } = await saveDadosRecord(
-          workOrder.id,
-          selectedEntryForModel.id,
-          photoUri
+      if (!selectedEntryForModel) {
+        console.warn('⚠️ Nenhuma entrada selecionada para o modal');
+        return;
+      }
+      
+      // Fechar modal primeiro
+      closeModelPhotoModal();
+      
+      // Solicitar permissão da câmera
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permissão Necessária',
+          'É necessário permitir o acesso à câmera para tirar fotos.'
         );
+        return;
+      }
 
-        if (error) {
-          Alert.alert('Erro', `Não foi possível salvar a foto: ${error}`);
-          console.error('❌ Erro ao salvar foto na tabela dados:', error);
-          return;
-        }
-
-        // Se salvou com sucesso, também adicionar ao estado local para exibição
-        console.log(`💾 Adicionando foto ao estado local para entrada ${selectedEntryForModel.id}`);
-        setCollectedPhotos(prev => {
-          const newState = {
-            ...prev,
-            [selectedEntryForModel.id]: photoUri
-          };
-          console.log(`📊 Estado atualizado:`, {
-            entradaId: selectedEntryForModel.id,
-            photoUri: photoUri.substring(0, 30) + '...',
-            estadoAnterior: Object.keys(prev),
-            estadoNovo: Object.keys(newState)
-          });
-          return newState;
+      try {
+        const result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          quality: 0.8,
+          allowsEditing: false,
         });
-        
-        console.log(`✅ Foto capturada e salva na tabela dados para entrada ${selectedEntryForModel.id}`);
-        console.log('📊 Dados salvos:', data);
+
+        if (!result.canceled && result.assets[0]) {
+          const photoUri = result.assets[0].uri;
+          
+          // Salvar DIRETO no AsyncStorage - SEM IMPORTS DINÂMICOS
+          console.log('💾 Salvando foto direto no AsyncStorage...');
+          try {
+            const offlineKey = 'offline_dados_records';
+            const existingDataStr = await AsyncStorage.getItem(offlineKey);
+            const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
+            
+            const recordKey = `${workOrder.id}-${selectedEntryForModel.id}-${Date.now()}`;
+            existingData[recordKey] = {
+              ativo: 1,
+              valor: photoUri,
+              ordem_servico_id: workOrder.id,
+              entrada_dados_id: selectedEntryForModel.id,
+              created_at: new Date().toISOString(),
+              synced: false
+            };
+            
+            await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
+            
+            // Adicionar ao estado local para exibição
+            console.log(`💾 Adicionando foto ao estado local para entrada ${selectedEntryForModel.id}`);
+            setCollectedPhotos(prev => {
+              const newState = {
+                ...prev,
+                [selectedEntryForModel.id]: photoUri
+              };
+              console.log(`📊 Estado atualizado:`, {
+                entradaId: selectedEntryForModel.id,
+                photoUri: photoUri.substring(0, 30) + '...',
+                estadoAnterior: Object.keys(prev),
+                estadoNovo: Object.keys(newState)
+              });
+              return newState;
+            });
+            
+            console.log('✅ Foto salva offline com sucesso');
+            console.log(`✅ Foto capturada e salva para entrada ${selectedEntryForModel.id}`);
+          } catch (offlineError) {
+            console.error('💥 Erro ao salvar foto offline:', offlineError);
+            Alert.alert('Erro', 'Não foi possível salvar a foto. Tente novamente.');
+          }
+        }
+      } catch (cameraError) {
+        console.error('💥 Erro na câmera:', cameraError);
+        Alert.alert('Erro', 'Não foi possível tirar a foto. Tente novamente.');
       }
     } catch (error) {
-      Alert.alert('Erro', 'Não foi possível tirar a foto. Tente novamente.');
-      console.error('💥 Erro ao tirar foto:', error);
+      console.error('💥 Erro inesperado ao tirar foto:', error);
+      Alert.alert('Erro', 'Ocorreu um erro inesperado. Tente novamente.');
     }
   };
 
@@ -395,91 +512,123 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
       return;
     }
 
-    // Se estiver na primeira etapa (índice 0), voltar para a tela anterior (checklist)
+    // Se estiver na primeira etapa (índice 0), voltar para a tela anterior
     try {
-      console.log('📱 Na primeira etapa, verificando se deve voltar para checklist...');
+      console.log('📱 Na primeira etapa, voltando para tela anterior...');
       
-      // Verificar se já existe foto final
-      const { hasPhoto, error } = await hasFinalPhoto(workOrder.id);
-      
-      if (error) {
-        console.warn('⚠️ Erro ao verificar foto final, voltando normalmente:', error);
-        // Em caso de erro, voltar normalmente
-        onBackPress();
-        return;
-      }
-
-      if (hasPhoto && onBackToServiceSteps) {
-        console.log('✅ Foto final existe, voltando para etapas/checklist');
-        // Se tem foto final e a função foi fornecida, voltar para etapas/checklist
+      // SIMPLIFICADO: Sempre voltar para ServiceSteps se a função existir, senão voltar normalmente
+      if (onBackToServiceSteps) {
+        console.log('✅ Voltando para etapas/checklist');
         onBackToServiceSteps();
       } else {
-        console.log('📱 Sem foto final ou função não fornecida, voltando normalmente');
-        // Se não tem foto final ou função não foi fornecida, voltar normalmente
+        console.log('📱 Voltando normalmente');
         onBackPress();
       }
     } catch (error) {
-      console.error('💥 Erro inesperado ao verificar foto final:', error);
+      console.error('💥 Erro inesperado no back:', error);
       // Em caso de erro, voltar normalmente
       onBackPress();
     }
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
+    // Proteção contra mudanças simultâneas
+    if (isChangingStep) {
+      console.log('⚠️ Mudança de step já em progresso, ignorando');
+      return;
+    }
+
     if (activeStepIndex < steps.length - 1) {
-      // Salvar comentário da etapa atual antes de avançar
-      saveCurrentComentario();
-      setActiveStepIndex(activeStepIndex + 1);
+      try {
+        setIsChangingStep(true);
+        
+        // Salvar comentário da etapa atual antes de avançar
+        await saveCurrentComentario();
+        
+        console.log(`🔄 Avançando da etapa ${activeStepIndex} para ${activeStepIndex + 1}`);
+        setActiveStepIndex(activeStepIndex + 1);
+      } catch (error) {
+        console.error('💥 Erro ao avançar etapa:', error);
+      } finally {
+        setTimeout(() => setIsChangingStep(false), 500);
+      }
     }
   };
 
-  const handlePrevious = () => {
+  const handlePrevious = async () => {
+    // Proteção contra mudanças simultâneas
+    if (isChangingStep) {
+      console.log('⚠️ Mudança de step já em progresso, ignorando');
+      return;
+    }
+
     if (activeStepIndex > 0) {
-      // Salvar comentário da etapa atual antes de voltar
-      saveCurrentComentario();
-      setActiveStepIndex(activeStepIndex - 1);
+      try {
+        setIsChangingStep(true);
+        
+        // Salvar comentário da etapa atual antes de voltar
+        await saveCurrentComentario();
+        
+        console.log(`🔄 Voltando da etapa ${activeStepIndex} para ${activeStepIndex - 1}`);
+        setActiveStepIndex(activeStepIndex - 1);
+      } catch (error) {
+        console.error('💥 Erro ao voltar etapa:', error);
+      } finally {
+        setTimeout(() => setIsChangingStep(false), 500);
+      }
     }
   };
 
-  const handleFinish = () => {
-    // Salvar comentário da etapa atual antes de finalizar
-    saveCurrentComentario();
-    
-    const totalEntries = photoEntries.length;
-    const photosCollected = Object.keys(collectedPhotos).length;
-    
-    Alert.alert(
-      'Continuar para Finalização',
-      `Você coletou ${photosCollected} de ${totalEntries} fotos possíveis.\n\nDeseja continuar para a finalização da ordem de serviço?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { 
-          text: 'Continuar', 
-          onPress: () => onFinishPhotoCollection(collectedPhotos)
-        }
-      ]
-    );
+  const handleFinish = async () => {
+    try {
+      // Salvar comentário da etapa atual antes de finalizar
+      await saveCurrentComentario();
+      
+      const totalEntries = photoEntries.length;
+      const photosCollected = Object.keys(collectedPhotos).length;
+      
+      Alert.alert(
+        'Continuar para Finalização',
+        `Você coletou ${photosCollected} de ${totalEntries} fotos possíveis.\n\nDeseja continuar para a finalização da ordem de serviço?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { 
+            text: 'Continuar', 
+            onPress: () => onFinishPhotoCollection(collectedPhotos)
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('💥 Erro ao finalizar:', error);
+    }
   };
 
-  const handleStepPress = (index: number) => {
-    // Salvar comentário da etapa atual antes de trocar
-    saveCurrentComentario();
-    setActiveStepIndex(index);
+  const handleStepPress = async (index: number) => {
+    // Proteção contra mudanças simultâneas
+    if (isChangingStep || index === activeStepIndex) {
+      console.log('⚠️ Mudança de step já em progresso ou step é o mesmo, ignorando');
+      return;
+    }
+
+    try {
+      setIsChangingStep(true);
+      
+      // Salvar comentário da etapa atual antes de trocar
+      await saveCurrentComentario();
+      
+      console.log(`🔄 Mudando para etapa ${index}`);
+      setActiveStepIndex(index);
+    } catch (error) {
+      console.error('💥 Erro ao mudar etapa:', error);
+    } finally {
+      setTimeout(() => setIsChangingStep(false), 500);
+    }
   };
 
   const renderPhotoCard = (entry: PhotoEntry) => {
     const hasPhoto = collectedPhotos[entry.id]; // Foto da sessão atual
     const hasFotoSalva = fotosSalvasUsuario[entry.id]; // Foto já salva pelo usuário
     const hasFotoModelo = entry.fotoModelo; // Foto modelo do banco
-    
-    // Debug log para verificar prioridade das fotos
-    console.log(`🔍 Renderizando card para entrada ${entry.id}:`, {
-      titulo: entry.titulo,
-      hasPhoto: !!hasPhoto,
-      hasFotoSalva: !!hasFotoSalva,
-      hasFotoModelo: !!hasFotoModelo,
-      photoUri: hasPhoto ? hasPhoto.substring(0, 30) + '...' : 'Nenhuma'
-    });
     
     // Definir qual foto exibir (prioridade: sessão atual > salva > modelo)
     let photoToShow = null;

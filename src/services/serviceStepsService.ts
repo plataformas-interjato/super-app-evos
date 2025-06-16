@@ -6,6 +6,7 @@ import {
   CachedServiceEntries 
 } from './cacheService';
 import * as FileSystem from 'expo-file-system';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export interface ServiceStep {
   id: number;
@@ -674,79 +675,110 @@ export const getServiceStepsWithDataCached = async (
   ordemServicoId: number
 ): Promise<{ data: ServiceStep[] | null; error: string | null; fromCache: boolean }> => {
   try {
-    // Verificar conectividade
+    console.log(`🔍 getServiceStepsWithDataCached: tipo_os_id=${tipoOsId}, ordem_servico_id=${ordemServicoId}`);
+    
+    // Verificar conectividade PRIMEIRO
     const NetInfo = require('@react-native-community/netinfo');
     const netInfo = await NetInfo.fetch();
+    console.log(`📶 Conectividade: ${netInfo.isConnected ? 'Online' : 'Offline'}`);
+    
+    // PRIORIDADE 1: Tentar cache SEMPRE primeiro (online ou offline)
+    console.log('📱 Tentando buscar do cache...');
+    const cacheResult = await getCachedServiceStepsWithData(tipoOsId);
+    
+    if (cacheResult.fromCache && cacheResult.data && cacheResult.data.length > 0) {
+      console.log(`✅ ${cacheResult.data.length} etapas carregadas do cache`);
+      return cacheResult;
+    } else {
+      console.log(`❌ Cache: ${cacheResult.error || 'sem dados'}`);
+    }
+    
+    // Se está OFFLINE, parar aqui - NÃO tentar servidor
+    if (!netInfo.isConnected) {
+      console.log('📱 OFFLINE: Tentando forçar uso do cache mesmo expirado...');
+      
+      // Tentar buscar cache mesmo expirado como último recurso
+      try {
+        const { getCachedServiceSteps, getCachedServiceEntries } = await import('./cacheService');
+        
+        // Buscar etapas diretamente (ignorando expiração)
+        const stepsResult = await getCachedServiceSteps(tipoOsId);
+        console.log(`📝 Etapas diretas do cache: ${stepsResult.data?.length || 0}`);
+        
+        if (stepsResult.data && stepsResult.data.length > 0) {
+          // Buscar entradas
+          const etapaIds = stepsResult.data.map(step => step.id);
+          const entriesResult = await getCachedServiceEntries(etapaIds);
+          
+          // Combinar etapas com entradas (mesmo que entradas falhem)
+          const stepsWithData = stepsResult.data.map(step => ({
+            ...step,
+            entradas: entriesResult.data?.[step.id] || []
+          }));
+          
+          console.log(`✅ OFFLINE: ${stepsWithData.length} etapas recuperadas do cache forçado`);
+          return { data: stepsWithData, error: null, fromCache: true };
+        }
+      } catch (forceError) {
+        console.error('💥 Erro ao forçar cache offline:', forceError);
+      }
+      
+      console.log('❌ OFFLINE: Nenhum dado encontrado no cache');
+      return { data: null, error: 'Sem dados offline disponíveis - verifique se fez pré-carregamento', fromCache: false };
+    }
+
+    // APENAS SE ESTIVER ONLINE - buscar do servidor
+    console.log('🌐 ONLINE: Verificando se OS está em andamento...');
     
     // Verificar se a OS está em andamento (dados locais têm prioridade)
-    const { getLocalWorkOrderStatus } = await import('./localStatusService');
-    const localStatus = await getLocalWorkOrderStatus(ordemServicoId);
-    const isWorkOrderInProgress = localStatus?.status === 'em_progresso';
-    
-    if (isWorkOrderInProgress) {
-      console.log(`🚧 OS ${ordemServicoId} em andamento - priorizando dados locais/cache`);
+    try {
+      const { getLocalWorkOrderStatus } = await import('./localStatusService');
+      const localStatus = await getLocalWorkOrderStatus(ordemServicoId);
+      const isWorkOrderInProgress = localStatus?.status === 'em_progresso';
+      console.log(`🚧 OS em andamento: ${isWorkOrderInProgress ? 'Sim' : 'Não'}`);
       
-      // Para OS em andamento, SEMPRE usar cache local se disponível
-      const cacheResult = await getCachedServiceStepsWithData(tipoOsId);
-      
-      if (cacheResult.fromCache && cacheResult.data) {
-        console.log(`✅ ${cacheResult.data.length} etapas carregadas do cache (OS em andamento)`);
-        return cacheResult;
+      if (isWorkOrderInProgress) {
+        console.log('⚠️ OS em andamento: priorizando dados locais, não buscando servidor');
+        return { data: null, error: 'OS em andamento - dados locais prioritários', fromCache: false };
       }
-      
-      // Se não há cache e estamos offline, retornar erro apropriado
-      if (!netInfo.isConnected) {
-        console.log('❌ OS em andamento, mas sem cache e offline');
-        return { data: null, error: 'Dados não disponíveis offline para OS em andamento', fromCache: false };
-      }
-      
-      // Se não há cache mas estamos online, buscar do servidor apenas como último recurso
-      console.log('⚠️ OS em andamento sem cache, buscando do servidor como último recurso');
+    } catch (statusError) {
+      console.warn('⚠️ Erro ao verificar status local:', statusError);
     }
-    
-    // Se offline, tentar buscar do cache
-    if (!netInfo.isConnected) {
-      console.log('📱 Offline: buscando etapas do cache...');
-      const cacheResult = await getCachedServiceStepsWithData(tipoOsId);
+
+    // PRIORIDADE 3: Online - buscar do servidor (COM PROTEÇÃO CONTRA ERRO)
+    console.log('🌐 ONLINE: Buscando etapas do servidor...');
+    try {
+      const serverResult = await getServiceStepsWithData(tipoOsId, ordemServicoId);
       
-      if (cacheResult.fromCache && cacheResult.data) {
-        console.log(`✅ ${cacheResult.data.length} etapas carregadas do cache offline`);
-        return cacheResult;
+      if (serverResult.data && !serverResult.error) {
+        // Fazer cache dos dados do servidor
+        try {
+          await cacheServerData(tipoOsId, serverResult.data);
+        } catch (cacheError) {
+          console.warn('⚠️ Erro ao fazer cache dos dados do servidor:', cacheError);
+        }
+        
+        return { data: serverResult.data, error: null, fromCache: false };
       } else {
-        console.log('❌ Nenhum dado encontrado no cache offline');
-        return { data: null, error: 'Sem dados offline disponíveis', fromCache: false };
+        console.error('❌ Erro do servidor:', serverResult.error);
+        return serverResult;
       }
-    }
-
-    // Online: se OS NÃO está em andamento, tentar cache primeiro, depois servidor
-    if (!isWorkOrderInProgress) {
-      console.log('🌐 Online: verificando cache...');
-      const cacheResult = await getCachedServiceStepsWithData(tipoOsId);
+    } catch (serverError) {
+      console.error('💥 Erro de conexão com servidor:', serverError);
+      // Se há erro de conexão, tentar usar dados do cache mesmo expirados
+      console.log('🔄 Tentando usar cache como fallback após erro de servidor...');
       
-      if (cacheResult.fromCache && cacheResult.data) {
-        console.log(`✅ ${cacheResult.data.length} etapas carregadas do cache`);
-        return cacheResult;
+      const fallbackCache = await getCachedServiceStepsWithData(tipoOsId);
+      if (fallbackCache.data && fallbackCache.data.length > 0) {
+        console.log('✅ FALLBACK: Usando dados do cache após erro de servidor');
+        return { ...fallbackCache, fromCache: true };
       }
+      
+      return { data: null, error: `Erro de conexão: ${serverError}`, fromCache: false };
     }
-
-    // Cache não disponível ou expirado, buscar do servidor
-    console.log('🌐 Buscando etapas do servidor...');
-    const serverResult = await getServiceStepsWithData(tipoOsId, ordemServicoId);
-    
-    if (serverResult.data && !serverResult.error) {
-      // Só fazer cache se a OS NÃO estiver em andamento (para não sobrepor dados locais)
-      if (!isWorkOrderInProgress) {
-        await cacheServerData(tipoOsId, serverResult.data);
-        console.log(`✅ ${serverResult.data.length} etapas carregadas do servidor e salvas no cache`);
-      } else {
-        console.log(`⚠️ ${serverResult.data.length} etapas carregadas do servidor (cache não atualizado - OS em andamento)`);
-      }
-    }
-
-    return { ...serverResult, fromCache: false };
   } catch (error) {
     console.error('💥 Erro inesperado ao buscar etapas com cache:', error);
-    return { data: null, error: 'Erro inesperado ao buscar etapas', fromCache: false };
+    return { data: null, error: `Erro inesperado: ${error}`, fromCache: false };
   }
 };
 

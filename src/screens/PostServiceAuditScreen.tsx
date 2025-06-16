@@ -17,8 +17,7 @@ import { Picker } from '@react-native-picker/picker';
 import * as ImagePicker from 'expo-image-picker';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
-import { saveAuditoriaFinalOffline, savePhotoFinalOffline, checkNetworkConnection } from '../services/offlineService';
-import { hasFinalPhoto } from '../services/auditService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface PostServiceAuditScreenProps {
   workOrder: WorkOrder;
@@ -64,69 +63,32 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
     checkExistingFinalPhoto();
   }, []);
 
-  // Função de back personalizada que considera se já existe foto final
-  const handleBackPress = async () => {
-    try {
-      // Verificar se já existe foto final
-      const { hasPhoto, error } = await hasFinalPhoto(workOrder.id);
-      
-      if (error) {
-        console.warn('⚠️ Erro ao verificar foto final, voltando normalmente:', error);
-        // Em caso de erro, voltar normalmente
-        onBackPress();
-        return;
-      }
-
-      if (hasPhoto && onBackToServiceSteps) {
-        console.log('✅ Foto final existe, voltando para etapas/entradas');
-        // Se tem foto final e a função foi fornecida, voltar para etapas/entradas
-        onBackToServiceSteps();
-      } else {
-        console.log('📱 Sem foto final ou função não fornecida, voltando normalmente');
-        // Se não tem foto final ou função não foi fornecida, voltar normalmente
-        onBackPress();
-      }
-    } catch (error) {
-      console.error('💥 Erro inesperado ao verificar foto final:', error);
-      // Em caso de erro, voltar normalmente
-      onBackPress();
-    }
-  };
-
   const checkExistingFinalPhoto = async () => {
     try {
       setIsCheckingPhoto(true);
       
-      // Timeout de 5 segundos para evitar travamento
-      const timeoutPromise = new Promise<{ hasPhoto: boolean; error: string | null }>((_, reject) => 
-        setTimeout(() => reject(new Error('Timeout na verificação')), 5000)
-      );
+      // VERIFICAR APENAS OFFLINE - SEM REQUISIÇÕES ONLINE
+      console.log('🔍 Verificando foto final offline...');
       
-      const checkPromise = hasFinalPhoto(workOrder.id);
-      
-      const { hasPhoto, error } = await Promise.race([checkPromise, timeoutPromise]);
-      
-      if (error) {
-        console.warn('⚠️ Erro ao verificar foto final:', error);
-        // Continua normalmente se houver erro
-        setIsCheckingPhoto(false);
-        return;
+      // Verificar se há dados offline de auditoria
+      const offlineAuditorias = await AsyncStorage.getItem('offline_actions');
+      if (offlineAuditorias) {
+        const actions = JSON.parse(offlineAuditorias);
+        const hasAuditoriaFinal = Object.values(actions).some((action: any) => 
+          action.type === 'AUDITORIA_FINAL' && 
+          action.workOrderId === workOrder.id
+        );
+        
+        if (hasAuditoriaFinal) {
+          console.log('✅ Auditoria final encontrada offline');
+        }
       }
-
-      if (hasPhoto) {
-        console.log('✅ Foto final já existe, voltando usando handleBackPress...');
-        // Usar setTimeout para evitar problemas de navegação assíncrona
-        setTimeout(() => {
-          handleBackPress();
-        }, 100);
-        return;
-      }
-
-      // Não tem foto, continua na tela normalmente
+      
+      // Sempre continuar na tela normalmente (sem bloquear por verificações online)
       setIsCheckingPhoto(false);
     } catch (error) {
-      console.error('💥 Erro inesperado ao verificar foto final (timeout ou erro de rede):', error);
-      // Em caso de erro ou timeout, sempre continuar na tela normalmente
+      console.error('💥 Erro ao verificar foto final offline:', error);
+      // Em caso de erro, sempre continuar na tela normalmente
       setIsCheckingPhoto(false);
     }
   };
@@ -152,45 +114,35 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
         const photoUri = result.assets[0].uri;
         setFinalPhoto(photoUri);
 
-        // Salvar foto final usando o serviço offline
+        // SALVAR DIRETO NO ASYNCSTORAGE - SEM IMPORTS DINÂMICOS
         try {
-          const { success, error, savedOffline } = await savePhotoFinalOffline(
-            workOrder.id,
-            user.id,
-            photoUri
-          );
-
-          if (success) {
-            if (savedOffline) {
-              // Verificar se está offline para mostrar o popup
-              const isOnline = await checkNetworkConnection();
-              
-              if (!isOnline) {
-                console.log('📱 App offline: mostrando popup de foto final salva localmente');
-                Alert.alert(
-                  'Foto Salva',
-                  'Foto capturada e salva localmente. Será sincronizada automaticamente quando houver conexão com a internet.',
-                  [{ text: 'OK' }]
-                );
-              } else {
-                console.log('🌐 App online: foto final salva mas não mostrando popup');
-              }
-            } else {
-              console.log('✅ Foto final salva online com sucesso');
-            }
-          } else {
-            console.error('❌ Erro ao salvar foto final:', error);
-            Alert.alert(
-              'Erro',
-              'Não foi possível salvar a foto. Tente novamente.'
-            );
-            setFinalPhoto(null); // Remove a foto se não conseguiu salvar
-          }
-        } catch (auditError) {
-          console.error('💥 Erro inesperado ao salvar foto final:', auditError);
+          console.log('💾 Salvando foto final direto no AsyncStorage...');
+          
+          const offlineKey = 'offline_actions';
+          const existingDataStr = await AsyncStorage.getItem(offlineKey);
+          const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
+          
+          const actionId = `photo_final_${workOrder.id}_${user.id}_${Date.now()}`;
+          existingData[actionId] = {
+            id: actionId,
+            type: 'PHOTO_FINAL',
+            timestamp: new Date().toISOString(),
+            workOrderId: workOrder.id,
+            technicoId: user.id,
+            data: {
+              photoUri,
+            },
+            synced: false,
+            attempts: 0
+          };
+          
+          await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
+          console.log('✅ Foto final salva offline com sucesso');
+        } catch (saveError) {
+          console.error('💥 Erro ao salvar foto final offline:', saveError);
           Alert.alert(
             'Erro',
-            'Erro inesperado ao salvar a foto. Tente novamente.'
+            'Não foi possível salvar a foto. Tente novamente.'
           );
           setFinalPhoto(null);
         }
@@ -230,49 +182,36 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
     setIsLoading(true);
     
     try {
-      console.log('📤 Chamando saveAuditoriaFinalOffline...');
-      // Salvar auditoria final com foto
-      const { success, error, savedOffline } = await saveAuditoriaFinalOffline(
-        workOrder.id,
-        user.id,
-        finalPhoto,
-        workCompleted,
-        !workCompleted ? selectedReason : undefined,
-        additionalComments.trim() || undefined
-      );
-
-      console.log('📥 Resultado do salvamento:', { success, error, savedOffline });
-
-      if (success) {
-        if (savedOffline) {
-          // Verificar se está offline para mostrar o popup
-          const isOnline = await checkNetworkConnection();
-          
-          if (!isOnline) {
-            console.log('📱 App offline: mostrando popup de auditoria salva localmente');
-            Alert.alert(
-              'Auditoria Salva',
-              'Auditoria salva localmente. Será sincronizada automaticamente quando houver conexão com a internet.',
-              [{ text: 'OK', onPress: () => {
-                console.log('🚀 Chamando onFinishAudit após popup offline');
-                onFinishAudit({ workCompleted, reason: selectedReason, additionalComments });
-              }}]
-            );
-          } else {
-            console.log('🌐 App online: auditoria salva mas não mostrando popup');
-            console.log('🚀 Chamando onFinishAudit diretamente');
-            onFinishAudit({ workCompleted, reason: selectedReason, additionalComments });
-          }
-        } else {
-          // Auditoria salva online com sucesso - ir direto para próxima tela sem popup
-          console.log('✅ Auditoria salva online com sucesso - indo direto para próxima tela');
-          console.log('🚀 Chamando onFinishAudit após salvamento online');
-          onFinishAudit({ workCompleted, reason: selectedReason, additionalComments });
-        }
-      } else {
-        console.log('❌ Erro no salvamento:', error);
-        Alert.alert('Erro', error || 'Não foi possível salvar a auditoria. Tente novamente.');
-      }
+      // SALVAR AUDITORIA DIRETO NO ASYNCSTORAGE - SEM IMPORTS DINÂMICOS
+      console.log('💾 Salvando auditoria final direto no AsyncStorage...');
+      
+      const offlineKey = 'offline_actions';
+      const existingDataStr = await AsyncStorage.getItem(offlineKey);
+      const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
+      
+      const actionId = `auditoria_final_${workOrder.id}_${Date.now()}`;
+      existingData[actionId] = {
+        id: actionId,
+        type: 'AUDITORIA_FINAL',
+        timestamp: new Date().toISOString(),
+        workOrderId: workOrder.id,
+        technicoId: user.id,
+        data: {
+          photoUri: finalPhoto,
+          trabalhoRealizado: workCompleted,
+          motivo: !workCompleted ? selectedReason : undefined,
+          comentario: additionalComments.trim() || undefined,
+        },
+        synced: false,
+        attempts: 0,
+      };
+      
+      await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
+      console.log('✅ Auditoria final salva offline com sucesso');
+      
+      // Sempre prosseguir para a próxima tela
+      console.log('🚀 Chamando onFinishAudit');
+      onFinishAudit({ workCompleted, reason: selectedReason, additionalComments });
     } catch (error) {
       console.error('💥 Erro ao finalizar auditoria:', error);
       Alert.alert('Erro', 'Erro inesperado ao finalizar auditoria.');
@@ -303,7 +242,7 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
       
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={handleBackPress} style={styles.backButton}>
+        <TouchableOpacity onPress={onBackPress} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Auditoria pós serviço</Text>

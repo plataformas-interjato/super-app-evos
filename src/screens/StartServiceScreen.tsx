@@ -186,8 +186,15 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
   };
 
   const handleConfirmStart = async () => {
+    console.log('🔥 StartServiceScreen - handleConfirmStart iniciado');
+    console.log('📷 Foto disponível:', photo ? 'Sim' : 'Não');
+    console.log('👤 Usuário:', user?.name);
+    console.log('📋 Ordem de serviço:', workOrder?.id);
+    console.log('🔧 onConfirmStart função:', typeof onConfirmStart);
+    
     // Verificar se há foto antes de prosseguir
     if (!photo) {
+      console.log('❌ Sem foto - mostrando alerta');
       Alert.alert(
         'Foto Obrigatória',
         'É necessário tirar uma foto para confirmar o início da ordem de serviço.',
@@ -196,12 +203,20 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
       return;
     }
 
+    console.log('⏳ Iniciando loading...');
     setIsLoading(true);
     try {
+      console.log('🚀 Chamando onConfirmStart com foto...');
       await onConfirmStart(photo || undefined);
+      console.log('✅ onConfirmStart executado com sucesso');
     } catch (error) {
+      console.error('❌ Erro no handleConfirmStart do StartServiceScreen:', error);
+      if (error instanceof Error) {
+        console.error('❌ Stack trace:', error.stack);
+      }
       Alert.alert('Erro', 'Não foi possível iniciar a ordem de serviço.');
     } finally {
+      console.log('🔚 Finalizando loading...');
       setIsLoading(false);
     }
   };

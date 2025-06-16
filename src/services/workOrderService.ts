@@ -294,4 +294,34 @@ export const getCacheStats = async (): Promise<{
     cacheAge: 0,
     lastSync: 0
   };
-}; 
+};
+
+/**
+ * EXEMPLO DE USO DO NOVO SISTEMA DE PRÉ-CARREGAMENTO:
+ * 
+ * 1. Na MainScreen, quando as OSs são carregadas, automaticamente 
+ *    chama preloadWorkOrdersData() para carregar:
+ *    - Todas as etapas de cada tipo de OS
+ *    - Todas as entradas de cada etapa
+ *    - Todas as fotos modelo
+ *    - Dados de cache local
+ * 
+ * 2. O pré-carregamento é inteligente:
+ *    - Só roda se necessário (novas OSs ou cache expirado)
+ *    - Roda em background sem travar a UI
+ *    - Mostra progresso para o usuário
+ *    - Funciona offline (usa cache existente)
+ * 
+ * 3. Benefícios para o técnico:
+ *    - Ao sair para campo, TODOS os dados já estão locais
+ *    - Funciona 100% offline após o pré-carregamento
+ *    - Fotos modelo, etapas, checklists tudo disponível
+ *    - Sincronização automática quando retorna online
+ * 
+ * 4. Fluxo típico:
+ *    - Técnico abre app na empresa (com wifi)
+ *    - App carrega OSs e pré-carrega TUDO automaticamente
+ *    - Técnico sai para campo sem internet
+ *    - Tudo funciona normalmente (etapas, fotos, etc.)
+ *    - Ao retornar com internet, tudo sincroniza
+ */ 
