@@ -201,28 +201,79 @@ function AppContent() {
     
     if (selectedWorkOrder) {
       try {
-        console.log('⏳ Atualizando status local para finalizada...');
+        console.log('⏳ Verificando conectividade e finalizando OS...');
         
-        // SIMPLIFICADO - Salvar status APENAS localmente no AsyncStorage
-        try {
-          const statusData = {
-            status: 'finalizada',
-            synced: false,
-            updatedAt: new Date().toISOString(),
-          };
+        // Verificar conectividade
+        const NetInfo = require('@react-native-community/netinfo');
+        const netInfo = await NetInfo.fetch();
+        
+        if (netInfo.isConnected) {
+          // ONLINE: Finalizar no servidor e limpar dados locais
+          console.log('🌐 Online - finalizando OS no servidor...');
           
+          try {
+            const { updateWorkOrderStatus } = await import('./src/services/workOrderService');
+            const { clearAllLocalDataForWorkOrder } = await import('./src/services/localStatusService');
+            const { clearOfflineActionsForWorkOrder } = await import('./src/services/offlineService');
+            
+            // 1. Finalizar OS no servidor
+            const { error: statusError } = await updateWorkOrderStatus(
+              selectedWorkOrder.id.toString(), 
+              'finalizada'
+            );
+            
+            if (statusError) {
+              console.warn('⚠️ Erro ao finalizar OS online:', statusError);
+              // Se falhar online, salvar apenas localmente
+              await AsyncStorage.setItem(
+                `local_work_order_status_${selectedWorkOrder.id}`,
+                JSON.stringify({
+                  status: 'finalizada',
+                  synced: false,
+                  updatedAt: new Date().toISOString(),
+                })
+              );
+            } else {
+              console.log('✅ OS finalizada online com sucesso');
+              
+              // 2. Limpar TODOS os dados locais da OS para remover ícone de sincronização
+              await clearAllLocalDataForWorkOrder(selectedWorkOrder.id);
+              
+              // 3. Limpar especificamente ações offline desta OS
+              await clearOfflineActionsForWorkOrder(selectedWorkOrder.id);
+              
+              // 4. Notificar callbacks de OS finalizada para atualizar a UI
+              const { notifyOSFinalizadaCallbacks } = await import('./src/services/offlineService');
+              notifyOSFinalizadaCallbacks(selectedWorkOrder.id);
+              
+              console.log('🧹 Dados locais e ações offline limpas - ícone de sincronização removido');
+            }
+            
+          } catch (onlineError) {
+            console.error('❌ Erro ao finalizar OS online:', onlineError);
+            // Fallback para salvamento local
+            await AsyncStorage.setItem(
+              `local_work_order_status_${selectedWorkOrder.id}`,
+              JSON.stringify({
+                status: 'finalizada',
+                synced: false,
+                updatedAt: new Date().toISOString(),
+              })
+            );
+          }
+          
+        } else {
+          // OFFLINE: Salvar apenas localmente
+          console.log('📱 Offline - salvando status local...');
           await AsyncStorage.setItem(
             `local_work_order_status_${selectedWorkOrder.id}`,
-            JSON.stringify(statusData)
+            JSON.stringify({
+              status: 'finalizada',
+              synced: false,
+              updatedAt: new Date().toISOString(),
+            })
           );
-          console.log('✅ Status local salvo diretamente no AsyncStorage');
-        } catch (statusError) {
-          console.error('❌ Erro ao salvar status local:', statusError);
-          // Continuar mesmo com erro de status
         }
-        
-        // REMOVIDO: updateWorkOrderStatus que pode fazer requisições online
-        console.log('📱 Operação offline - sem tentativa de sincronização online');
         
       } catch (error) {
         console.error('❌ Erro ao finalizar OS:', error);

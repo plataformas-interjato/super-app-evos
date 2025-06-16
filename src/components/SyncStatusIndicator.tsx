@@ -149,7 +149,17 @@ const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({ style }) => {
     // Verificar periodicamente
     const interval = setInterval(checkStatus, 5000); // Reduzido para 5 segundos para ser mais responsivo
 
-    return () => clearInterval(interval);
+    // Registrar callback para OS finalizada para atualização imediata
+    const { registerOSFinalizadaCallback } = require('../services/offlineService');
+    const unsubscribeOSFinalizada = registerOSFinalizadaCallback(async (workOrderId: number) => {
+      console.log(`🔄 OS ${workOrderId} finalizada - atualizando SyncStatusIndicator`);
+      await checkStatus();
+    });
+
+    return () => {
+      clearInterval(interval);
+      unsubscribeOSFinalizada();
+    };
   }, []);
 
   // Escutar mudanças nas ações offline para atualizar em tempo real

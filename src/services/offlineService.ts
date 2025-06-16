@@ -546,6 +546,9 @@ export const syncAllPendingActions = async (): Promise<{
           
           // Limpar TODOS os dados locais da OS sincronizada (não apenas status)
           await clearAllLocalDataForWorkOrder(parseInt(workOrderId));
+          
+          // Notificar callbacks de OS finalizada para atualizar a UI
+          notifyOSFinalizadaCallbacks(parseInt(workOrderId));
         } else {
           failed++;
           console.log(`❌ OS ${workOrderId} teve falhas na sincronização`);
@@ -647,6 +650,7 @@ export const saveAuditoriaFinalOffline = async (
     
     if (netInfo.isConnected) {
       // Online: tentar salvar diretamente
+      console.log('🌐 Tentando salvar auditoria final online...');
       const { data, error } = await saveAuditoriaFinal(
         workOrderId, 
         technicoId, 
@@ -658,21 +662,30 @@ export const saveAuditoriaFinalOffline = async (
       
       if (error) {
         // Se falhar online, salvar offline como fallback
+        console.log('⚠️ Falha ao salvar online, salvando offline como fallback');
         await saveAuditoriaFinalToQueue(workOrderId, technicoId, photoUri, trabalhoRealizado, motivo, comentario);
         return { success: true, savedOffline: true };
       }
       
-      // ✅ Sucesso online: limpar status local para remover ícone de sincronização
-      console.log('✅ Auditoria salva online - aguardando finalização da OS na tela final');
+      // ✅ Sucesso online: limpar TODOS os dados locais e ações offline
+      console.log('✅ Auditoria salva online com sucesso - limpando dados locais');
+      
+      // Limpar dados locais (status, etapas, fotos, etc.)
+      const { clearAllLocalDataForWorkOrder } = await import('./localStatusService');
       await clearAllLocalDataForWorkOrder(workOrderId);
       
       // Limpar especificamente ações offline desta OS para evitar "1 pendente"
       await clearOfflineActionsForWorkOrder(workOrderId);
       
+      // Notificar callbacks de OS finalizada para atualizar a UI
+      notifyOSFinalizadaCallbacks(workOrderId);
+      
+      console.log('🧹 Dados locais e ações offline limpas - ícone de sincronização removido');
+      
       return { success: true, savedOffline: false };
     } else {
       // Offline: salvar na fila
-      console.log('📱 Auditoria salva offline para sincronização');
+      console.log('📱 Offline - salvando auditoria na fila para sincronização');
       await saveAuditoriaFinalToQueue(workOrderId, technicoId, photoUri, trabalhoRealizado, motivo, comentario);
       return { success: true, savedOffline: true };
     }
@@ -852,7 +865,7 @@ export const registerOSFinalizadaCallback = (callback: (workOrderId: number) => 
 /**
  * Notifica todos os callbacks registrados sobre uma OS finalizada online
  */
-const notifyOSFinalizadaCallbacks = (workOrderId: number) => {
+export const notifyOSFinalizadaCallbacks = (workOrderId: number) => {
   console.log(`🔔 Notificando callbacks sobre OS ${workOrderId} finalizada online...`);
   osFinalizadaCallbacks.forEach(callback => {
     try {
