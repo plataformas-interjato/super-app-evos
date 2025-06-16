@@ -61,8 +61,13 @@ function AppContent() {
   };
 
   const handleBackToMain = () => {
+    console.log('🔙 Voltando para tela principal');
     setCurrentScreen('main');
     setSelectedWorkOrder(null);
+    
+    // NOVO: Forçar atualização sempre que volta para main
+    console.log('🔄 Forçando atualização da home ao voltar...');
+    setRefreshMainScreen(prev => prev + 1);
   };
 
   const handleOpenWorkOrder = (workOrder: WorkOrder) => {
@@ -295,12 +300,15 @@ function AppContent() {
   const handleViewWorkOrders = () => {
     console.log('🔄 Voltando para lista de OSs');
     
-    // Voltar para a tela principal SIMPLIFICADO - SEM TIMEOUTS OU STATES COMPLEXOS
+    // Voltar para a tela principal e forçar atualização
     setCurrentScreen('main');
     setSelectedWorkOrder(null);
     
-    // REMOVIDO: setTimeout e setRefreshMainScreen que podem causar loops
-    console.log('✅ Navegação para main concluída');
+    // NOVO: Forçar atualização da home após finalizar OS
+    console.log('🔄 Forçando atualização da home após finalizar OS...');
+    setRefreshMainScreen(prev => prev + 1);
+    
+    console.log('✅ Navegação para main concluída com atualização forçada');
   };
 
   if (loading) {

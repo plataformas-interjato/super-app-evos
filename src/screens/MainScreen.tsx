@@ -56,6 +56,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
   const { appUser } = useAuth();
 
   useEffect(() => {
+    // CARREGAMENTO INICIAL - apenas na primeira vez
     loadWorkOrders();
     
     // Verificar conexão inicial
@@ -104,41 +105,20 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
       }
     });
     
-    // Registrar callback para OS finalizada online
+    // Callback para OS finalizada - MANTER para atualizar quando OS é finalizada
     const unsubscribeOSFinalizada = registerOSFinalizadaCallback(async (workOrderId) => {
-      console.log(`✅ OS ${workOrderId} finalizada online - atualizando home completamente`);
-      
-      const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
+      console.log(`✅ OS ${workOrderId} finalizada online - atualizando home INSTANTANEAMENTE`);
       
       try {
-        // PRIMEIRO: Atualizar cache de forma inteligente preservando OS em andamento
-        const { success, error } = await updateCacheAfterOSFinalizada(
-          workOrderId,
-          () => fetchWorkOrdersWithFilters(
-            userId,
-            activeFilter,
-            searchText.trim() || undefined
-          ),
-          userId
-        );
-        
-        if (success) {
-          console.log(`✅ Cache atualizado após OS ${workOrderId} finalizada`);
-        }
-        
-        // SEGUNDO: Forçar recarregamento completo da tela (independente do cache)
-        console.log('🔄 Forçando recarregamento completo da home...');
-        setTimeout(async () => {
-          await loadWorkOrders();
-          console.log('✅ Home atualizada após OS finalizada online');
-        }, 500);
+        // ATUALIZAÇÃO INSTANTÂNEA: Não usar setTimeout, atualizar imediatamente
+        console.log('🔄 Atualizando home imediatamente após OS finalizada...');
+        await loadWorkOrders();
+        console.log('✅ Home atualizada instantaneamente após OS finalizada online');
         
       } catch (error) {
         console.error('❌ Erro ao processar OS finalizada:', error);
         // Mesmo com erro, tentar recarregar
-        setTimeout(async () => {
-          await loadWorkOrders();
-        }, 500);
+        await loadWorkOrders();
       }
     });
 
@@ -149,7 +129,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     };
   }, [appUser]);
 
-  // Sistema de refresh automático a cada 3 minutos quando online
+  // Sistema de refresh automático a cada 3 minutos quando online - MANTER
   useEffect(() => {
     let refreshInterval: NodeJS.Timeout;
 
@@ -182,7 +162,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     };
   }, [appUser, isConnected]);
 
-  // Recarregar quando filtros mudarem - COM PROTEÇÃO CONTRA LOOPS
+  // Recarregar quando filtros mudarem - MANTER para funcionalidade dos filtros
   useEffect(() => {
     const newFilterKey = `${activeFilter}_${searchText}`;
     
@@ -194,7 +174,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     }
   }, [activeFilter, searchText, loading, isLoadingWorkOrders, lastFilterKey]);
 
-  // Recarregar quando refreshTrigger mudar (forçado pelo App) - COM PROTEÇÃO CONTRA LOOPS
+  // Recarregar quando refreshTrigger mudar (forçado pelo App) - MANTER para quando finaliza OS
   useEffect(() => {
     if (refreshTrigger && refreshTrigger > 0 && refreshTrigger !== lastRefreshTrigger && !isLoadingWorkOrders) {
       console.log('🔄 Refresh forçado da MainScreen, recarregando OSs...', { refreshTrigger, lastRefreshTrigger });
@@ -234,18 +214,58 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
       const netInfo = await NetInfo.fetch();
       console.log('📶 Status de conectividade:', netInfo.isConnected ? 'Online' : 'Offline');
       
-      // Usar o sistema de cache que funciona offline
-      const { data, error: fetchError, fromCache } = await getWorkOrdersWithCache(
-        // Função para buscar do servidor quando online
-        () => fetchWorkOrdersWithFilters(
+      // MELHORADO: Se online, sempre buscar dados frescos para garantir status atualizados
+      let data, fetchError, fromCache;
+      
+      if (netInfo.isConnected) {
+        console.log('🌐 ONLINE: Buscando dados frescos para garantir status atualizados');
+        
+        // Limpar cache primeiro para garantir dados frescos
+        const { clearWorkOrdersCache } = require('../services/workOrderCacheService');
+        await clearWorkOrdersCache(userId);
+        
+        // Buscar diretamente do servidor
+        const freshResult = await fetchWorkOrdersWithFilters(
           userId,
           'todas', // Buscar todas para fazer cache completo
           undefined // Sem filtro de busca para cache completo
-        ),
-        userId,
-        activeFilter,
-        searchText.trim() || undefined
-      );
+        );
+        
+        data = freshResult.data;
+        fetchError = freshResult.error;
+        fromCache = false;
+        
+        // Fazer cache dos dados frescos
+        if (data && !fetchError) {
+          const { cacheWorkOrders } = require('../services/workOrderCacheService');
+          await cacheWorkOrders(data, userId);
+          
+          // Aplicar filtros
+          const { filterCachedWorkOrders } = require('../services/workOrderCacheService');
+          data = filterCachedWorkOrders(
+            data,
+            activeFilter,
+            searchText.trim() || undefined
+          );
+        }
+      } else {
+        // OFFLINE: Usar cache como antes
+        console.log('📱 OFFLINE: Usando sistema de cache');
+        const result = await getWorkOrdersWithCache(
+          () => fetchWorkOrdersWithFilters(
+            userId,
+            'todas',
+            undefined
+          ),
+          userId,
+          activeFilter,
+          searchText.trim() || undefined
+        );
+        
+        data = result.data;
+        fetchError = result.error;
+        fromCache = result.fromCache;
+      }
 
       if (fetchError) {
         setError(fetchError);
