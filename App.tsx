@@ -18,7 +18,6 @@ import { WorkOrder } from './src/types/workOrder';
 import { startAutoSync, syncAllPendingActions } from './src/services/offlineService';
 import { updateLocalWorkOrderStatus } from './src/services/localStatusService';
 import { updateWorkOrderStatus } from './src/services/workOrderService';
-import { InitialLoadingScreen } from './src/components/InitialLoadingScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'startService' | 'steps' | 'audit' | 'photoCollection' | 'auditSaving' | 'auditSuccess';
@@ -277,15 +276,6 @@ function AppContent() {
 
   return (
     <View style={styles.container}>
-      {/* Tela de carga inicial */}
-      <InitialLoadingScreen
-        visible={initialLoading}
-        progress={initialProgress}
-        onComplete={() => {
-          console.log('✅ Carga inicial concluída - usuário pode usar o app');
-        }}
-      />
-
       {/* Conteúdo principal do app */}
       {currentScreen === 'main' && renderMainScreen()}
       {currentScreen === 'profile' && (

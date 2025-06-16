@@ -51,7 +51,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onForgotPassword }) => {
 
   return (
     <View style={styles.container}>
-      {/* Background SVG ocupando toda a tela - FIXO */}
+      {/* Background SVG ocupando toda a tela - SEMPRE FIXO */}
       <View style={styles.backgroundContainer}>
         <BackgroundLoginSvg 
           width="100%" 
@@ -62,97 +62,98 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onForgotPassword }) => {
         />
       </View>
 
-      {/* KeyboardAvoidingView para celulares menores */}
-      <KeyboardAvoidingView 
-        style={styles.keyboardWrapper}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
-        enabled={isSmallDevice || isMediumDevice}
-      >
-        {/* ScrollView para conteúdo */}
-        <ScrollView 
-          style={styles.scrollContainer}
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
+      {/* Conteúdo sobreposto ao background - SEM AFETAR O FUNDO */}
+      <View style={styles.contentWrapper}>
+        {/* Logo fixo na parte superior */}
+        <View style={styles.logoContainer}>
+          <LogoEvosSvg 
+            width={width * (isSmallDevice ? 0.5 : 0.6)} 
+            height={(width * (isSmallDevice ? 0.5 : 0.6)) * 0.31} 
+            preserveAspectRatio="xMidYMid meet"
+          />
+        </View>
+
+        {/* KeyboardAvoidingView APENAS para o formulário */}
+        <KeyboardAvoidingView 
+          style={styles.keyboardWrapper}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
         >
-          {/* Logo EVOS */}
-          <View style={styles.logoContainer}>
-            <LogoEvosSvg 
-              width={width * (isSmallDevice ? 0.5 : 0.6)} 
-              height={(width * (isSmallDevice ? 0.5 : 0.6)) * 0.31} 
-              preserveAspectRatio="xMidYMid meet"
-            />
-          </View>
+          <ScrollView 
+            style={styles.scrollContainer}
+            contentContainerStyle={styles.scrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Form container */}
+            <View style={styles.formContainer}>
+              <Text style={styles.title}>Acesse sua conta</Text>
 
-          {/* Form container - mais baixo */}
-          <View style={styles.formContainer}>
-            <Text style={styles.title}>Acesse sua conta</Text>
-
-            {/* Email input */}
-            <View style={styles.inputContainer}>
-              <View style={styles.inputWrapper}>
-                <Ionicons name="person" size={20} color="#666" style={styles.inputIcon} />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Email"
-                  placeholderTextColor="#999"
-                  value={email}
-                  onChangeText={setEmail}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoComplete="email"
-                />
-              </View>
-            </View>
-
-            {/* Password input */}
-            <View style={styles.inputContainer}>
-              <View style={styles.inputWrapper}>
-                <Ionicons name="lock-closed" size={20} color="#666" style={styles.inputIcon} />
-                <TextInput
-                  style={styles.passwordInput}
-                  placeholder="Senha"
-                  placeholderTextColor="#999"
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry={!showPassword}
-                  autoComplete="password"
-                />
-                <TouchableOpacity
-                  style={styles.eyeIcon}
-                  onPress={() => setShowPassword(!showPassword)}
-                >
-                  <Ionicons
-                    name={showPassword ? 'eye-off' : 'eye'}
-                    size={20}
-                    color="#666"
+              {/* Email input */}
+              <View style={styles.inputContainer}>
+                <View style={styles.inputWrapper}>
+                  <Ionicons name="person" size={20} color="#666" style={styles.inputIcon} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Email"
+                    placeholderTextColor="#999"
+                    value={email}
+                    onChangeText={setEmail}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoComplete="email"
                   />
-                </TouchableOpacity>
+                </View>
               </View>
+
+              {/* Password input */}
+              <View style={styles.inputContainer}>
+                <View style={styles.inputWrapper}>
+                  <Ionicons name="lock-closed" size={20} color="#666" style={styles.inputIcon} />
+                  <TextInput
+                    style={styles.passwordInput}
+                    placeholder="Senha"
+                    placeholderTextColor="#999"
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry={!showPassword}
+                    autoComplete="password"
+                  />
+                  <TouchableOpacity
+                    style={styles.eyeIcon}
+                    onPress={() => setShowPassword(!showPassword)}
+                  >
+                    <Ionicons
+                      name={showPassword ? 'eye-off' : 'eye'}
+                      size={20}
+                      color="#666"
+                    />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Forgot password link */}
+              <TouchableOpacity 
+                style={styles.forgotPasswordButton}
+                onPress={onForgotPassword}
+              >
+                <Text style={styles.forgotPasswordText}>Esqueci minha senha</Text>
+              </TouchableOpacity>
+
+              {/* Login button */}
+              <TouchableOpacity
+                style={[styles.loginButton, loading && styles.loginButtonDisabled]}
+                onPress={handleLogin}
+                disabled={loading}
+              >
+                <Text style={styles.loginButtonText}>
+                  {loading ? 'Entrando...' : 'Entrar'}
+                </Text>
+              </TouchableOpacity>
             </View>
-
-            {/* Forgot password link */}
-            <TouchableOpacity 
-              style={styles.forgotPasswordButton}
-              onPress={onForgotPassword}
-            >
-              <Text style={styles.forgotPasswordText}>Esqueci minha senha</Text>
-            </TouchableOpacity>
-
-            {/* Login button */}
-            <TouchableOpacity
-              style={[styles.loginButton, loading && styles.loginButtonDisabled]}
-              onPress={handleLogin}
-              disabled={loading}
-            >
-              <Text style={styles.loginButtonText}>
-                {loading ? 'Entrando...' : 'Entrar'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </View>
     </View>
   );
 };
@@ -175,28 +176,30 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  keyboardWrapper: {
+  contentWrapper: {
     flex: 1,
     zIndex: 2,
+  },
+  logoContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: height * (isSmallDevice ? 0.08 : isMediumDevice ? 0.12 : 0.15),
+    paddingBottom: height * (isSmallDevice ? 0.02 : 0.04),
+    minHeight: height * (isSmallDevice ? 0.2 : 0.25),
+  },
+  keyboardWrapper: {
+    flex: 1,
   },
   scrollContainer: {
     flex: 1,
   },
   scrollContent: {
     flexGrow: 1,
-    minHeight: height,
-  },
-  logoContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: height * (isSmallDevice ? 0.08 : isMediumDevice ? 0.12 : 0.15),
-    paddingBottom: height * (isSmallDevice ? 0.04 : 0.08),
-    minHeight: height * (isSmallDevice ? 0.2 : 0.3),
+    paddingBottom: 20,
   },
   formContainer: {
-    flex: 1,
     paddingHorizontal: width * 0.08,
-    paddingTop: height * (isSmallDevice ? 0.02 : 0.08),
+    paddingTop: height * (isSmallDevice ? 0.01 : 0.10),
     paddingBottom: height * (isSmallDevice ? 0.08 : 0.05),
     justifyContent: 'flex-start',
   },

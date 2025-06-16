@@ -47,8 +47,6 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
   const [error, setError] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
-  const [isPreloading, setIsPreloading] = useState(false);
-  const [preloadStatus, setPreloadStatus] = useState<string>('');
 
   // Flags de controle para prevenir loops infinitos
   const [isLoadingWorkOrders, setIsLoadingWorkOrders] = useState(false);
@@ -593,57 +591,23 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
         return;
       }
       
-      // Mostrar status na UI
-      setIsPreloading(true);
-      setPreloadStatus('Preparando dados offline...');
-      
       // Executar pré-carregamento em background (não bloquear UI)
       setTimeout(async () => {
         try {
-          const startTime = Date.now();
-          
-          setPreloadStatus('Carregando etapas e fotos modelo...');
           const { success, cached, errors } = await preloadAllWorkOrdersData(workOrders);
           
-          const duration = Date.now() - startTime;
-          
           if (success) {
-            // Mostrar sucesso na UI
-            setPreloadStatus(`✅ ${cached} tipos de OS preparados para uso offline`);
-            
-            // Esconder após 3 segundos
-            setTimeout(() => {
-              setIsPreloading(false);
-              setPreloadStatus('');
-            }, 3000);
+            console.log(`✅ ${cached} tipos de OS preparados para uso offline`);
           } else {
-            // Mostrar status parcial na UI
-            setPreloadStatus(`⚠️ ${cached} de ${cached + errors.length} tipos preparados`);
-            
-            // Esconder após 4 segundos
-            setTimeout(() => {
-              setIsPreloading(false);
-              setPreloadStatus('');
-            }, 4000);
+            console.log(`⚠️ ${cached} de ${cached + errors.length} tipos preparados`);
           }
         } catch (preloadError) {
           console.error('💥 Erro no pré-carregamento em background:', preloadError);
-          
-          // Mostrar erro na UI
-          setPreloadStatus('❌ Erro no pré-carregamento');
-          
-          // Esconder após 3 segundos
-          setTimeout(() => {
-            setIsPreloading(false);
-            setPreloadStatus('');
-          }, 3000);
         }
       }, 1000); // Aguardar 1 segundo para não impactar a UI
       
     } catch (error) {
       console.error('💥 Erro na função preloadWorkOrdersData:', error);
-      setIsPreloading(false);
-      setPreloadStatus('');
     }
   };
 
@@ -824,16 +788,6 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
             </TouchableOpacity>
           ))}
         </View>
-        
-        {/* Indicador de Pré-carregamento */}
-        {isPreloading && (
-          <View style={styles.preloadIndicator}>
-            <View style={styles.preloadContent}>
-              <Ionicons name="cloud-download-outline" size={16} color="#3b82f6" />
-              <Text style={styles.preloadText}>{preloadStatus}</Text>
-            </View>
-          </View>
-        )}
         
         {/* Lista de WorkOrders - APENAS ESTA PARTE TEM SCROLL */}
         <ScrollView
@@ -1266,29 +1220,6 @@ const styles = StyleSheet.create({
   },
   clearCacheButton: {
     padding: 5,
-  },
-  preloadIndicator: {
-    padding: 10,
-    backgroundColor: 'white',
-    borderRadius: 10,
-    marginHorizontal: 15,
-    marginVertical: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  preloadContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  preloadText: {
-    fontSize: RFValue(12),
-    fontWeight: 'bold',
-    color: '#374151',
-    marginLeft: 10,
   },
 });
 

@@ -26,13 +26,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null);
   const [appUser, setAppUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [initialLoading, setInitialLoading] = useState(false);
-  const [initialProgress, setInitialProgress] = useState<InitialLoadProgress>({
-    current: 0,
-    total: 9,
-    currentTable: '',
-    completed: false
-  });
 
   // Função para mapear usuário do Supabase para usuário do app
   const mapSupabaseUserToAppUser = async (supabaseUser: SupabaseUser): Promise<User | null> => {
@@ -96,11 +89,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       console.log('🚀 Iniciando carga inicial de dados...');
-      setInitialLoading(true);
 
       // Executar carga inicial com callback de progresso
       const result = await performInitialDataLoad(userId, (progress) => {
-        setInitialProgress(progress);
+        // Progress callback is not used in the new implementation
       });
 
       if (result.success && result.stats) {
@@ -113,17 +105,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error) {
       console.error('💥 Erro inesperado na carga inicial:', error);
       // Em caso de erro, não bloquear o acesso
-    } finally {
-      // Aguardar um pouco para mostrar a mensagem de sucesso
-      setTimeout(() => {
-        setInitialLoading(false);
-        setInitialProgress({
-          current: 0,
-          total: 9,
-          currentTable: '',
-          completed: false
-        });
-      }, 2500);
     }
   };
 
@@ -164,13 +145,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else {
         setAppUser(null);
         // Limpar dados de carga inicial no logout
-        setInitialLoading(false);
-        setInitialProgress({
-          current: 0,
-          total: 9,
-          currentTable: '',
-          completed: false
-        });
+        setLoading(false);
       }
       
       setLoading(false);
@@ -209,13 +184,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     
     await supabase.auth.signOut();
     setAppUser(null);
-    setInitialLoading(false);
-    setInitialProgress({
-      current: 0,
-      total: 9,
-      currentTable: '',
-      completed: false
-    });
     setLoading(false);
   };
 
@@ -224,8 +192,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     session,
     appUser,
     loading,
-    initialLoading,
-    initialProgress,
     signIn,
     signOut,
   };
