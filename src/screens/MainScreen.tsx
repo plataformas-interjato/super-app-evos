@@ -75,33 +75,46 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     // Registrar callback para sincronização automática
     const unsubscribeSync = registerSyncCallback(async (result) => {
       if (result.synced > 0) {
-        console.log(`🔄 ${result.synced} ações sincronizadas - atualizando dados`);
+        console.log(`🔄 ${result.synced} ações sincronizadas - verificando se precisamos atualizar dados`);
         
-        // Usar debounce para evitar múltiplas atualizações simultâneas
+        // IMPORTANTE: Não atualizar dados automaticamente após sincronização
+        // para evitar sobrescrever status locais "finalizada" com status do servidor
+        console.log('✅ Sincronização concluída - mantendo status locais para evitar regressão');
+        
+        // Apenas recarregar se não há status locais pendentes
         setTimeout(async () => {
-          // Verificar se ainda não está carregando para evitar conflitos
-          if (isLoadingWorkOrders) {
-            console.log('⚠️ loadWorkOrders em execução, pulando atualização pós-sync');
-            return;
-          }
-          
-          const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
-          
           try {
-            const { data: freshData, error: fetchError } = await fetchWorkOrdersWithFilters(
-              userId,
-              activeFilter,
-              searchText.trim() || undefined
-            );
+            const localStatuses = await getLocalWorkOrderStatuses();
+            const hasLocalChanges = Object.values(localStatuses).some(status => !status.synced);
             
-            if (!fetchError && freshData) {
-              const mergedWorkOrders = await mergeLocalStatus(freshData);
-              setWorkOrders(mergedWorkOrders);
+            if (!hasLocalChanges) {
+              console.log('📱 Nenhum status local pendente - pode atualizar dados do servidor');
+              
+              // Verificar se ainda não está carregando para evitar conflitos
+              if (isLoadingWorkOrders) {
+                console.log('⚠️ loadWorkOrders em execução, pulando atualização pós-sync');
+                return;
+              }
+              
+              const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
+              
+              const { data: freshData, error: fetchError } = await fetchWorkOrdersWithFilters(
+                userId,
+                activeFilter,
+                searchText.trim() || undefined
+              );
+              
+              if (!fetchError && freshData) {
+                const mergedWorkOrders = await mergeLocalStatus(freshData);
+                setWorkOrders(mergedWorkOrders);
+              }
+            } else {
+              console.log('⚠️ Status locais pendentes - não atualizando para preservar mudanças');
             }
           } catch (error) {
-            console.error('❌ Erro ao atualizar dados após sincronização:', error);
+            console.error('❌ Erro ao verificar status locais após sincronização:', error);
           }
-        }, 2000); // Aumentado de 1000ms para 2000ms
+        }, 2000);
       }
     });
     
