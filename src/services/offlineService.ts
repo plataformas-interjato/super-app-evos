@@ -455,6 +455,90 @@ const syncAction = async (action: OfflineAction): Promise<boolean> => {
 };
 
 /**
+ * Sincroniza status locais das OS que foram alterados offline
+ */
+const syncLocalWorkOrderStatuses = async (): Promise<{ synced: number; failed: number }> => {
+  try {
+    const { getLocalWorkOrderStatuses } = await import('./localStatusService');
+    const { updateWorkOrderStatus } = await import('./workOrderService');
+    const { markLocalStatusAsSynced } = await import('./localStatusService');
+    
+    const localStatuses = await getLocalWorkOrderStatuses();
+    
+    let synced = 0;
+    let failed = 0;
+    
+    // Buscar apenas status não sincronizados
+    const unsyncedStatuses = Object.entries(localStatuses).filter(
+      ([_, statusData]) => !statusData.synced
+    );
+    
+    if (unsyncedStatuses.length === 0) {
+      console.log('✅ Nenhum status local para sincronizar');
+      return { synced: 0, failed: 0 };
+    }
+    
+    console.log(`🔄 Sincronizando ${unsyncedStatuses.length} status locais...`);
+    
+    for (const [workOrderId, statusData] of unsyncedStatuses) {
+      try {
+        console.log(`🔄 Sincronizando status da OS ${workOrderId}: ${statusData.status}`);
+        
+        // Mapear status local para status da aplicação
+        let appStatus: 'aguardando' | 'em_progresso' | 'finalizada' | 'cancelada';
+        switch (statusData.status) {
+          case 'aguardando':
+            appStatus = 'aguardando';
+            break;
+          case 'em_progresso':
+            appStatus = 'em_progresso';
+            break;
+          case 'finalizada':
+            appStatus = 'finalizada';
+            break;
+          case 'cancelada':
+            appStatus = 'cancelada';
+            break;
+          default:
+            console.warn(`⚠️ Status local desconhecido: ${statusData.status}`);
+            continue;
+        }
+        
+        // Tentar atualizar no servidor
+        const { error } = await updateWorkOrderStatus(workOrderId, appStatus);
+        
+        if (error) {
+          console.error(`❌ Erro ao sincronizar status da OS ${workOrderId}:`, error);
+          failed++;
+        } else {
+          console.log(`✅ Status da OS ${workOrderId} sincronizado: ${appStatus}`);
+          
+          // Marcar como sincronizado (remove do AsyncStorage)
+          await markLocalStatusAsSynced(parseInt(workOrderId));
+          synced++;
+          
+          // Se foi finalizada, notificar callbacks
+          if (appStatus === 'finalizada') {
+            notifyOSFinalizadaCallbacks(parseInt(workOrderId));
+          }
+        }
+        
+      } catch (error) {
+        console.error(`💥 Erro ao processar status da OS ${workOrderId}:`, error);
+        failed++;
+      }
+    }
+    
+    console.log(`✅ Sincronização de status locais: ${synced} sucesso, ${failed} falhas`);
+    return { synced, failed };
+    
+  } catch (error) {
+    console.error('💥 Erro na sincronização de status locais:', error);
+    return { synced: 0, failed: 0 };
+  }
+};
+
+/**
  * Sincroniza todas as ações pendentes
  */
 export const syncAllPendingActions = async (): Promise<{ 
@@ -481,6 +565,12 @@ export const syncAllPendingActions = async (): Promise<{
   const syncStartTime = Date.now();
 
   try {
+    // PRIMEIRO: Sincronizar status locais das OS
+    console.log('🎯 Iniciando sincronização de status locais...');
+    const statusSyncResult = await syncLocalWorkOrderStatuses();
+    console.log(`📊 Status locais: ${statusSyncResult.synced} sincronizados, ${statusSyncResult.failed} falharam`);
+
+    // SEGUNDO: Sincronizar ações offline (fotos, auditorias, etc.)
     const actions = await getOfflineActions();
     const pendingActions = actions.filter(action => 
       !action.synced && action.attempts < MAX_SYNC_ATTEMPTS
@@ -497,17 +587,20 @@ export const syncAllPendingActions = async (): Promise<{
     }, {} as { [workOrderId: string]: OfflineAction[] });
 
     const totalOSs = Object.keys(actionsByWorkOrder).length;
-    console.log(`📊 ${pendingActions.length} ações de ${totalOSs} OSs pendentes para sincronizar`);
-    remainingActionsCount = totalOSs; // Contar OSs, não ações individuais
+    const totalStatusSynced = statusSyncResult.synced;
+    const totalToSync = totalOSs + totalStatusSynced;
     
-    if (totalOSs === 0) {
-      console.log('✅ Nenhuma OS pendente para sincronizar');
+    console.log(`📊 ${pendingActions.length} ações de ${totalOSs} OSs + ${totalStatusSynced} status pendentes para sincronizar`);
+    remainingActionsCount = totalToSync;
+    
+    if (totalToSync === 0) {
+      console.log('✅ Nenhuma pendência para sincronizar');
       remainingActionsCount = 0;
       return { total: 0, synced: 0, failed: 0 };
     }
 
-    let synced = 0;
-    let failed = 0;
+    let synced = statusSyncResult.synced; // Começar com os status já sincronizados
+    let failed = statusSyncResult.failed;
     let processedOSs = 0;
 
     // Processar ações agrupadas por OS
@@ -555,14 +648,14 @@ export const syncAllPendingActions = async (): Promise<{
         }
         
         processedOSs++;
-        // Atualizar contador de OSs restantes
-        remainingActionsCount = totalOSs - processedOSs;
+        // Atualizar contador de OSs restantes (incluindo status já sincronizados)
+        remainingActionsCount = totalToSync - statusSyncResult.synced - processedOSs;
         
       } catch (osError) {
         console.error('💥 Erro ao processar OS:', workOrderId, osError);
         failed++;
         processedOSs++;
-        remainingActionsCount = totalOSs - processedOSs;
+        remainingActionsCount = totalToSync - statusSyncResult.synced - processedOSs;
       }
       
       // Verificar se ainda está online a cada OS
@@ -574,14 +667,14 @@ export const syncAllPendingActions = async (): Promise<{
     }
 
     // Limpar ações sincronizadas
-    if (synced > 0) {
+    if (synced > statusSyncResult.synced) {
       await cleanSyncedActions();
     }
 
     const totalDuration = Date.now() - syncStartTime;
-    const result = { total: totalOSs, synced, failed };
+    const result = { total: totalToSync, synced, failed };
     
-    console.log(`✅ Sincronização concluída: ${synced}/${totalOSs} OSs sincronizadas`);
+    console.log(`✅ Sincronização concluída: ${synced}/${totalToSync} itens sincronizados (${statusSyncResult.synced} status + ${synced - statusSyncResult.synced} OSs)`);
     
     // Notificar callbacks se houve alguma sincronização
     if (synced > 0) {
