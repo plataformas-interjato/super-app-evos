@@ -59,6 +59,9 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   const [comentarios, setComentarios] = useState<{ [stepId: number]: string }>({});
   const [fotosSalvasUsuario, setFotosSalvasUsuario] = useState<{ [entryId: number]: string }>({});
 
+  // Estado para armazenar alturas mínimas dos títulos por etapa
+  const [titleHeightsByStep, setTitleHeightsByStep] = useState<{ [stepId: number]: number }>({});
+
   // Flags de controle para prevenir loops infinitos e execuções simultâneas
   const [isLoadingSteps, setIsLoadingSteps] = useState(false);
   const [isSavingComment, setIsSavingComment] = useState(false);
@@ -625,6 +628,48 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
     }
   };
 
+  // Função para calcular altura necessária para um texto
+  const calculateTextHeight = (text: string, maxWidth: number): number => {
+    const fontSize = RFValue(12);
+    const lineHeight = fontSize * 1.4; // Aproximadamente 1.4x o tamanho da fonte
+    const characterWidth = fontSize * 0.6; // Aproximadamente 0.6x o tamanho da fonte
+    const charactersPerLine = Math.floor(maxWidth / characterWidth);
+    const numberOfLines = Math.max(1, Math.ceil(text.length / charactersPerLine));
+    
+    return numberOfLines * lineHeight + 20; // + 20 para padding
+  };
+
+  // Função para calcular alturas mínimas dos títulos por etapa
+  const calculateTitleHeights = () => {
+    if (photoEntries.length === 0 || steps.length === 0) return;
+
+    const cardWidth = (width - 60) / 2; // Largura do card
+    const titleWidth = cardWidth - 30; // Largura do título (descontando padding)
+    const heightsByStep: { [stepId: number]: number } = {};
+
+    // Para cada etapa, encontrar a altura máxima necessária
+    steps.forEach(step => {
+      const stepEntries = photoEntries.filter(entry => entry.stepId === step.id);
+      let maxHeight = 0;
+
+      stepEntries.forEach(entry => {
+        const height = calculateTextHeight(entry.titulo, titleWidth);
+        maxHeight = Math.max(maxHeight, height);
+      });
+
+      heightsByStep[step.id] = maxHeight || 40; // Altura mínima de 40
+    });
+
+    setTitleHeightsByStep(heightsByStep);
+  };
+
+  // Recalcular alturas quando photoEntries ou steps mudarem
+  useEffect(() => {
+    if (photoEntries.length > 0 && steps.length > 0) {
+      calculateTitleHeights();
+    }
+  }, [photoEntries, steps]);
+
   const renderPhotoCard = (entry: PhotoEntry) => {
     const hasPhoto = collectedPhotos[entry.id]; // Foto da sessão atual
     const hasFotoSalva = fotosSalvasUsuario[entry.id]; // Foto já salva pelo usuário
@@ -639,10 +684,16 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
     } else if (hasFotoModelo) {
       photoToShow = formatPhotoUri(hasFotoModelo); // Foto modelo
     }
+
+    // Obter altura mínima do título para esta etapa
+    const currentStep = steps[activeStepIndex];
+    const titleMinHeight = titleHeightsByStep[currentStep?.id] || 40;
     
     return (
       <View key={entry.id} style={styles.photoCard}>
-        <Text style={styles.photoCardTitle}>{entry.titulo}</Text>
+        <View style={[styles.photoCardTitleContainer, { minHeight: titleMinHeight }]}>
+          <Text style={styles.photoCardTitle}>{entry.titulo}</Text>
+        </View>
         
         <View style={styles.photoContainer}>
           <TouchableOpacity
@@ -1000,11 +1051,15 @@ const styles = StyleSheet.create({
     elevation: 3,
     position: 'relative',
   },
+  photoCardTitleContainer: {
+    marginBottom: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   photoCardTitle: {
     fontSize: RFValue(12),
     fontWeight: '600',
     color: '#374151',
-    marginBottom: 10,
     textAlign: 'center',
   },
   photoContainer: {
