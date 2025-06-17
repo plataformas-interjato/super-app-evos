@@ -66,12 +66,21 @@ function AppContent() {
     console.log('🔄 DEBUG: currentScreen atual:', currentScreen);
     
     setActiveTab(tab);
-    if (tab === 'profile') {
-      // Só permite ir para perfil, não para home (que quebraria o fluxo)
+    if (tab === 'home') {
+      // Permitir navegar para home - resetar fluxo da OS e voltar para main
+      console.log('🏠 Navegando para home - resetando fluxo da OS');
+      setCurrentScreen('main');
+      setSelectedWorkOrder(null);
+      
+      // Forçar atualização da tela principal
+      console.log('🔄 Forçando atualização da home...');
+      setRefreshMainScreen(prev => prev + 1);
+    } else if (tab === 'profile') {
+      // Permitir ir para perfil
+      console.log('👤 Navegando para perfil');
       setCurrentScreen('profile');
     }
-    // Se tab === 'home', não faz nada para manter o usuário no fluxo atual
-    console.log('🔄 DEBUG: Tab processado, permanecendo no fluxo da OS');
+    console.log('🔄 DEBUG: Tab processado');
   };
 
   const handleBackToMain = () => {

@@ -59,6 +59,10 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   const [comentarios, setComentarios] = useState<{ [stepId: number]: string }>({});
   const [fotosSalvasUsuario, setFotosSalvasUsuario] = useState<{ [entryId: number]: string }>({});
 
+  // Estados para o modal de foto atual
+  const [showCurrentPhotoModal, setShowCurrentPhotoModal] = useState(false);
+  const [selectedEntryForCurrent, setSelectedEntryForCurrent] = useState<PhotoEntry | null>(null);
+
   // Estado para armazenar alturas mínimas dos títulos por etapa
   const [titleHeightsByStep, setTitleHeightsByStep] = useState<{ [stepId: number]: number }>({});
 
@@ -413,6 +417,54 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
     setSelectedEntryForModel(null);
   };
 
+  const openCurrentPhotoModal = (entry: PhotoEntry) => {
+    setSelectedEntryForCurrent(entry);
+    setShowCurrentPhotoModal(true);
+  };
+
+  const closeCurrentPhotoModal = () => {
+    setShowCurrentPhotoModal(false);
+    setSelectedEntryForCurrent(null);
+  };
+
+  const removePhotoFromModal = () => {
+    if (!selectedEntryForCurrent) return;
+    
+    Alert.alert(
+      'Confirmar Remoção',
+      'Tem certeza que deseja remover esta foto?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Remover', 
+          style: 'destructive',
+          onPress: () => {
+            const entryId = selectedEntryForCurrent.id;
+            const hasPhoto = collectedPhotos[entryId];
+            const hasFotoSalva = fotosSalvasUsuario[entryId];
+            
+            if (hasPhoto) {
+              // Se é foto da sessão atual, remover da sessão
+              console.log(`🗑️ Removendo foto da sessão via modal (entrada ${entryId})`);
+              removePhoto(entryId);
+            } else if (hasFotoSalva) {
+              // Se é foto salva, remover do estado local
+              console.log(`🗑️ Removendo foto salva via modal (entrada ${entryId})`);
+              setFotosSalvasUsuario(prev => {
+                const updated = { ...prev };
+                delete updated[entryId];
+                return updated;
+              });
+            }
+            
+            // Fechar modal após remoção
+            closeCurrentPhotoModal();
+          }
+        }
+      ]
+    );
+  };
+
   const takePhotoFromModal = async () => {
     try {
       if (!selectedEntryForModel) {
@@ -675,14 +727,17 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
     const hasFotoSalva = fotosSalvasUsuario[entry.id]; // Foto já salva pelo usuário
     const hasFotoModelo = entry.fotoModelo; // Foto modelo do banco
     
-    // Definir qual foto exibir (prioridade: sessão atual > salva > modelo)
+    // NOVA REGRA: Sempre mostrar tracejado inicialmente
+    // Só mostrar a foto se foi capturada na sessão atual OU se já tinha foto salva
+    let shouldShowPhoto = hasPhoto || hasFotoSalva;
     let photoToShow = null;
-    if (hasPhoto) {
-      photoToShow = hasPhoto; // Foto da sessão atual
-    } else if (hasFotoSalva) {
-      photoToShow = hasFotoSalva; // Foto já salva pelo usuário
-    } else if (hasFotoModelo) {
-      photoToShow = formatPhotoUri(hasFotoModelo); // Foto modelo
+    
+    if (shouldShowPhoto) {
+      if (hasPhoto) {
+        photoToShow = hasPhoto; // Foto da sessão atual
+      } else if (hasFotoSalva) {
+        photoToShow = hasFotoSalva; // Foto já salva pelo usuário
+      }
     }
 
     // Obter altura mínima do título para esta etapa
@@ -699,38 +754,65 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
           <TouchableOpacity
             style={[
               styles.photoArea,
-              (hasPhoto || hasFotoSalva) && styles.photoAreaWithCapturedImage, // Verde para fotos do usuário
-              !hasPhoto && !hasFotoSalva && hasFotoModelo && styles.photoAreaWithModelImage // Vermelha para foto modelo
+              shouldShowPhoto && styles.photoAreaWithCapturedImage, // Verde apenas quando há foto para mostrar
             ]}
             onPress={() => {
-              // Se tem foto da sessão atual, sempre abrir câmera para nova captura
-              if (hasPhoto) {
-                console.log(`📷 Foto da sessão - abrindo câmera para nova captura (entrada ${entry.id})`);
-                takePhoto(entry.id);
+              // NOVA REGRA: Se já tem foto, abrir modal da foto atual
+              if (shouldShowPhoto) {
+                console.log(`📷 Abrindo modal da foto atual (entrada ${entry.id})`);
+                openCurrentPhotoModal(entry);
               }
-              // Se tem foto salva ou foto modelo, abrir modal da foto modelo (se existir)
+              // Se não tem foto mas tem foto modelo, abrir modal da foto modelo
               else if (hasFotoModelo) {
                 console.log(`🖼️ Abrindo modal da foto modelo (entrada ${entry.id})`);
                 openModelPhotoModal(entry);
               }
-              // Se não tem nenhuma, abrir câmera diretamente
+              // Se não tem foto modelo, abrir câmera diretamente
               else {
                 console.log(`📷 Abrindo câmera diretamente (entrada ${entry.id})`);
                 takePhoto(entry.id);
               }
             }}
           >
-            {photoToShow ? (
+            {shouldShowPhoto && photoToShow ? (
               <Image source={{ uri: photoToShow }} style={styles.photoImage} />
             ) : (
               <Ionicons name="camera" size={40} color="#000000" />
             )}
           </TouchableOpacity>
           
-          {hasPhoto && (
+          {/* Mostrar botão de remoção apenas quando há foto capturada na sessão atual ou foto salva */}
+          {shouldShowPhoto && (
             <TouchableOpacity
               style={styles.removePhotoButton}
-              onPress={() => removePhoto(entry.id)}
+              onPress={() => {
+                Alert.alert(
+                  'Confirmar Remoção',
+                  'Tem certeza que deseja remover esta foto?',
+                  [
+                    { text: 'Cancelar', style: 'cancel' },
+                    { 
+                      text: 'Remover', 
+                      style: 'destructive',
+                      onPress: () => {
+                        if (hasPhoto) {
+                          // Se é foto da sessão atual, remover da sessão
+                          console.log(`🗑️ Removendo foto da sessão (entrada ${entry.id})`);
+                          removePhoto(entry.id);
+                        } else if (hasFotoSalva) {
+                          // Se é foto salva, remover do estado local (volta para tracejado)
+                          console.log(`🗑️ Removendo foto salva do estado local (entrada ${entry.id})`);
+                          setFotosSalvasUsuario(prev => {
+                            const updated = { ...prev };
+                            delete updated[entry.id];
+                            return updated;
+                          });
+                        }
+                      }
+                    }
+                  ]
+                );
+              }}
             >
               <Ionicons name="trash" size={16} color="#ef4444" />
             </TouchableOpacity>
@@ -941,6 +1023,41 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
           </View>
         </View>
       </Modal>
+
+      {/* Modal de Foto Atual em Tela Cheia */}
+      <Modal
+        visible={showCurrentPhotoModal}
+        animationType="fade"
+        statusBarTranslucent={true}
+        onRequestClose={closeCurrentPhotoModal}
+      >
+        <View style={styles.modalContainer}>
+          {/* Foto Atual - Ocupa mais espaço sem header e texto */}
+          <View style={styles.modalImageContainerFullscreen}>
+            {selectedEntryForCurrent && (
+              <Image
+                source={{ 
+                  uri: collectedPhotos[selectedEntryForCurrent.id] || fotosSalvasUsuario[selectedEntryForCurrent.id] 
+                }}
+                style={styles.modalImage}
+                resizeMode="contain"
+              />
+            )}
+          </View>
+
+          {/* Botões de Ação */}
+          <View style={styles.modalButtonContainer}>
+            <TouchableOpacity style={styles.modalBackButton} onPress={closeCurrentPhotoModal}>
+              <Text style={styles.modalBackButtonText}>Voltar</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.modalRemovePhotoButton} onPress={removePhotoFromModal}>
+              <Ionicons name="trash" size={20} color="white" style={styles.modalButtonIcon} />
+              <Text style={styles.modalRemovePhotoButtonText}>Remover Foto</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -1081,11 +1198,6 @@ const styles = StyleSheet.create({
   photoAreaWithCapturedImage: {
     borderStyle: 'solid',
     borderColor: '#10b981',
-    backgroundColor: 'transparent',
-  },
-  photoAreaWithModelImage: {
-    borderStyle: 'solid',
-    borderColor: '#ef4444',
     backgroundColor: 'transparent',
   },
   photoImage: {
@@ -1340,6 +1452,27 @@ const styles = StyleSheet.create({
     color: '#374151',
     borderWidth: 1,
     borderColor: '#e5e7eb',
+  },
+  modalRemovePhotoButton: {
+    flex: 1,
+    paddingVertical: 15,
+    backgroundColor: '#ef4444',
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+  },
+  modalRemovePhotoButtonText: {
+    fontSize: RFValue(14),
+    fontWeight: '600',
+    color: 'white',
+  },
+  modalImageContainerFullscreen: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingTop: 80,
+    paddingBottom: 200,
   },
 });
 
