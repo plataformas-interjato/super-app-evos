@@ -228,27 +228,61 @@ export const hasFinalPhoto = async (
     // Se offline, verificar dados offline primeiro
     if (!netInfo.isConnected) {
       try {
-        const { getOfflineActions } = await import('./offlineService');
-        const offlineActions = await getOfflineActions();
+        console.log('📱 Offline - verificando foto final no AsyncStorage...');
         
-        // Procurar por ação de foto final para esta OS
-        const hasOfflinePhoto = offlineActions.some(action => 
+        // Verificar no AsyncStorage das ações offline
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        const offlineActionsStr = await AsyncStorage.getItem('offline_actions');
+        
+        if (offlineActionsStr) {
+          const offlineActions = JSON.parse(offlineActionsStr);
+          
+          // Procurar por ação de foto final para esta OS
+          const hasOfflinePhoto = Object.values(offlineActions).some((action: any) => 
+            (action.type === 'PHOTO_FINAL' || action.type === 'AUDITORIA_FINAL') && 
+            action.workOrderId === workOrderId
+          );
+          
+          if (hasOfflinePhoto) {
+            console.log('✅ Foto final encontrada no AsyncStorage offline');
+            return { hasPhoto: true, error: null };
+          }
+        }
+        
+        console.log('❌ Foto final não encontrada offline');
+        return { hasPhoto: false, error: null };
+      } catch (offlineError) {
+        console.error('💥 Erro ao verificar offline:', offlineError);
+        return { hasPhoto: false, error: null };
+      }
+    }
+    
+    // Se online, verificar no servidor E também no AsyncStorage (pode ter dados não sincronizados)
+    console.log('🌐 Online - verificando foto final no servidor e AsyncStorage...');
+    
+    // Primeiro verificar AsyncStorage (dados mais recentes)
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const offlineActionsStr = await AsyncStorage.getItem('offline_actions');
+      
+      if (offlineActionsStr) {
+        const offlineActions = JSON.parse(offlineActionsStr);
+        
+        const hasOfflinePhoto = Object.values(offlineActions).some((action: any) => 
           (action.type === 'PHOTO_FINAL' || action.type === 'AUDITORIA_FINAL') && 
           action.workOrderId === workOrderId
         );
         
         if (hasOfflinePhoto) {
-          console.log('✅ Foto final encontrada offline');
+          console.log('✅ Foto final encontrada no AsyncStorage (mesmo online)');
           return { hasPhoto: true, error: null };
         }
-        
-        return { hasPhoto: false, error: null };
-      } catch (offlineError) {
-        return { hasPhoto: false, error: null };
       }
+    } catch (asyncStorageError) {
+      console.warn('⚠️ Erro ao verificar AsyncStorage:', asyncStorageError);
     }
     
-    // Se online, verificar no servidor
+    // Verificar no servidor
     const { data, error } = await supabase
       .from('auditoria_tecnico')
       .select('id, foto_final')
@@ -257,13 +291,21 @@ export const hasFinalPhoto = async (
       .limit(1);
 
     if (error) {
+      console.error('❌ Erro ao verificar no servidor:', error);
       return { hasPhoto: false, error: error.message };
     }
 
     const hasPhoto = data && data.length > 0 && data[0].foto_final;
     
+    if (hasPhoto) {
+      console.log('✅ Foto final encontrada no servidor');
+    } else {
+      console.log('❌ Foto final não encontrada no servidor');
+    }
+    
     return { hasPhoto: !!hasPhoto, error: null };
   } catch (error) {
+    console.error('💥 Erro inesperado ao verificar foto final:', error);
     return { hasPhoto: false, error: 'Erro inesperado ao verificar foto final' };
   }
 };
@@ -319,31 +361,57 @@ export const saveAuditoriaFinal = async (
       .eq('ativo', 1)
       .single();
 
+    let auditData: AuditoriaTecnico | null = null;
+
     if (searchError || !existingAudit) {
-      console.error('❌ Registro de auditoria não encontrado:', searchError);
-      return { 
-        data: null, 
-        error: 'Registro de auditoria inicial não encontrado' 
-      };
-    }
+      console.log('⚠️ Registro de auditoria não encontrado, criando novo...');
+      
+      // Se não existe registro, criar um novo com a foto final
+      const { data: newAudit, error: createError } = await supabase
+        .from('auditoria_tecnico')
+        .insert({
+          ordem_servico_id: workOrderId,
+          auditor_id: parseInt(technicoId),
+          foto_final: base64,
+          trabalho_realizado: trabalhoRealizado ? 1 : 0,
+          motivo: motivo || null,
+          comentario: comentario || null,
+          dt_adicao: new Date().toISOString(),
+          dt_edicao: new Date().toISOString(),
+          ativo: 1,
+        })
+        .select('*')
+        .single();
 
-    // 3. Atualizar registro existente com dados finais
-    const { data, error } = await supabase
-      .from('auditoria_tecnico')
-      .update({
-        foto_final: base64,
-        trabalho_realizado: trabalhoRealizado ? 1 : 0,
-        motivo: motivo || null,
-        comentario: comentario || null,
-        dt_edicao: new Date().toISOString(),
-      })
-      .eq('id', existingAudit.id)
-      .select('*')
-      .single();
+      if (createError) {
+        console.error('❌ Erro ao criar novo registro de auditoria:', createError);
+        return { data: null, error: createError.message };
+      }
 
-    if (error) {
-      console.error('❌ Erro ao atualizar auditoria:', error);
-      return { data: null, error: error.message };
+      auditData = newAudit;
+      console.log('✅ Novo registro de auditoria criado com sucesso');
+    } else {
+      // 3. Atualizar registro existente com dados finais
+      const { data: updatedAudit, error: updateError } = await supabase
+        .from('auditoria_tecnico')
+        .update({
+          foto_final: base64,
+          trabalho_realizado: trabalhoRealizado ? 1 : 0,
+          motivo: motivo || null,
+          comentario: comentario || null,
+          dt_edicao: new Date().toISOString(),
+        })
+        .eq('id', existingAudit.id)
+        .select('*')
+        .single();
+
+      if (updateError) {
+        console.error('❌ Erro ao atualizar auditoria:', updateError);
+        return { data: null, error: updateError.message };
+      }
+
+      auditData = updatedAudit;
+      console.log('✅ Registro de auditoria atualizado com sucesso');
     }
 
     console.log('✅ Auditoria final salva com sucesso');
@@ -361,7 +429,7 @@ export const saveAuditoriaFinal = async (
     //   console.log('✅ Ordem de serviço finalizada automaticamente');
     // }
     
-    return { data, error: null };
+    return { data: auditData, error: null };
 
   } catch (error) {
     console.error('💥 Erro inesperado ao salvar auditoria final:', error);

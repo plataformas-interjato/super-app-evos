@@ -26,6 +26,7 @@ interface PostServiceAuditScreenProps {
   onTabPress: (tab: 'home' | 'profile') => void;
   onFinishAudit: (auditData: AuditData) => void;
   onBackToServiceSteps?: () => void;
+  onSkipToPhotoCollection?: () => void;
 }
 
 interface AuditData {
@@ -33,6 +34,7 @@ interface AuditData {
   reason?: string;
   additionalComments?: string;
   userPhoto?: string;
+  skipPhotoCollection?: boolean;
 }
 
 const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
@@ -42,6 +44,7 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
   onTabPress,
   onFinishAudit,
   onBackToServiceSteps,
+  onSkipToPhotoCollection,
 }) => {
   const [workCompleted, setWorkCompleted] = useState<boolean | null>(true);
   const [selectedReason, setSelectedReason] = useState<string>('');
@@ -61,35 +64,75 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
 
   useEffect(() => {
     checkExistingFinalPhoto();
+    debugAsyncStorage();
   }, []);
 
   const checkExistingFinalPhoto = async () => {
     try {
       setIsCheckingPhoto(true);
       
-      // VERIFICAR APENAS OFFLINE - SEM REQUISIÇÕES ONLINE
-      console.log('🔍 Verificando foto final offline...');
+      console.log('🔍 Verificando se foto final já existe...');
       
-      // Verificar se há dados offline de auditoria
-      const offlineAuditorias = await AsyncStorage.getItem('offline_actions');
-      if (offlineAuditorias) {
-        const actions = JSON.parse(offlineAuditorias);
-        const hasAuditoriaFinal = Object.values(actions).some((action: any) => 
+      // Verificar no AsyncStorage das ações offline
+      const offlineActionsStr = await AsyncStorage.getItem('offline_actions');
+      
+      if (offlineActionsStr) {
+        const offlineActions = JSON.parse(offlineActionsStr);
+        
+        // Procurar por auditoria final já concluída para esta OS
+        const hasAuditoriaFinal = Object.values(offlineActions).some((action: any) => 
           action.type === 'AUDITORIA_FINAL' && 
           action.workOrderId === workOrder.id
         );
         
         if (hasAuditoriaFinal) {
-          console.log('✅ Auditoria final encontrada offline');
+          console.log('✅ Auditoria final já existe - pulando para coleta de fotos');
+          
+          // Se onSkipToPhotoCollection estiver disponível, usar ela
+          if (onSkipToPhotoCollection) {
+            onSkipToPhotoCollection();
+            return;
+          } else {
+            // Caso contrário, usar onFinishAudit sem skipPhotoCollection
+            onFinishAudit({ workCompleted: true, reason: '', additionalComments: '' });
+            return;
+          }
         }
       }
       
+      console.log('📱 Foto final não existe - continuando na tela de auditoria');
       // Sempre continuar na tela normalmente (sem bloquear por verificações online)
       setIsCheckingPhoto(false);
     } catch (error) {
       console.error('💥 Erro ao verificar foto final offline:', error);
       // Em caso de erro, sempre continuar na tela normalmente
       setIsCheckingPhoto(false);
+    }
+  };
+
+  // Função de debug para verificar AsyncStorage
+  const debugAsyncStorage = async () => {
+    try {
+      console.log('🔍 DEBUG: Verificando AsyncStorage...');
+      const offlineActionsStr = await AsyncStorage.getItem('offline_actions');
+      if (offlineActionsStr) {
+        const offlineActions = JSON.parse(offlineActionsStr);
+        console.log('📱 DEBUG: Ações offline encontradas:', Object.keys(offlineActions).length);
+        
+        // Verificar ações relacionadas a esta OS
+        const thisOSActions = Object.values(offlineActions).filter((action: any) => 
+          action.workOrderId === workOrder.id
+        );
+        console.log(`📱 DEBUG: Ações para OS ${workOrder.id}:`, thisOSActions.length);
+        
+        thisOSActions.forEach((action: any, index) => {
+          console.log(`📱 DEBUG: Ação ${index + 1}: ${action.type} - ${action.timestamp}`);
+        });
+      } else {
+        console.log('📱 DEBUG: Nenhuma ação offline encontrada');
+      }
+    } catch (error) {
+      console.error('💥 DEBUG: Erro ao verificar AsyncStorage:', error);
     }
   };
 
@@ -112,17 +155,25 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
 
       if (!result.canceled && result.assets[0]) {
         const photoUri = result.assets[0].uri;
+        console.log('📸 DEBUG: Foto capturada:', photoUri);
         setFinalPhoto(photoUri);
 
-        // SALVAR DIRETO NO ASYNCSTORAGE - SEM IMPORTS DINÂMICOS
+        // Salvar foto no AsyncStorage (sempre salvar localmente primeiro)
+        // A sincronização com o servidor será feita quando a auditoria completa for finalizada
         try {
-          console.log('💾 Salvando foto final direto no AsyncStorage...');
+          console.log('💾 DEBUG: Iniciando salvamento da foto final...');
+          console.log('💾 DEBUG: WorkOrder ID:', workOrder.id);
+          console.log('💾 DEBUG: User ID:', user.id);
           
           const offlineKey = 'offline_actions';
           const existingDataStr = await AsyncStorage.getItem(offlineKey);
           const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
           
+          console.log('💾 DEBUG: Dados existentes no AsyncStorage:', Object.keys(existingData).length, 'ações');
+          
           const actionId = `photo_final_${workOrder.id}_${user.id}_${Date.now()}`;
+          console.log('💾 DEBUG: Action ID gerado:', actionId);
+          
           existingData[actionId] = {
             id: actionId,
             type: 'PHOTO_FINAL',
@@ -136,10 +187,20 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
             attempts: 0
           };
           
+          console.log('💾 DEBUG: Salvando no AsyncStorage...');
           await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
-          console.log('✅ Foto final salva offline com sucesso');
+          console.log('✅ DEBUG: Foto final salva no AsyncStorage com sucesso');
+          
+          // Verificar se foi salvo
+          const verifyDataStr = await AsyncStorage.getItem(offlineKey);
+          if (verifyDataStr) {
+            const verifyData = JSON.parse(verifyDataStr);
+            console.log('✅ DEBUG: Verificação - dados salvos:', Object.keys(verifyData).length, 'ações');
+            console.log('✅ DEBUG: Ação salva encontrada:', !!verifyData[actionId]);
+          }
+          
         } catch (saveError) {
-          console.error('💥 Erro ao salvar foto final offline:', saveError);
+          console.error('💥 DEBUG: Erro ao salvar foto final:', saveError);
           Alert.alert(
             'Erro',
             'Não foi possível salvar a foto. Tente novamente.'
@@ -148,49 +209,115 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
         }
       }
     } catch (error) {
-      console.error('💥 Erro na função handleFinalPhoto:', error);
+      console.error('💥 DEBUG: Erro na função handleFinalPhoto:', error);
       Alert.alert('Erro', 'Não foi possível tirar a foto. Tente novamente.');
     }
   };
 
   const handleFinish = async () => {
-    console.log('🔄 handleFinish chamado');
-    console.log('workCompleted:', workCompleted);
-    console.log('selectedReason:', selectedReason);
-    console.log('finalPhoto:', finalPhoto);
-    console.log('canProceed:', canProceed);
+    console.log('🔄 DEBUG: handleFinish chamado');
+    console.log('🔄 DEBUG: workCompleted:', workCompleted);
+    console.log('🔄 DEBUG: selectedReason:', selectedReason);
+    console.log('🔄 DEBUG: finalPhoto:', finalPhoto);
+    console.log('🔄 DEBUG: canProceed:', canProceed);
     
     if (workCompleted === null) {
-      console.log('❌ Erro: workCompleted é null');
+      console.log('❌ DEBUG: Erro: workCompleted é null');
       Alert.alert('Campo obrigatório', 'Por favor, informe se o trabalho foi realizado.');
       return;
     }
 
     if (!workCompleted && !selectedReason) {
-      console.log('❌ Erro: trabalho não realizado e sem motivo');
+      console.log('❌ DEBUG: Erro: trabalho não realizado e sem motivo');
       Alert.alert('Campo obrigatório', 'Por favor, selecione um motivo.');
       return;
     }
 
     if (!finalPhoto) {
-      console.log('❌ Erro: sem foto final');
+      console.log('❌ DEBUG: Erro: sem foto final');
       Alert.alert('Foto obrigatória', 'Por favor, tire uma foto final para concluir a auditoria.');
       return;
     }
 
-    console.log('✅ Todas as validações passaram, iniciando salvamento...');
+    console.log('✅ DEBUG: Todas as validações passaram, iniciando salvamento...');
     setIsLoading(true);
     
     try {
-      // SALVAR AUDITORIA DIRETO NO ASYNCSTORAGE - SEM IMPORTS DINÂMICOS
-      console.log('💾 Salvando auditoria final direto no AsyncStorage...');
+      // Tentar salvar auditoria completa no servidor primeiro (quando online)
+      console.log('🌐 DEBUG: Verificando conectividade para salvar auditoria final...');
+      
+      // Verificar conectividade
+      const NetInfo = require('@react-native-community/netinfo');
+      const netInfo = await NetInfo.fetch();
+      console.log('🌐 DEBUG: Status de conectividade:', netInfo.isConnected);
+      
+      if (netInfo.isConnected) {
+        console.log('🌐 DEBUG: Online - tentando salvar auditoria final no servidor...');
+        
+        try {
+          // Importar dinamicamente o serviço de auditoria
+          const { saveAuditoriaFinal } = await import('../services/auditService');
+          
+          console.log('📊 DEBUG: Chamando saveAuditoriaFinal com os dados:');
+          console.log('📊 DEBUG: - workOrderId:', workOrder.id);
+          console.log('📊 DEBUG: - technicoId:', user.id);
+          console.log('📊 DEBUG: - photoUri:', finalPhoto.substring(0, 50) + '...');
+          console.log('📊 DEBUG: - trabalhoRealizado:', workCompleted);
+          console.log('📊 DEBUG: - motivo:', !workCompleted ? selectedReason : undefined);
+          console.log('📊 DEBUG: - comentario:', additionalComments.trim() || undefined);
+          
+          // Salvar auditoria completa no servidor
+          const { data, error } = await saveAuditoriaFinal(
+            workOrder.id,
+            user.id,
+            finalPhoto,
+            workCompleted,
+            !workCompleted ? selectedReason : undefined,
+            additionalComments.trim() || undefined
+          );
+          
+          console.log('📊 DEBUG: Resultado do saveAuditoriaFinal:');
+          console.log('📊 DEBUG: - data:', data ? 'Presente' : 'Nulo');
+          console.log('📊 DEBUG: - error:', error);
+          
+          if (!error && data) {
+            console.log('✅ DEBUG: Auditoria final salva no servidor com sucesso');
+            
+            // Sucesso no servidor, prosseguir com o fluxo
+            if (!workCompleted) {
+              console.log('🚀 DEBUG: Trabalho não realizado - indo direto para salvamento');
+              onFinishAudit({ workCompleted, reason: selectedReason, additionalComments, skipPhotoCollection: true });
+            } else {
+              console.log('🚀 DEBUG: Trabalho realizado - seguindo fluxo normal');
+              onFinishAudit({ workCompleted, reason: selectedReason, additionalComments });
+            }
+            return; // Sucesso, não precisa salvar offline
+          } else {
+            console.warn('⚠️ DEBUG: Erro ao salvar auditoria no servidor, salvando offline:', error);
+          }
+        } catch (serverError) {
+          console.error('💥 DEBUG: Erro ao salvar no servidor:', serverError);
+        }
+      } else {
+        console.log('📱 DEBUG: Offline - salvando auditoria final no AsyncStorage...');
+      }
+      
+      // Se chegou aqui, está offline ou houve erro no servidor
+      // Salvar no AsyncStorage para sincronização posterior
+      console.log('💾 DEBUG: Salvando auditoria final no AsyncStorage...');
+      console.log('💾 DEBUG: WorkOrder ID:', workOrder.id);
+      console.log('💾 DEBUG: User ID:', user.id);
       
       const offlineKey = 'offline_actions';
       const existingDataStr = await AsyncStorage.getItem(offlineKey);
       const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
       
+      console.log('💾 DEBUG: Dados existentes no AsyncStorage:', Object.keys(existingData).length, 'ações');
+      
       const actionId = `auditoria_final_${workOrder.id}_${Date.now()}`;
-      existingData[actionId] = {
+      console.log('💾 DEBUG: Action ID gerado:', actionId);
+      
+      const auditoriaData = {
         id: actionId,
         type: 'AUDITORIA_FINAL',
         timestamp: new Date().toISOString(),
@@ -206,17 +333,35 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
         attempts: 0,
       };
       
-      await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
-      console.log('✅ Auditoria final salva offline com sucesso');
+      console.log('💾 DEBUG: Dados da auditoria:', JSON.stringify(auditoriaData, null, 2));
       
-      // Sempre prosseguir para a próxima tela
-      console.log('🚀 Chamando onFinishAudit');
-      onFinishAudit({ workCompleted, reason: selectedReason, additionalComments });
+      existingData[actionId] = auditoriaData;
+      
+      console.log('💾 DEBUG: Salvando no AsyncStorage...');
+      await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
+      console.log('✅ DEBUG: Auditoria final salva no AsyncStorage com sucesso');
+      
+      // Verificar se foi salvo
+      const verifyDataStr = await AsyncStorage.getItem(offlineKey);
+      if (verifyDataStr) {
+        const verifyData = JSON.parse(verifyDataStr);
+        console.log('✅ DEBUG: Verificação - dados salvos:', Object.keys(verifyData).length, 'ações');
+        console.log('✅ DEBUG: Ação salva encontrada:', !!verifyData[actionId]);
+      }
+      
+      // Prosseguir com o fluxo
+      if (!workCompleted) {
+        console.log('🚀 DEBUG: Trabalho não realizado - indo direto para salvamento');
+        onFinishAudit({ workCompleted, reason: selectedReason, additionalComments, skipPhotoCollection: true });
+      } else {
+        console.log('🚀 DEBUG: Trabalho realizado - seguindo fluxo normal');
+        onFinishAudit({ workCompleted, reason: selectedReason, additionalComments });
+      }
     } catch (error) {
-      console.error('💥 Erro ao finalizar auditoria:', error);
+      console.error('💥 DEBUG: Erro ao finalizar auditoria:', error);
       Alert.alert('Erro', 'Erro inesperado ao finalizar auditoria.');
     } finally {
-      console.log('🏁 Finalizando handleFinish, setIsLoading(false)');
+      console.log('🏁 DEBUG: Finalizando handleFinish, setIsLoading(false)');
       setIsLoading(false);
     }
   };
@@ -340,7 +485,7 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
         <TouchableOpacity 
           style={[styles.actionButton, !canProceed && styles.actionButtonDisabled]} 
           onPress={() => {
-            console.log('🖱️ Botão Próximo clicado');
+            console.log('🖱️ Botão clicado');
             console.log('canProceed atual:', canProceed);
             console.log('isLoading atual:', isLoading);
             console.log('disabled atual:', !canProceed || isLoading);
@@ -349,7 +494,7 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
           disabled={!canProceed || isLoading}
         >
           <Text style={[styles.actionButtonText, !canProceed && styles.actionButtonTextDisabled]}>
-            {isLoading ? 'Processando...' : 'Próximo'}
+            {isLoading ? 'Processando...' : (workCompleted === false ? 'Finalizar' : 'Próximo')}
           </Text>
         </TouchableOpacity>
 

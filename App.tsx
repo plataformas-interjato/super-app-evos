@@ -60,6 +60,20 @@ function AppContent() {
     }
   };
 
+  // Função específica para quando estamos dentro do fluxo de uma ordem de serviço
+  const handleTabPressInWorkOrder = (tab: 'home' | 'profile') => {
+    console.log('🔄 DEBUG: handleTabPressInWorkOrder chamado com tab:', tab);
+    console.log('🔄 DEBUG: currentScreen atual:', currentScreen);
+    
+    setActiveTab(tab);
+    if (tab === 'profile') {
+      // Só permite ir para perfil, não para home (que quebraria o fluxo)
+      setCurrentScreen('profile');
+    }
+    // Se tab === 'home', não faz nada para manter o usuário no fluxo atual
+    console.log('🔄 DEBUG: Tab processado, permanecendo no fluxo da OS');
+  };
+
   const handleBackToMain = () => {
     console.log('🔙 Voltando para tela principal');
     setCurrentScreen('main');
@@ -68,6 +82,67 @@ function AppContent() {
     // NOVO: Forçar atualização sempre que volta para main
     console.log('🔄 Forçando atualização da home ao voltar...');
     setRefreshMainScreen(prev => prev + 1);
+  };
+
+  const handleBackFromAudit = () => {
+    console.log('🔙 DEBUG: handleBackFromAudit chamado');
+    console.log('🔙 DEBUG: currentScreen atual:', currentScreen);
+    console.log('🔙 DEBUG: Mudando para steps');
+    setCurrentScreen('steps');
+    console.log('🔙 DEBUG: setCurrentScreen(steps) executado');
+  };
+
+  const handleBackFromPhotoCollection = async () => {
+    console.log('🔙 DEBUG: handleBackFromPhotoCollection chamado');
+    console.log('🔙 DEBUG: currentScreen atual:', currentScreen);
+    
+    if (selectedWorkOrder) {
+      try {
+        // Verificar se já existe foto final
+        const { hasFinalPhoto } = await import('./src/services/auditService');
+        const { hasPhoto, error } = await hasFinalPhoto(selectedWorkOrder.id);
+        
+        if (error) {
+          console.warn('⚠️ DEBUG: Erro ao verificar foto final, voltando para auditoria:', error);
+          console.log('🔙 DEBUG: Mudando para audit (fallback)');
+          setCurrentScreen('audit');
+          return;
+        }
+
+        if (hasPhoto) {
+          console.log('✅ DEBUG: Foto final já existe - pulando auditoria e voltando para steps');
+          setCurrentScreen('steps');
+        } else {
+          console.log('📱 DEBUG: Foto final não existe - voltando para auditoria');
+          setCurrentScreen('audit');
+        }
+      } catch (error) {
+        console.error('💥 DEBUG: Erro ao verificar foto final:', error);
+        console.log('🔙 DEBUG: Mudando para audit (erro)');
+        setCurrentScreen('audit');
+      }
+    } else {
+      console.error('❌ DEBUG: selectedWorkOrder é null, voltando para audit');
+      setCurrentScreen('audit');
+    }
+    
+    console.log('🔙 DEBUG: handleBackFromPhotoCollection concluído');
+  };
+
+  const handleBackFromSteps = () => {
+    console.log('🔙 DEBUG: handleBackFromSteps chamado');
+    console.log('🔙 DEBUG: currentScreen atual:', currentScreen);
+    console.log('🔙 DEBUG: Mudando para workOrderDetail');
+    setCurrentScreen('workOrderDetail');
+    console.log('🔙 DEBUG: setCurrentScreen(workOrderDetail) executado');
+  };
+
+  const handleBackFromStartService = () => {
+    console.log('🔙 DEBUG: handleBackFromStartService chamado');
+    console.log('🔙 DEBUG: currentScreen atual:', currentScreen);
+    console.log('🔙 DEBUG: Mudando para workOrderDetail');
+    setCurrentScreen('workOrderDetail');
+    console.log('🔙 DEBUG: setCurrentScreen(workOrderDetail) executado');
   };
 
   const handleOpenWorkOrder = (workOrder: WorkOrder) => {
@@ -167,17 +242,20 @@ function AppContent() {
         const { hasPhoto, error } = await hasFinalPhoto(selectedWorkOrder.id);
         
         if (error) {
+          console.warn('⚠️ Erro ao verificar foto final, indo para auditoria:', error);
           setCurrentScreen('audit');
           return;
         }
 
         if (hasPhoto) {
-          console.log('✅ Foto final existe - pulando para coleta de fotos');
+          console.log('✅ Foto final existe - pulando auditoria e indo para coleta de fotos');
           setCurrentScreen('photoCollection');
         } else {
+          console.log('📱 Foto final não existe - indo para auditoria');
           setCurrentScreen('audit');
         }
       } catch (error) {
+        console.warn('⚠️ Erro ao verificar foto final, indo para auditoria:', error);
         // Em caso de erro, ir para auditoria normalmente
         setCurrentScreen('audit');
       }
@@ -190,8 +268,14 @@ function AppContent() {
   };
 
   const handleFinishAudit = async (auditData: any) => {
-    // Ir para a tela de coleta de fotos
-    setCurrentScreen('photoCollection');
+    // Verificar se deve pular a coleta de fotos
+    if (auditData.skipPhotoCollection) {
+      console.log('🚀 Pulando coleta de fotos - indo direto para salvamento');
+      setCurrentScreen('auditSaving');
+    } else {
+      // Ir para a tela de coleta de fotos
+      setCurrentScreen('photoCollection');
+    }
   };
 
   const handleFinishPhotoCollection = async (photos: { [entryId: number]: string }) => {
@@ -349,7 +433,7 @@ function AppContent() {
           workOrder={selectedWorkOrder}
           user={appUser}
           onBackPress={handleBackToMain}
-          onTabPress={handleTabPress}
+          onTabPress={handleTabPressInWorkOrder}
           onStartService={handleStartService}
         />
       )}
@@ -357,8 +441,8 @@ function AppContent() {
         <ServiceStepsScreen
           workOrder={selectedWorkOrder}
           user={appUser}
-          onBackPress={handleBackToMain}
-          onTabPress={handleTabPress}
+          onBackPress={handleBackFromSteps}
+          onTabPress={handleTabPressInWorkOrder}
           onFinishService={handleFinishService}
         />
       )}
@@ -366,8 +450,8 @@ function AppContent() {
         <StartServiceScreen
           workOrder={selectedWorkOrder}
           user={appUser}
-          onBackPress={handleBackToMain}
-          onTabPress={handleTabPress}
+          onBackPress={handleBackFromStartService}
+          onTabPress={handleTabPressInWorkOrder}
           onConfirmStart={handleConfirmStart}
         />
       )}
@@ -375,17 +459,19 @@ function AppContent() {
         <PostServiceAuditScreen
           workOrder={selectedWorkOrder}
           user={appUser}
-          onBackPress={handleBackToMain}
-          onTabPress={handleTabPress}
+          onBackPress={handleBackFromAudit}
+          onTabPress={handleTabPressInWorkOrder}
           onFinishAudit={handleFinishAudit}
+          onBackToServiceSteps={handleBackFromAudit}
+          onSkipToPhotoCollection={handleSkipToPhotoCollection}
         />
       )}
       {currentScreen === 'photoCollection' && selectedWorkOrder && (
         <PhotoCollectionScreen
           workOrder={selectedWorkOrder}
           user={appUser}
-          onBackPress={handleBackToMain}
-          onTabPress={handleTabPress}
+          onBackPress={handleBackFromPhotoCollection}
+          onTabPress={handleTabPressInWorkOrder}
           onFinishPhotoCollection={handleFinishPhotoCollection}
         />
       )}
@@ -399,7 +485,7 @@ function AppContent() {
         <AuditSuccessScreen
           workOrder={selectedWorkOrder}
           user={appUser}
-          onTabPress={handleTabPress}
+          onTabPress={handleTabPressInWorkOrder}
           onDownloadReport={handleDownloadReport}
           onViewWorkOrders={handleViewWorkOrders}
         />

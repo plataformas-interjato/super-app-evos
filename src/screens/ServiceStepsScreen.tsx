@@ -783,7 +783,7 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
           disabled={isLoading}
         >
           <Text style={styles.finishButtonText}>
-            Prosseguir para auditoria
+            Encerrar ordem de serviço
           </Text>
         </TouchableOpacity>
 
