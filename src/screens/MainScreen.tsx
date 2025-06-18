@@ -10,6 +10,7 @@ import {
   TextInput,
   ImageBackground,
   Image,
+  SafeAreaView,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -725,239 +726,245 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
   };
 
   return (
-    <ImageBackground
-      source={require('../img-ref/background_home.jpg')}
-      style={styles.container}
-      resizeMode="cover"
-    >
-      <StatusBar style="light" />
-      
-      {/* Header com imagem de background - FIXO */}
-      <View style={styles.headerWrapper}>
-        <ImageBackground
-          source={require('../img-ref/container_perfil.png')}
-          style={styles.headerImage}
-          resizeMode="cover"
-        >
-          <View style={styles.header}>
-            <View style={styles.userSection}>
-              <View style={styles.userIcon}>
-                {user.url_foto ? (
-                  <Image source={{ uri: user.url_foto }} style={styles.userPhoto} />
-                ) : (
-                  <Ionicons name="person" size={32} color="white" />
-                )}
-              </View>
-              <View style={styles.userInfo}>
-                <Text style={styles.userName}>{user.name}</Text>
-                <Text style={styles.userRole}>{user.role}</Text>
-              </View>
-              <TouchableOpacity 
-                style={styles.clearCacheButton}
-                onPress={handleClearCache}
-              >
-                <Ionicons name="trash-outline" size={20} color="white" />
-              </TouchableOpacity>
-            </View>
-          </View>
-        </ImageBackground>
-      </View>
-      
-      {/* Container branco com conteúdo - FIXO */}
-      <View style={styles.contentContainer}>
-        {/* Seção de data e status - FIXO */}
-        <View style={styles.dateStatusSection}>
-          <View style={styles.dateContainer}>
-            <Ionicons name="calendar-outline" size={16} color="#6b7280" />
-            <Text style={styles.dateMainText}>{getCurrentDate()}</Text>
-            <SyncStatusIndicator style={styles.syncIndicatorInline} />
-          </View>
-        </View>
+    <SafeAreaView style={styles.safeArea}>
+      <ImageBackground
+        source={require('../img-ref/background_home.jpg')}
+        style={styles.container}
+        resizeMode="cover"
+      >
+        <StatusBar style="auto" />
         
-        {/* Linha divisória - FIXO */}
-        <View style={styles.dividerLine} />
-        
-        {/* Barra de busca - FIXO */}
-        <View style={styles.searchContainer}>
-          <View style={styles.searchInputContainer}>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Buscar por ID ou título"
-              placeholderTextColor="#9ca3af"
-              value={searchText}
-              onChangeText={setSearchText}
-            />
-            <Ionicons name="search" size={20} color="#9ca3af" style={styles.searchIcon} />
-          </View>
-        </View>
-        
-        {/* Filtros - FIXO */}
-        <View style={styles.filtersContainer}>
-          {filters.map((filter) => (
-            <TouchableOpacity
-              key={filter.key}
-              style={[
-                styles.filterButton,
-                activeFilter === filter.key && styles.activeFilterButton,
-              ]}
-              onPress={() => setActiveFilter(filter.key)}
-            >
-              <Ionicons 
-                name={filter.icon as any} 
-                size={18} 
-                color={activeFilter === filter.key ? 'white' : '#6b7280'} 
-              />
-              <Text 
-                style={[
-                  styles.filterText,
-                  activeFilter === filter.key && styles.activeFilterText,
-                ]}
-                numberOfLines={1}
-                adjustsFontSizeToFit={true}
-                minimumFontScale={0.8}
-              >
-                {filter.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-        
-        {/* Lista de WorkOrders - APENAS ESTA PARTE TEM SCROLL */}
-        <ScrollView
-          style={styles.workOrdersScrollContainer}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
-          }
-        >
-          <View style={styles.workOrdersContainer}>
-            {error && (
-              <View style={styles.errorContainer}>
-                <Ionicons name="alert-circle" size={24} color="#ef4444" />
-                <Text style={styles.errorText}>{error}</Text>
-                <TouchableOpacity 
-                  style={styles.retryButton}
-                  onPress={loadWorkOrders}
-                >
-                  <Text style={styles.retryButtonText}>Tentar Novamente</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-            
-            {loading && !refreshing && (
-              <View style={styles.loadingContainer}>
-                <Text style={styles.loadingText}>Carregando ordens de serviço...</Text>
-              </View>
-            )}
-            
-            {!loading && !error && workOrders.length === 0 && (
-              <View style={styles.emptyContainer}>
-                <Ionicons name="document-text-outline" size={64} color="#9ca3af" />
-                <Text style={styles.emptyTitle}>Nenhuma ordem de serviço encontrada</Text>
-                <Text style={styles.emptySubtitle}>
-                  {searchText ? 'Tente usar outros termos de busca' : 'Não há ordens de serviço no momento'}
-                </Text>
-              </View>
-            )}
-            
-            {workOrders.map((workOrder, index) => (
-              <TouchableOpacity 
-                key={workOrder.id} 
-                style={[
-                  styles.workOrderCard,
-                  {
-                    backgroundColor: workOrder.status === 'em_progresso' ? '#f9dbb1' :
-                                   workOrder.status === 'aguardando' ? '#dadadf' :
-                                   workOrder.status === 'finalizada' ? '#9fd8f7' :
-                                   'white',
-                    borderColor: workOrder.status === 'em_progresso' ? '#fdb23b' :
-                               workOrder.status === 'aguardando' ? '#afafaf' :
-                               workOrder.status === 'finalizada' ? '#1cabec' :
-                               '#f3f4f6'
-                  }
-                ]}
-                onPress={() => handleWorkOrderPress(workOrder)}
-              >
-                <View style={styles.cardHeader}>
-                  <Text style={styles.cardId}>#{workOrder.id}</Text>
-                  {isWorkOrderDelayed(workOrder) && (
-                    <View style={styles.delayBadge}>
-                      <Ionicons name="warning" size={16} color="#ef4444" />
-                      <Text style={styles.delayText}>EM ATRASO</Text>
-                    </View>
+        {/* Header com imagem de background - FIXO */}
+        <View style={styles.headerWrapper}>
+          <ImageBackground
+            source={require('../img-ref/container_perfil.png')}
+            style={styles.headerImage}
+            resizeMode="cover"
+          >
+            <View style={styles.header}>
+              <View style={styles.userSection}>
+                <View style={styles.userIcon}>
+                  {user.url_foto ? (
+                    <Image source={{ uri: user.url_foto }} style={styles.userPhoto} />
+                  ) : (
+                    <Ionicons name="person" size={32} color="white" />
                   )}
                 </View>
-
-                <View style={styles.infoRow}>
-                  <Ionicons name="build-outline" size={16} color="#000000" />
-                  <Text style={styles.infoText}>{workOrder.title}</Text>
+                <View style={styles.userInfo}>
+                  <Text style={styles.userName}>{user.name}</Text>
+                  <Text style={styles.userRole}>{user.role}</Text>
                 </View>
-
-                <View style={styles.infoRow}>
-                  <Ionicons name="person-outline" size={16} color="#000000" />
-                  <Text style={styles.infoText}>{workOrder.client}</Text>
+                <TouchableOpacity 
+                  style={styles.clearCacheButton}
+                  onPress={handleClearCache}
+                >
+                  <Ionicons name="trash-outline" size={20} color="white" />
+                </TouchableOpacity>
+              </View>
+            </View>
+          </ImageBackground>
+        </View>
+        
+        {/* Container branco com conteúdo - FIXO */}
+        <View style={styles.contentContainer}>
+          {/* Seção de data e status - FIXO */}
+          <View style={styles.dateStatusSection}>
+            <View style={styles.dateContainer}>
+              <Ionicons name="calendar-outline" size={16} color="#6b7280" />
+              <Text style={styles.dateMainText}>{getCurrentDate()}</Text>
+              <SyncStatusIndicator style={styles.syncIndicatorInline} />
+            </View>
+          </View>
+          
+          {/* Linha divisória - FIXO */}
+          <View style={styles.dividerLine} />
+          
+          {/* Barra de busca - FIXO */}
+          <View style={styles.searchContainer}>
+            <View style={styles.searchInputContainer}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Buscar por ID ou título"
+                placeholderTextColor="#9ca3af"
+                value={searchText}
+                onChangeText={setSearchText}
+              />
+              <Ionicons name="search" size={20} color="#9ca3af" style={styles.searchIcon} />
+            </View>
+          </View>
+          
+          {/* Filtros - FIXO */}
+          <View style={styles.filtersContainer}>
+            {filters.map((filter) => (
+              <TouchableOpacity
+                key={filter.key}
+                style={[
+                  styles.filterButton,
+                  activeFilter === filter.key && styles.activeFilterButton,
+                ]}
+                onPress={() => setActiveFilter(filter.key)}
+              >
+                <Ionicons 
+                  name={filter.icon as any} 
+                  size={18} 
+                  color={activeFilter === filter.key ? 'white' : '#6b7280'} 
+                />
+                <Text 
+                  style={[
+                    styles.filterText,
+                    activeFilter === filter.key && styles.activeFilterText,
+                  ]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit={true}
+                  minimumFontScale={0.8}
+                >
+                  {filter.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          
+          {/* Lista de WorkOrders - APENAS ESTA PARTE TEM SCROLL */}
+          <ScrollView
+            style={styles.workOrdersScrollContainer}
+            showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+            }
+          >
+            <View style={styles.workOrdersContainer}>
+              {error && (
+                <View style={styles.errorContainer}>
+                  <Ionicons name="alert-circle" size={24} color="#ef4444" />
+                  <Text style={styles.errorText}>{error}</Text>
+                  <TouchableOpacity 
+                    style={styles.retryButton}
+                    onPress={loadWorkOrders}
+                  >
+                    <Text style={styles.retryButtonText}>Tentar Novamente</Text>
+                  </TouchableOpacity>
                 </View>
-
-                <View style={styles.infoRow}>
-                  <Ionicons name="location-outline" size={16} color="#000000" />
-                  <Text style={styles.infoText}>{workOrder.address}</Text>
+              )}
+              
+              {loading && !refreshing && (
+                <View style={styles.loadingContainer}>
+                  <Text style={styles.loadingText}>Carregando ordens de serviço...</Text>
                 </View>
-
-                <View style={styles.cardFooter}>
-                  <View style={styles.footerLeft}>
-                    {/* Botão de sincronização removido - sincronização é automática */}
+              )}
+              
+              {!loading && !error && workOrders.length === 0 && (
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="document-text-outline" size={64} color="#9ca3af" />
+                  <Text style={styles.emptyTitle}>Nenhuma ordem de serviço encontrada</Text>
+                  <Text style={styles.emptySubtitle}>
+                    {searchText ? 'Tente usar outros termos de busca' : 'Não há ordens de serviço no momento'}
+                  </Text>
+                </View>
+              )}
+              
+              {workOrders.map((workOrder, index) => (
+                <TouchableOpacity 
+                  key={workOrder.id} 
+                  style={[
+                    styles.workOrderCard,
+                    {
+                      backgroundColor: workOrder.status === 'em_progresso' ? '#f9dbb1' :
+                                     workOrder.status === 'aguardando' ? '#dadadf' :
+                                     workOrder.status === 'finalizada' ? '#9fd8f7' :
+                                     'white',
+                      borderColor: workOrder.status === 'em_progresso' ? '#fdb23b' :
+                                 workOrder.status === 'aguardando' ? '#afafaf' :
+                                 workOrder.status === 'finalizada' ? '#1cabec' :
+                                 '#f3f4f6'
+                    }
+                  ]}
+                  onPress={() => handleWorkOrderPress(workOrder)}
+                >
+                  <View style={styles.cardHeader}>
+                    <Text style={styles.cardId}>#{workOrder.id}</Text>
+                    {isWorkOrderDelayed(workOrder) && (
+                      <View style={styles.delayBadge}>
+                        <Ionicons name="warning" size={16} color="#ef4444" />
+                        <Text style={styles.delayText}>EM ATRASO</Text>
+                      </View>
+                    )}
                   </View>
-                  <View style={styles.footerRight}>
-                    <View style={[
-                      styles.statusBadge,
-                      { backgroundColor: getStatusBadgeColor(workOrder), borderColor: getStatusBorderColor(workOrder) }
-                    ]}>
-                      <View style={styles.statusBadgeContent}>
-                        <Text style={[
-                          styles.statusText,
-                          { color: getStatusTextColor(workOrder) }
-                        ]}>
-                          {getStatusText(workOrder.status)}
-                        </Text>
-                        {hasLocalStatus(workOrder) && (
-                          <Ionicons 
-                            name="phone-portrait" 
-                            size={12} 
-                            color="white" 
-                            style={styles.localStatusIcon}
-                          />
-                        )}
+
+                  <View style={styles.infoRow}>
+                    <Ionicons name="build-outline" size={16} color="#000000" />
+                    <Text style={styles.infoText}>{workOrder.title}</Text>
+                  </View>
+
+                  <View style={styles.infoRow}>
+                    <Ionicons name="person-outline" size={16} color="#000000" />
+                    <Text style={styles.infoText}>{workOrder.client}</Text>
+                  </View>
+
+                  <View style={styles.infoRow}>
+                    <Ionicons name="location-outline" size={16} color="#000000" />
+                    <Text style={styles.infoText}>{workOrder.address}</Text>
+                  </View>
+
+                  <View style={styles.cardFooter}>
+                    <View style={styles.footerLeft}>
+                      {/* Botão de sincronização removido - sincronização é automática */}
+                    </View>
+                    <View style={styles.footerRight}>
+                      <View style={[
+                        styles.statusBadge,
+                        { backgroundColor: getStatusBadgeColor(workOrder), borderColor: getStatusBorderColor(workOrder) }
+                      ]}>
+                        <View style={styles.statusBadgeContent}>
+                          <Text style={[
+                            styles.statusText,
+                            { color: getStatusTextColor(workOrder) }
+                          ]}>
+                            {getStatusText(workOrder.status)}
+                          </Text>
+                          {hasLocalStatus(workOrder) && (
+                            <Ionicons 
+                              name="phone-portrait" 
+                              size={12} 
+                              color="white" 
+                              style={styles.localStatusIcon}
+                            />
+                          )}
+                        </View>
                       </View>
                     </View>
                   </View>
-                </View>
-              </TouchableOpacity>
-            ))}
-            
-            {/* Espaço extra no final */}
-            <View style={styles.bottomSpacer} />
-          </View>
-        </ScrollView>
-      </View>
-      
-      <BottomNavigation
-        activeTab={activeTab}
-        onTabPress={handleTabPress}
-      />
-
-      {selectedWorkOrder && (
-        <WorkOrderModal
-          visible={modalVisible}
-          onConfirm={handleModalConfirm}
-          onClose={handleModalClose}
-          workOrder={selectedWorkOrder}
+                </TouchableOpacity>
+              ))}
+              
+              {/* Espaço extra no final */}
+              <View style={styles.bottomSpacer} />
+            </View>
+          </ScrollView>
+        </View>
+        
+        <BottomNavigation
+          activeTab={activeTab}
+          onTabPress={handleTabPress}
         />
-      )}
-    </ImageBackground>
+
+        {selectedWorkOrder && (
+          <WorkOrderModal
+            visible={modalVisible}
+            onConfirm={handleModalConfirm}
+            onClose={handleModalClose}
+            workOrder={selectedWorkOrder}
+          />
+        )}
+      </ImageBackground>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
   container: {
     flex: 1,
     backgroundColor: '#f3f4f6',

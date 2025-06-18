@@ -1,7 +1,6 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert, Image } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, Image, ImageBackground } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { RFValue } from 'react-native-responsive-fontsize';
 import { User } from '../types/workOrder';
 import { useAuth } from '../contexts/AuthContext';
@@ -30,66 +29,78 @@ const ProfileHeader: React.FC<ProfileHeaderProps> = ({ user, onBackPress }) => {
   };
 
   return (
-    <LinearGradient
-      colors={['#1e3a8a', '#3b82f6']}
-      style={styles.container}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-    >
-      <TouchableOpacity style={styles.backButton} onPress={onBackPress}>
-        <Ionicons name="arrow-back" size={24} color="white" />
-      </TouchableOpacity>
-      
-      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-        <Ionicons name="log-out-outline" size={24} color="white" />
-      </TouchableOpacity>
-      
-      <View style={styles.profileSection}>
-        <View style={styles.avatarContainer}>
-          <View style={styles.avatar}>
-            {user.url_foto ? (
-              <Image source={{ uri: user.url_foto }} style={styles.userPhoto} />
-            ) : (
-              <Ionicons name="person" size={50} color="white" />
-            )}
+    <View style={styles.headerWrapper}>
+      <ImageBackground
+        source={require('../img-ref/container_perfil.png')}
+        style={styles.headerImage}
+        resizeMode="cover"
+      >
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={onBackPress}>
+            <Ionicons name="arrow-back" size={24} color="white" />
+          </TouchableOpacity>
+          
+          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+            <Ionicons name="log-out-outline" size={24} color="white" />
+          </TouchableOpacity>
+          
+          <View style={styles.profileSection}>
+            <View style={styles.avatarContainer}>
+              <View style={styles.avatar}>
+                {user.url_foto ? (
+                  <Image source={{ uri: user.url_foto }} style={styles.userPhoto} />
+                ) : (
+                  <Ionicons name="person" size={50} color="white" />
+                )}
+              </View>
+            </View>
+            
+            <Text style={styles.userName}>{user.name}</Text>
+            <Text style={styles.userRole}>{user.role}</Text>
           </View>
         </View>
-        
-        <Text style={styles.userName}>{user.name}</Text>
-        <Text style={styles.userRole}>{user.role}</Text>
-      </View>
-    </LinearGradient>
+      </ImageBackground>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  headerWrapper: {
     paddingTop: 50,
     paddingHorizontal: 20,
-    paddingBottom: 30,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
-    alignItems: 'center',
+    paddingBottom: 15,
+  },
+  headerImage: {
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  header: {
+    paddingTop: 15,
+    paddingHorizontal: 20,
+    paddingBottom: 15,
+    borderBottomLeftRadius: 8,
+    borderBottomRightRadius: 8,
     position: 'relative',
   },
   backButton: {
     position: 'absolute',
-    top: 55,
+    top: 15,
     left: 20,
     zIndex: 1,
   },
   logoutButton: {
     position: 'absolute',
-    top: 55,
+    top: 15,
     right: 20,
     zIndex: 1,
   },
   profileSection: {
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 5,
+    paddingBottom: 15,
   },
   avatarContainer: {
-    marginBottom: 15,
+    marginBottom: 8,
   },
   avatar: {
     width: 100,
@@ -105,7 +116,7 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: RFValue(24),
     fontWeight: 'bold',
-    marginBottom: 5,
+    marginBottom: 2,
   },
   userRole: {
     color: 'rgba(255, 255, 255, 0.8)',

@@ -8,4 +8,7 @@ export { default as StatsCard } from './StatsCard';
 export { default as AuditSearchSection } from './AuditSearchSection';
 export { default as AuditCard } from './AuditCard';
 export { default as ManagerStatsCard } from './ManagerStatsCard';
-export { default as WorkOrderModal } from './WorkOrderModal'; 
+export { default as WorkOrderModal } from './WorkOrderModal';
+export { default as UserStatsCard } from './UserStatsCard';
+export { default as OSSearchSection } from './OSSearchSection';
+export { default as OSCard } from './OSCard'; 

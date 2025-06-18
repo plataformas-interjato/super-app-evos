@@ -205,7 +205,7 @@ export const fetchWorkOrdersWithFilters = async (
 
     // Adicionar timeout de 10 segundos
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Timeout: requisição demorou mais que 10 segundos')), 10000);
+      setTimeout(() => reject(new Error('Timeout: requisição demorou mais que 30 segundos')), 30000);
     });
 
     const queryPromise = query.order('created_at', { ascending: false });
