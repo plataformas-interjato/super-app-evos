@@ -1,131 +1,92 @@
 import React from 'react';
-import { View, Text, StyleSheet, Image } from 'react-native';
+import { View, Text, StyleSheet, Image, ImageBackground } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { RFValue } from 'react-native-responsive-fontsize';
 import { User } from '../types/workOrder';
 
 interface HeaderProps {
   user: User;
-  isConnected: boolean;
+  isConnected?: boolean;
 }
 
-const Header: React.FC<HeaderProps> = ({ user, isConnected }) => {
-  const getCurrentDate = () => {
-    return new Date().toLocaleDateString('pt-BR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-    });
-  };
-
+const Header: React.FC<HeaderProps> = ({ user }) => {
   return (
-    <LinearGradient
-      colors={['#1e3a8a', '#3b82f6']}
-      style={styles.container}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-    >
-      <View style={styles.userSection}>
-        <View style={styles.userIcon}>
-          {user.url_foto ? (
-            <Image source={{ uri: user.url_foto }} style={styles.userPhoto} />
-          ) : (
-            <Ionicons name="person" size={32} color="white" />
-          )}
+    <View style={styles.headerWrapper}>
+      <ImageBackground
+        source={require('../img-ref/container_perfil.png')}
+        style={styles.headerImage}
+        resizeMode="cover"
+      >
+        <View style={styles.header}>
+          <View style={styles.userSection}>
+            <View style={styles.avatar}>
+              {user.url_foto ? (
+                <Image source={{ uri: user.url_foto }} style={styles.userPhoto} />
+              ) : (
+                <Ionicons name="person" size={30} color="white" />
+              )}
+            </View>
+            <View style={styles.userInfo}>
+              <Text style={styles.userName}>{user.name}</Text>
+              <Text style={styles.userRole}>{user.role}</Text>
+            </View>
+          </View>
         </View>
-        <View style={styles.userInfo}>
-          <Text style={styles.userName}>{user.name}</Text>
-          <Text style={styles.userRole}>{user.role}</Text>
-        </View>
-      </View>
-
-      <View style={styles.statusSection}>
-        <View style={styles.connectionStatus}>
-          <Ionicons 
-            name="wifi" 
-            size={16} 
-            color={isConnected ? "#10b981" : "#ef4444"} 
-          />
-          <Text style={[
-            styles.connectionText,
-            { color: isConnected ? "#10b981" : "#ef4444" }
-          ]}>
-            {isConnected ? "CONECTADO" : "SEM CONEXÃO"}
-          </Text>
-        </View>
-
-        <View style={styles.dateSection}>
-          <Ionicons name="calendar" size={16} color="white" />
-          <Text style={styles.dateText}>{getCurrentDate()}</Text>
-        </View>
-      </View>
-    </LinearGradient>
+      </ImageBackground>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  headerWrapper: {
     paddingTop: 50,
     paddingHorizontal: 20,
-    paddingBottom: 20,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
+    paddingBottom: 10,
+  },
+  headerImage: {
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  header: {
+    paddingTop: 15,
+    paddingHorizontal: 20,
+    paddingBottom: 15,
+    borderBottomLeftRadius: 8,
+    borderBottomRightRadius: 8,
+    position: 'relative',
   },
   userSection: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 15,
   },
-  userIcon: {
-    width: 65,
-    height: 65,
-    borderRadius: 32.5,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  avatar: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 15,
+    borderWidth: 3,
+    borderColor: 'white',
   },
   userInfo: {
-    flex: 1,
+    marginLeft: 10,
   },
   userName: {
     color: 'white',
-    fontSize: RFValue(18),
+    fontSize: RFValue(24),
     fontWeight: 'bold',
+    marginBottom: 2,
   },
   userRole: {
     color: 'rgba(255, 255, 255, 0.8)',
-    fontSize: RFValue(14),
-  },
-  statusSection: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  connectionStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  connectionText: {
-    marginLeft: 5,
-    fontSize: RFValue(12),
-    fontWeight: 'bold',
-  },
-  dateSection: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  dateText: {
-    color: 'white',
-    marginLeft: 5,
-    fontSize: RFValue(14),
+    fontSize: RFValue(16),
     fontWeight: '500',
   },
   userPhoto: {
-    width: 65,
-    height: 65,
-    borderRadius: 32.5,
+    width: 70,
+    height: 70,
+    borderRadius: 35,
   },
 });
 

@@ -5,9 +5,10 @@ import {
   ScrollView,
   RefreshControl,
   Alert,
+  SafeAreaView,
+  ImageBackground,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { LinearGradient } from 'expo-linear-gradient';
 
 import Header from '../components/Header';
 import ManagerStatsCard from '../components/ManagerStatsCard';
@@ -18,6 +19,7 @@ import WorkOrderModal from '../components/WorkOrderModal';
 
 import { WorkOrder, User } from '../types/workOrder';
 import { ManagerStats } from '../types/manager';
+import { supabase } from '../services/supabase';
 
 interface ManagerScreenProps {
   user: User;
@@ -28,10 +30,18 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
   const [searchText, setSearchText] = useState('');
   const [activeTab, setActiveTab] = useState<'home' | 'profile'>('home');
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
-  const [isConnected, setIsConnected] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [realStats, setRealStats] = useState({
+    totalFinalized: 0,
+    totalAudited: 0,
+    osStats: {
+      executed: 0, // Todas OS finalizadas
+      delayed: 0,  // OS finalizadas há mais de 1 dia sem avaliação
+      pending: 0,  // OS pendentes de avaliação
+    },
+  });
   const [managerStats, setManagerStats] = useState<ManagerStats>({
-    totalEvaluated: 156,
+    totalEvaluated: 0,
     ranking: 4.8,
     executed: { count: 136, percentage: 87.2 },
     delayed: { count: 8, percentage: 5.1 },
@@ -41,29 +51,29 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
 
-  // Dados de exemplo - em produção, viriam de uma API
+  // Dados de exemplo - em produção, viriam de uma API online
   const mockWorkOrders: WorkOrder[] = [
     {
       id: 1,
-      title: 'Título',
-      client: 'Cliente',
-      address: 'Endereço',
+      title: 'Manutenção Sistema Elétrico',
+      client: 'Empresa ABC Ltda',
+      address: 'Rua das Flores, 123 - Centro',
       priority: 'alta',
       status: 'aguardando',
       scheduling_date: new Date(),
-      sync: 1,
+      sync: 1, // Campo mantido por compatibilidade com a interface
       createdAt: new Date(),
       updatedAt: new Date(),
     },
     {
       id: 2,
-      title: 'Título',
-      client: 'Cliente',
-      address: 'Endereço',
+      title: 'Instalação de Equipamentos',
+      client: 'Indústria XYZ S.A.',
+      address: 'Av. Industrial, 456 - Distrito Industrial',
       priority: 'media',
       status: 'em_progresso',
       scheduling_date: new Date(),
-      sync: 1,
+      sync: 1, // Campo mantido por compatibilidade com a interface
       createdAt: new Date(),
       updatedAt: new Date(),
     },
@@ -72,16 +82,16 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
   useEffect(() => {
     loadWorkOrders();
     loadManagerStats();
-    checkConnection();
+    loadRealStats();
   }, []);
 
   const loadWorkOrders = () => {
-    // Em produção, buscar dados da API
+    // Em produção, buscar dados da API online em tempo real
     setWorkOrders(mockWorkOrders);
   };
 
   const loadManagerStats = () => {
-    // Em produção, buscar estatísticas da API
+    // Em produção, buscar estatísticas da API online em tempo real
     const currentDate = new Date().toLocaleDateString('pt-BR', {
       day: '2-digit',
       month: '2-digit',
@@ -97,17 +107,140 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
     });
   };
 
-  const checkConnection = () => {
-    // Em produção, verificar conexão real
-    setIsConnected(false); // Mostra "SEM CONEXÃO" como na imagem
+  const loadRealStats = async () => {
+    try {
+      console.log('📊 Carregando estatísticas reais para o manager:', user.id);
+      
+      // 1. Buscar OS finalizadas onde o usuário atual é supervisor
+      const { data: finalizedOrders, error: finalizedError } = await supabase
+        .from('ordem_servico')
+        .select('id, data_agendamento')
+        .eq('supervisor_id', parseInt(user.id))
+        .eq('os_status_txt', 'Encerrada')
+        .eq('ativo', 1);
+
+      if (finalizedError) {
+        console.error('❌ Erro ao buscar OS finalizadas:', finalizedError);
+        throw finalizedError;
+      }
+
+      const totalFinalized = finalizedOrders?.length || 0;
+      console.log(`✅ ${totalFinalized} OS finalizadas encontradas`);
+
+      // 2. Buscar todas as OS finalizadas (independente do supervisor) para "executadas"
+      const { data: allFinalizedOrders, error: allFinalizedError } = await supabase
+        .from('ordem_servico')
+        .select('id, data_agendamento')
+        .eq('os_status_txt', 'Encerrada')
+        .eq('ativo', 1);
+
+      if (allFinalizedError) {
+        console.error('❌ Erro ao buscar todas as OS finalizadas:', allFinalizedError);
+        throw allFinalizedError;
+      }
+
+      const totalExecuted = allFinalizedOrders?.length || 0;
+      console.log(`✅ ${totalExecuted} OS executadas (todas finalizadas) encontradas`);
+
+      // 3. Buscar OS auditadas da tabela avaliacao_os
+      const supervisedOrderIds = finalizedOrders?.map(order => order.id) || [];
+      
+      let totalAudited = 0;
+      
+      if (supervisedOrderIds.length > 0) {
+        const { data: auditedOrders, error: auditedError } = await supabase
+          .from('avaliacao_os')
+          .select('ordem_servico_id')
+          .in('ordem_servico_id', supervisedOrderIds);
+
+        if (auditedError) {
+          console.error('❌ Erro ao buscar OS auditadas:', auditedError);
+          throw auditedError;
+        }
+
+        // Contar avaliações únicas (remover duplicatas caso existam)
+        const uniqueAuditedIds = new Set(auditedOrders?.map(audit => audit.ordem_servico_id) || []);
+        totalAudited = uniqueAuditedIds.size;
+        console.log(`✅ ${totalAudited} OS auditadas encontradas`);
+      }
+
+      // 4. Buscar todas as OS auditadas para verificar quais foram avaliadas
+      const { data: allAuditedOrders, error: allAuditedError } = await supabase
+        .from('avaliacao_os')
+        .select('ordem_servico_id');
+
+      if (allAuditedError) {
+        console.error('❌ Erro ao buscar todas as OS auditadas:', allAuditedError);
+        throw allAuditedError;
+      }
+
+      const allAuditedIds = new Set(allAuditedOrders?.map((audit: any) => audit.ordem_servico_id) || []);
+
+      // 5. Calcular OS atrasadas (finalizadas com data_agendamento anterior ao dia atual e não avaliadas)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0); // Zerar horas para comparar apenas a data
+
+      const delayedOrders = allFinalizedOrders?.filter(order => {
+        if (!order.data_agendamento) return false;
+        
+        const scheduledDate = new Date(order.data_agendamento);
+        scheduledDate.setHours(0, 0, 0, 0); // Zerar horas para comparar apenas a data
+        
+        const isOverdue = scheduledDate < today; // data_agendamento menor que hoje = atrasada
+        const isNotEvaluated = !allAuditedIds.has(order.id);
+        
+        return isOverdue && isNotEvaluated;
+      }) || [];
+
+      const totalDelayed = delayedOrders.length;
+      console.log(`✅ ${totalDelayed} OS atrasadas encontradas`);
+
+      // 6. Calcular OS pendentes de avaliação (todas as finalizadas que não foram avaliadas)
+      const pendingOrders = allFinalizedOrders?.filter(order => 
+        !allAuditedIds.has(order.id)
+      ) || [];
+
+      const totalPending = pendingOrders.length;
+      console.log(`✅ ${totalPending} OS pendentes de avaliação encontradas`);
+      
+      setRealStats({
+        totalFinalized,
+        totalAudited,
+        osStats: {
+          executed: totalExecuted,
+          delayed: totalDelayed,
+          pending: totalPending,
+        },
+      });
+      
+      // Atualizar o totalEvaluated no managerStats
+      setManagerStats(prev => ({
+        ...prev,
+        totalEvaluated: totalFinalized
+      }));
+      
+    } catch (error) {
+      console.error('💥 Erro ao carregar estatísticas reais:', error);
+      // Em caso de erro, manter valores padrão
+      setRealStats({
+        totalFinalized: 0,
+        totalAudited: 0,
+        osStats: {
+          executed: 0,
+          delayed: 0,
+          pending: 0,
+        },
+      });
+    }
   };
 
   const handleRefresh = () => {
     setRefreshing(true);
+    // Simula uma requisição à API online
     setTimeout(() => {
       loadWorkOrders();
       loadManagerStats();
-      checkConnection();
+      loadRealStats();
       setRefreshing(false);
     }, 1500);
   };
@@ -167,85 +300,114 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress }) => {
   });
 
   return (
-    <LinearGradient
-      colors={['#1e3a8a', '#3b82f6']}
-      style={styles.container}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-    >
-      <StatusBar style="light" />
-      
-      <Header user={user} isConnected={isConnected} />
-      
-      {/* ScrollView principal da tela */}
-      <ScrollView
-        style={styles.mainScrollContainer}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
-        }
+    <SafeAreaView style={styles.safeArea}>
+      <ImageBackground
+        source={require('../img-ref/background_home.jpg')}
+        style={styles.container}
+        resizeMode="cover"
       >
-        <ManagerStatsCard stats={managerStats} />
+        <StatusBar style="auto" />
         
-        {/* Seção inferior com fundo branco */}
-        <View style={styles.bottomSection}>
-          <SearchBar
-            value={searchText}
-            onChangeText={setSearchText}
-            placeholder="Buscar OS"
-          />
+        {/* ScrollView geral da página */}
+        <ScrollView
+          style={styles.pageScrollContainer}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+          }
+        >
+          <Header user={user} />
           
-          {/* Lista de WorkOrders */}
-          <View style={styles.workOrdersContainer}>
-            {filteredWorkOrders.map((workOrder) => (
-              <WorkOrderCard
-                key={workOrder.id}
-                workOrder={workOrder}
-                onPress={() => handleWorkOrderPress(workOrder)}
-                onRefresh={() => handleWorkOrderRefresh(workOrder)}
+          {/* Cards de estatísticas FORA do container branco */}
+          <ManagerStatsCard realStats={realStats} />
+          
+          {/* Container branco - APENAS para busca e WorkOrders */}
+          <View style={styles.whiteContainer}>
+            <View style={styles.contentSection}>
+              <SearchBar
+                value={searchText}
+                onChangeText={setSearchText}
+                placeholder="Buscar OS"
               />
-            ))}
+              
+              {/* Lista de WorkOrders com scroll interno */}
+              <ScrollView
+                style={styles.workOrdersScrollContainer}
+                contentContainerStyle={styles.workOrdersContent}
+                nestedScrollEnabled={true}
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.workOrdersContainer}>
+                  {filteredWorkOrders.map((workOrder) => (
+                    <WorkOrderCard
+                      key={workOrder.id}
+                      workOrder={workOrder}
+                      onPress={() => handleWorkOrderPress(workOrder)}
+                      onRefresh={() => handleWorkOrderRefresh(workOrder)}
+                    />
+                  ))}
+                </View>
+              </ScrollView>
+            </View>
           </View>
-          
-          {/* Espaço extra no final para evitar que o último item fique atrás da navegação */}
-          <View style={styles.bottomSpacer} />
-        </View>
-      </ScrollView>
-      
-      <BottomNavigation
-        activeTab={activeTab}
-        onTabPress={handleTabPress}
-      />
+        </ScrollView>
+        
+        <BottomNavigation
+          activeTab={activeTab}
+          onTabPress={handleTabPress}
+        />
 
-      <WorkOrderModal
-        visible={modalVisible}
-        onConfirm={handleModalConfirm}
-        onClose={handleModalClose}
-        workOrder={selectedWorkOrder}
-      />
-    </LinearGradient>
+        <WorkOrderModal
+          visible={modalVisible}
+          onConfirm={handleModalConfirm}
+          onClose={handleModalClose}
+          workOrder={selectedWorkOrder}
+        />
+      </ImageBackground>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
   container: {
     flex: 1,
+    backgroundColor: '#f3f4f6',
   },
-  mainScrollContainer: {
+  pageScrollContainer: {
+    flex: 1,
+    marginBottom: 1, // Espaço para o BottomNavigation
+  },
+  whiteContainer: {
+    backgroundColor: 'white',
+    marginHorizontal: 20,
+    marginTop: 10,
+    marginBottom: 10,
+    borderRadius: 15,
+    paddingVertical: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 3,
+    overflow: 'hidden',
     flex: 1,
   },
-  bottomSection: {
-    backgroundColor: '#f3f4f6',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 10,
-    minHeight: 400, // Altura mínima para garantir que a seção seja visível
+  contentSection: {
+    paddingHorizontal: 15,
+    flex: 1,
   },
   workOrdersContainer: {
     paddingBottom: 10,
   },
-  bottomSpacer: {
-    height: 100,
+  workOrdersScrollContainer: {
+    flex: 1,
+  },
+  workOrdersContent: {
+    paddingBottom: 200,
   },
 });
 
