@@ -11,6 +11,9 @@ export interface WorkOrder {
   updatedAt: Date;
   os_conteudo?: string;
   tipo_os_id?: number; // FK para tipo_os
+  supervisor_id?: number; // ID do supervisor
+  supervisor_name?: string; // Nome do supervisor
+  is_evaluated?: boolean; // Se a OS foi avaliada
 }
 
 export interface User {

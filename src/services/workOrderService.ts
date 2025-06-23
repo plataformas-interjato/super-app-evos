@@ -57,7 +57,7 @@ const mapStatus = (status: string): 'aguardando' | 'em_progresso' | 'finalizada'
 };
 
 // Função para mapear dados do Supabase para o formato da aplicação
-const mapSupabaseToWorkOrder = (supabaseOrder: SupabaseWorkOrder): WorkOrder => {
+const mapSupabaseToWorkOrder = (supabaseOrder: SupabaseWorkOrder, supervisorName?: string, isEvaluated?: boolean): WorkOrder => {
   // Montar endereço completo
   const endereco = supabaseOrder.endereco_bairro 
     ? `${supabaseOrder.endereco_logradouro}, ${supabaseOrder.endereco_bairro}`
@@ -76,17 +76,28 @@ const mapSupabaseToWorkOrder = (supabaseOrder: SupabaseWorkOrder): WorkOrder => 
     updatedAt: new Date(supabaseOrder.dt_edicao || supabaseOrder.created_at),
     os_conteudo: supabaseOrder.os_conteudo,
     tipo_os_id: supabaseOrder.tipo_os_id,
+    supervisor_id: supabaseOrder.supervisor_id,
+    supervisor_name: supervisorName || 'Supervisor não encontrado',
+    is_evaluated: isEvaluated || false,
   };
 };
 
-// Buscar todas as ordens de serviço
+// Buscar todas as ordens de serviço com informações de supervisor e avaliação
 export const fetchWorkOrders = async (): Promise<{ data: WorkOrder[] | null; error: string | null; fromCache?: boolean }> => {
   try {
-    console.log('🔍 Buscando todas as ordens de serviço...');
+    console.log('🔍 Buscando todas as ordens de serviço com supervisor e avaliações...');
     
     const { data, error } = await supabase
       .from('ordem_servico')
-      .select('*')
+      .select(`
+        *,
+        cliente:cliente_id (
+          nome
+        ),
+        supervisor:supervisor_id (
+          nome
+        )
+      `)
       .eq('ativo', 1) // Apenas OS ativas
       .order('created_at', { ascending: false });
 
@@ -95,8 +106,25 @@ export const fetchWorkOrders = async (): Promise<{ data: WorkOrder[] | null; err
       return { data: null, error: error.message };
     }
 
-    const workOrders = data?.map(mapSupabaseToWorkOrder) || [];
-    console.log(`✅ ${workOrders.length} ordens de serviço carregadas`);
+    // Buscar todas as avaliações para verificar quais OS foram avaliadas
+    const { data: evaluations, error: evaluationError } = await supabase
+      .from('avaliacao_os')
+      .select('ordem_servico_id');
+
+    if (evaluationError) {
+      console.warn('⚠️ Erro ao buscar avaliações, continuando sem essa informação:', evaluationError);
+    }
+
+    // Criar Set com IDs das OS avaliadas para lookup rápido
+    const evaluatedOsIds = new Set(evaluations?.map(evaluation => evaluation.ordem_servico_id) || []);
+
+    const workOrders = data?.map(order => {
+      const supervisorName = (order as any).supervisor?.nome || 'Supervisor não encontrado';
+      const isEvaluated = evaluatedOsIds.has(order.id);
+      return mapSupabaseToWorkOrder(order, supervisorName, isEvaluated);
+    }) || [];
+
+    console.log(`✅ ${workOrders.length} ordens de serviço carregadas com supervisor e avaliações`);
     return { data: workOrders, error: null, fromCache: false };
   } catch (error) {
     console.error('💥 Erro inesperado ao buscar ordens de serviço:', error);
@@ -111,7 +139,15 @@ export const fetchWorkOrdersByTechnician = async (userId: string): Promise<{ dat
     
     const { data, error } = await supabase
       .from('ordem_servico')
-      .select('*')
+      .select(`
+        *,
+        cliente:cliente_id (
+          nome
+        ),
+        supervisor:supervisor_id (
+          nome
+        )
+      `)
       .eq('tecnico_resp_id', parseInt(userId)) // userId já é o ID numérico
       .eq('ativo', 1) // Apenas OS ativas
       .order('created_at', { ascending: false });
@@ -121,7 +157,29 @@ export const fetchWorkOrdersByTechnician = async (userId: string): Promise<{ dat
       return { data: null, error: error.message };
     }
 
-    const workOrders = data?.map(mapSupabaseToWorkOrder) || [];
+    // Buscar avaliações para as OS do técnico
+    const osIds = data?.map(order => order.id) || [];
+    let evaluatedOsIds = new Set<number>();
+
+    if (osIds.length > 0) {
+      const { data: evaluations, error: evaluationError } = await supabase
+        .from('avaliacao_os')
+        .select('ordem_servico_id')
+        .in('ordem_servico_id', osIds);
+
+      if (evaluationError) {
+        console.warn('⚠️ Erro ao buscar avaliações, continuando sem essa informação:', evaluationError);
+      } else {
+        evaluatedOsIds = new Set(evaluations?.map(evaluation => evaluation.ordem_servico_id) || []);
+      }
+    }
+
+    const workOrders = data?.map(order => {
+      const supervisorName = (order as any).supervisor?.nome || 'Supervisor não encontrado';
+      const isEvaluated = evaluatedOsIds.has(order.id);
+      return mapSupabaseToWorkOrder(order, supervisorName, isEvaluated);
+    }) || [];
+
     console.log(`✅ ${workOrders.length} ordens de serviço do técnico carregadas`);
     return { data: workOrders, error: null, fromCache: false };
   } catch (error) {
@@ -153,6 +211,9 @@ export const fetchWorkOrdersWithFilters = async (
       .select(`
         *,
         cliente:cliente_id (
+          nome
+        ),
+        supervisor:supervisor_id (
           nome
         )
       `)
@@ -195,11 +256,17 @@ export const fetchWorkOrdersWithFilters = async (
       const isNumeric = /^\d+$/.test(searchTerm);
       
       if (isNumeric) {
-        // Se for número, buscar por ID ou título
+        // Se for número, buscar por ID exato ou título
         query = query.or(`os_motivo_descricao.ilike.%${searchTerm}%,id.eq.${searchTerm}`);
       } else {
-        // Se for texto, buscar apenas por título
-        query = query.ilike('os_motivo_descricao', `%${searchTerm}%`);
+        // Se contém texto, buscar por ID parcial ou título
+        // Permite buscar tanto por título quanto por ID que contenha os números
+        const numericPart = searchTerm.replace(/[^\d]/g, '');
+        if (numericPart) {
+          query = query.or(`os_motivo_descricao.ilike.%${searchTerm}%,id::text.ilike.%${numericPart}%`);
+        } else {
+          query = query.ilike('os_motivo_descricao', `%${searchTerm}%`);
+        }
       }
     }
 
@@ -217,7 +284,29 @@ export const fetchWorkOrdersWithFilters = async (
       return { data: null, error: error.message };
     }
 
-    const workOrders = data?.map(mapSupabaseToWorkOrder) || [];
+    // Buscar avaliações para as OS filtradas
+    const osIds = data?.map(order => order.id) || [];
+    let evaluatedOsIds = new Set<number>();
+
+    if (osIds.length > 0) {
+      const { data: evaluations, error: evaluationError } = await supabase
+        .from('avaliacao_os')
+        .select('ordem_servico_id')
+        .in('ordem_servico_id', osIds);
+
+      if (evaluationError) {
+        console.warn('⚠️ Erro ao buscar avaliações, continuando sem essa informação:', evaluationError);
+      } else {
+        evaluatedOsIds = new Set(evaluations?.map(evaluation => evaluation.ordem_servico_id) || []);
+      }
+    }
+
+    const workOrders = data?.map(order => {
+      const supervisorName = (order as any).supervisor?.nome || 'Supervisor não encontrado';
+      const isEvaluated = evaluatedOsIds.has(order.id);
+      return mapSupabaseToWorkOrder(order, supervisorName, isEvaluated);
+    }) || [];
+
     console.log(`✅ ${workOrders.length} ordens de serviço com filtros carregadas`);
     return { data: workOrders, error: null, fromCache: false };
   } catch (error) {
@@ -257,7 +346,15 @@ export const updateWorkOrderStatus = async (
         dt_edicao: new Date().toISOString() 
       })
       .eq('id', parseInt(id))
-      .select('*')
+      .select(`
+        *,
+        cliente:cliente_id (
+          nome
+        ),
+        supervisor:supervisor_id (
+          nome
+        )
+      `)
       .single();
 
     if (error) {
@@ -265,7 +362,17 @@ export const updateWorkOrderStatus = async (
       return { data: null, error: error.message };
     }
 
-    const workOrder = mapSupabaseToWorkOrder(data);
+    // Verificar se a OS foi avaliada
+    const { data: evaluation, error: evaluationError } = await supabase
+      .from('avaliacao_os')
+      .select('ordem_servico_id')
+      .eq('ordem_servico_id', parseInt(id))
+      .single();
+
+    const isEvaluated = !evaluationError && evaluation;
+    const supervisorName = (data as any).supervisor?.nome || 'Supervisor não encontrado';
+
+    const workOrder = mapSupabaseToWorkOrder(data, supervisorName, isEvaluated);
     console.log(`✅ Status da OS ${id} atualizado para ${status}`);
     
     return { data: workOrder, error: null };

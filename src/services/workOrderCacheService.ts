@@ -220,15 +220,18 @@ export const filterCachedWorkOrders = (
   if (search && search.trim()) {
     const searchTerm = search.trim().toLowerCase();
     const isNumeric = /^\d+$/.test(searchTerm);
-
+    
     filtered = filtered.filter(wo => {
+      const title = wo.title.toLowerCase();
+      const idString = wo.id.toString();
+      
       if (isNumeric) {
-        // Buscar por ID ou título
-        return wo.id.toString().includes(searchTerm) || 
-               wo.title.toLowerCase().includes(searchTerm);
+        // Se for apenas números, buscar por ID exato ou título
+        return idString.includes(searchTerm) || title.includes(searchTerm);
       } else {
-        // Buscar apenas por título
-        return wo.title.toLowerCase().includes(searchTerm);
+        // Se contém texto, buscar por ID parcial ou título
+        // Permite buscar "123" dentro de "OS 123 - Manutenção"
+        return idString.includes(searchTerm) || title.includes(searchTerm);
       }
     });
   }

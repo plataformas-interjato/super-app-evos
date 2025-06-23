@@ -420,7 +420,7 @@ function AppContent() {
   const renderMainScreen = () => {
     // Regra de negócio: Gestor vê ManagerScreen, Técnico vê MainScreen
     if (appUser.userType === 'gestor') {
-      return <ManagerScreen user={appUser} onTabPress={handleTabPress} />;
+      return <ManagerScreen user={appUser} onTabPress={handleTabPress} onOpenWorkOrder={handleOpenWorkOrder} />;
     } else {
       return <MainScreen user={appUser} onTabPress={handleTabPress} onOpenWorkOrder={handleOpenWorkOrder} refreshTrigger={refreshMainScreen} />;
     }
