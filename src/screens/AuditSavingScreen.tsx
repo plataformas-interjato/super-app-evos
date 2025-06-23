@@ -80,7 +80,7 @@ const AuditSavingScreen: React.FC<AuditSavingScreenProps> = ({
   }, [onFinishSaving]);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       {/* Conteúdo Principal */}
       <View style={styles.content}>
         <Text style={styles.title}>Salvando a auditoria realizada</Text>

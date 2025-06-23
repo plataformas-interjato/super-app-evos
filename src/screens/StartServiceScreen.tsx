@@ -41,7 +41,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
   if (!workOrder || !user) {
     console.error('❌ Dados obrigatórios não fornecidos:', { workOrder: !!workOrder, user: !!user });
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar backgroundColor="#3b82f6" barStyle="light-content" />
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Erro: Dados não disponíveis</Text>
@@ -224,7 +224,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
   // Tela de loading enquanto verifica foto inicial
   if (isCheckingPhoto) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar backgroundColor="#3b82f6" barStyle="light-content" />
         <View style={styles.loadingContainer}>
           <Ionicons name="camera" size={48} color="#3b82f6" />
@@ -235,7 +235,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar backgroundColor="#3b82f6" barStyle="light-content" />
       
       {/* Header */}

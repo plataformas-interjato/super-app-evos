@@ -265,7 +265,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const hasMoreItems = itemsToShow < allWorkOrders.length;
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ImageBackground
         source={require('../img-ref/background_home.jpg')}
         style={styles.container}

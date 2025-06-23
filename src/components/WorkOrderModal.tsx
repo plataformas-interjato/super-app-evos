@@ -7,12 +7,13 @@ import {
   StyleSheet, 
   Dimensions,
   TouchableWithoutFeedback,
-  StatusBar
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { RFValue } from 'react-native-responsive-fontsize';
 import { WorkOrder } from '../types/workOrder';
+
+const { width } = Dimensions.get('window');
 
 interface WorkOrderModalProps {
   visible: boolean;
@@ -20,8 +21,6 @@ interface WorkOrderModalProps {
   onClose: () => void;
   onConfirm: () => void;
 }
-
-const { width, height } = Dimensions.get('window');
 
 const WorkOrderModal: React.FC<WorkOrderModalProps> = ({
   visible,
@@ -36,11 +35,8 @@ const WorkOrderModal: React.FC<WorkOrderModalProps> = ({
       visible={visible}
       transparent
       animationType="fade"
-      statusBarTranslucent
       onRequestClose={onClose}
     >
-      <StatusBar backgroundColor="rgba(0,0,0,0.5)" />
-      
       <TouchableWithoutFeedback onPress={onClose}>
         <View style={styles.overlay}>
           <BlurView intensity={20} style={styles.blurOverlay}>

@@ -645,88 +645,8 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     }
   };
 
-  // Função para limpar todo o cache/localStorage
-  const handleClearCache = async () => {
-    Alert.alert(
-      'Limpar Cache',
-      'Isso irá limpar todos os dados em cache do aplicativo. Deseja continuar?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { 
-          text: 'Limpar', 
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              console.log('🗑️ Iniciando limpeza completa do cache...');
-              
-              // Limpar cache de work orders
-              const { clearWorkOrdersCache } = require('../services/workOrderCacheService');
-              const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
-              await clearWorkOrdersCache(userId);
-              
-              // Limpar cache de etapas (usando a função que existe)
-              const { clearServiceCache } = require('../services/cacheService');
-              await clearServiceCache();
-              
-              // Limpar ações offline
-              const { clearAllOfflineActions } = require('../services/offlineService');
-              await clearAllOfflineActions();
-              
-              // Limpar status locais manualmente
-              const keys = await AsyncStorage.getAllKeys();
-              const localStatusKeys = keys.filter(key => key.startsWith('local_work_order_status_'));
-              if (localStatusKeys.length > 0) {
-                await AsyncStorage.multiRemove(localStatusKeys);
-                console.log(`🗑️ Removidos ${localStatusKeys.length} status locais`);
-              }
-              
-              // Limpar outros dados específicos
-              const keysToRemove = [
-                'completed_steps_',
-                'user_preferences',
-                'app_settings'
-              ];
-              
-              // Buscar todas as chaves e remover as que começam com os prefixos
-              const allKeys = await AsyncStorage.getAllKeys();
-              const keysToDelete = allKeys.filter(key => 
-                keysToRemove.some(prefix => key.startsWith(prefix))
-              );
-              
-              if (keysToDelete.length > 0) {
-                await AsyncStorage.multiRemove(keysToDelete);
-                console.log(`🗑️ Removidas ${keysToDelete.length} chaves adicionais do AsyncStorage`);
-              }
-              
-              console.log('✅ Cache limpo com sucesso');
-              
-              Alert.alert(
-                'Cache Limpo',
-                'Todos os dados em cache foram removidos. O aplicativo irá recarregar os dados do servidor.',
-                [{ 
-                  text: 'OK', 
-                  onPress: () => {
-                    // Recarregar dados após limpar cache
-                    loadWorkOrders();
-                  }
-                }]
-              );
-            } catch (error) {
-              console.error('❌ Erro ao limpar cache:', error);
-              Alert.alert(
-                'Erro',
-                'Não foi possível limpar o cache completamente. Tente novamente.',
-                [{ text: 'OK' }]
-              );
-            }
-          }
-        }
-      ]
-    );
-  };
-
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ImageBackground
         source={require('../img-ref/background_home.jpg')}
         style={styles.container}
@@ -754,12 +674,6 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
                   <Text style={styles.userName}>{user.name}</Text>
                   <Text style={styles.userRole}>{user.role}</Text>
                 </View>
-                <TouchableOpacity 
-                  style={styles.clearCacheButton}
-                  onPress={handleClearCache}
-                >
-                  <Ionicons name="trash-outline" size={20} color="white" />
-                </TouchableOpacity>
               </View>
             </View>
           </ImageBackground>
@@ -1257,9 +1171,6 @@ const styles = StyleSheet.create({
   },
   localStatusIcon: {
     marginLeft: 4,
-  },
-  clearCacheButton: {
-    padding: 5,
   },
 });
 

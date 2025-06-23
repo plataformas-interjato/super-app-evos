@@ -81,7 +81,7 @@ const OrderEvaluationScreen: React.FC<OrderEvaluationScreenProps> = ({
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar backgroundColor="#3b82f6" barStyle="light-content" />
       
       {/* Header */}

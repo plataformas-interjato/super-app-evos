@@ -531,7 +531,7 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
   ];
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ImageBackground
         source={require('../img-ref/background_home.jpg')}
         style={styles.container}

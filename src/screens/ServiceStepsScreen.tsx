@@ -509,7 +509,7 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
 
   if (isLoadingSteps) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar backgroundColor="#3b82f6" barStyle="light-content" />
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Carregando etapas...</Text>
@@ -519,7 +519,7 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar backgroundColor="#3b82f6" barStyle="light-content" />
       
       {/* Header */}

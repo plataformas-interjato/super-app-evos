@@ -823,7 +823,7 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Carregando etapas...</Text>
         </View>
@@ -835,7 +835,7 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   const currentStep = steps[activeStepIndex];
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={handleBackPress}>
@@ -973,10 +973,9 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
       <Modal
         visible={showModelPhotoModal}
         animationType="fade"
-        statusBarTranslucent={true}
         onRequestClose={closeModelPhotoModal}
       >
-        <View style={styles.modalContainer}>
+        <SafeAreaView style={styles.modalContainer} edges={['top', 'bottom']}>
           {/* Header do Modal */}
           <View style={styles.modalHeader}>
             <TouchableOpacity style={styles.modalCloseButton} onPress={closeModelPhotoModal}>
@@ -1014,17 +1013,16 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
               <Text style={styles.modalTakePhotoButtonText}>Tirar Foto</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </SafeAreaView>
       </Modal>
 
       {/* Modal de Foto Atual em Tela Cheia */}
       <Modal
         visible={showCurrentPhotoModal}
         animationType="fade"
-        statusBarTranslucent={true}
         onRequestClose={closeCurrentPhotoModal}
       >
-        <View style={styles.modalContainer}>
+        <SafeAreaView style={styles.modalContainer} edges={['top', 'bottom']}>
           {/* Foto Atual - Ocupa mais espaço sem header e texto */}
           <View style={styles.modalImageContainerFullscreen}>
             {selectedEntryForCurrent && (
@@ -1049,7 +1047,7 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
               <Text style={styles.modalRemovePhotoButtonText}>Remover Foto</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </SafeAreaView>
       </Modal>
     </SafeAreaView>
   );

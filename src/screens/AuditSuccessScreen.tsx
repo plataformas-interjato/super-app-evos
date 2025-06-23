@@ -28,7 +28,7 @@ const AuditSuccessScreen: React.FC<AuditSuccessScreenProps> = ({
 }) => {
   return (
     <View style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
         {/* Conteúdo Principal */}
         <View style={styles.content}>
           {/* Ícone de Sucesso */}

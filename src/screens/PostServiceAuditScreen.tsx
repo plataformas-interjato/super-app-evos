@@ -371,7 +371,7 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
   // Tela de loading enquanto verifica foto final
   if (isCheckingPhoto) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar backgroundColor="#3b82f6" barStyle="light-content" />
         <View style={styles.loadingContainer}>
           <Ionicons name="camera" size={48} color="#3b82f6" />
@@ -382,7 +382,7 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar backgroundColor="#3b82f6" barStyle="light-content" />
       
       {/* Header */}
