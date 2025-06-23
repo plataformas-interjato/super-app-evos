@@ -11,12 +11,14 @@ import {
   ImageBackground,
   Image,
   SafeAreaView,
+  Platform,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
 import { RFValue } from 'react-native-responsive-fontsize';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 
 import BottomNavigation from '../components/BottomNavigation';
 import WorkOrderModal from '../components/WorkOrderModal';
@@ -647,12 +649,14 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
+      {/* View para simular background da status bar */}
+      <View style={styles.statusBarBackground} />
       <ImageBackground
         source={require('../img-ref/background_home.jpg')}
         style={styles.container}
         resizeMode="cover"
       >
-        <StatusBar style="auto" />
+        <StatusBar style="light-content" />
         
         {/* Header com imagem de background - FIXO */}
         <View style={styles.headerWrapper}>
@@ -1171,6 +1175,14 @@ const styles = StyleSheet.create({
   },
   localStatusIcon: {
     marginLeft: 4,
+  },
+  statusBarBackground: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: Constants.statusBarHeight,
+    backgroundColor: '#3b82f6',
   },
 });
 
