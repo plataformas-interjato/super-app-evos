@@ -49,14 +49,13 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
   onSkipToPhotoCollection,
 }) => {
   const [steps, setSteps] = useState<ServiceStep[]>([]);
-  const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
+  const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSteps, setIsLoadingSteps] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     loadServiceSteps();
-    loadCompletedStepsFromStorage();
   }, []);
 
   // Função de back personalizada que considera se pulou a tela de início
@@ -208,67 +207,17 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
     }
   };
 
-  const toggleEntryCompletion = async (entryId: number) => {
-    try {
-      const isCompleted = completedSteps.has(entryId);
-      
-      let newCompletedSteps: Set<number>;
-      
-      if (!isCompleted) {
-        // Marcar como completo
-        newCompletedSteps = new Set([...completedSteps, entryId]);
+  // Função para expandir/encolher etapas
+  const toggleStepExpansion = (stepId: number) => {
+    setExpandedSteps(prev => {
+      const newExpanded = new Set(prev);
+      if (newExpanded.has(stepId)) {
+        newExpanded.delete(stepId);
       } else {
-        // Desmarcar
-        newCompletedSteps = new Set(completedSteps);
-        newCompletedSteps.delete(entryId);
+        newExpanded.add(stepId);
       }
-      
-      setCompletedSteps(newCompletedSteps);
-      
-      // Salvar no localStorage
-      try {
-        await saveCompletedStepsToStorage(newCompletedSteps);
-        console.log(`✅ Status de checklist salvo localmente para entrada ${entryId}`);
-      } catch (storageError) {
-        console.error('❌ Erro ao salvar checklist no localStorage:', storageError);
-      }
-
-      // Salvar usando sistema offline para sincronização posterior
-      try {
-        // Converter Set para objeto para facilitar sincronização
-        const checklistData: { [key: number]: boolean } = {};
-        newCompletedSteps.forEach(id => {
-          checklistData[id] = true;
-        });
-
-        const { success, error, savedOffline } = await saveChecklistEtapaOffline(
-          workOrder.id,
-          user.id,
-          checklistData
-        );
-
-        if (success) {
-          if (savedOffline) {
-            try {
-              const isOnline = await checkNetworkConnection();
-              if (!isOnline) {
-                console.log('📱 App offline: checklist salvo localmente para sincronização');
-              }
-            } catch (networkError) {
-              console.warn('⚠️ Erro ao verificar conexão:', networkError);
-            }
-          } else {
-            console.log('✅ Checklist salvo online com sucesso');
-          }
-        } else {
-          console.error('❌ Erro ao salvar checklist offline:', error);
-        }
-      } catch (offlineError) {
-        console.error('💥 Erro no sistema offline de checklist:', offlineError);
-      }
-    } catch (error) {
-      console.error('💥 Erro inesperado ao alternar completude da entrada:', error);
-    }
+      return newExpanded;
+    });
   };
 
   const handleFinishService = async () => {
@@ -304,30 +253,6 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
       onFinishService();
     }
   };
-
-  const getCompletionStats = () => {
-    try {
-      // Contar o total de entradas em todas as etapas
-      const totalEntries = steps.reduce((total, step) => {
-        try {
-          return total + (step.entradas?.length || 0);
-        } catch (stepError) {
-          console.warn('⚠️ Erro ao contar entradas da etapa:', step.id, stepError);
-          return total;
-        }
-      }, 0);
-      
-      const completedCount = completedSteps.size;
-      const percentage = totalEntries > 0 ? Math.round((completedCount / totalEntries) * 100) : 0;
-      
-      return { totalSteps: totalEntries, completedCount, percentage };
-    } catch (error) {
-      console.error('💥 Erro ao calcular estatísticas de completude:', error);
-      return { totalSteps: 0, completedCount: 0, percentage: 0 };
-    }
-  };
-
-  const { totalSteps, completedCount, percentage } = getCompletionStats();
 
   // Função para criar etapas específicas offline baseado no tipo de OS
   const createOfflineStepsForType = (tipoOsId: number, workOrder: WorkOrder): ServiceStep[] => {
@@ -582,45 +507,6 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
     }
   };
 
-  // Função para salvar checks no localStorage
-  const saveCompletedStepsToStorage = async (completedIds: Set<number>) => {
-    try {
-      const key = `completed_steps_${workOrder.id}`;
-      const completedArray = Array.from(completedIds);
-      await AsyncStorage.setItem(key, JSON.stringify(completedArray));
-      console.log(`💾 Checklist salvo para OS ${workOrder.id}: ${completedArray.length} itens completados`);
-    } catch (error) {
-      console.error('❌ Erro ao salvar checks no localStorage:', error);
-      // Não bloquear a UI em caso de erro de storage
-    }
-  };
-
-  // Função para carregar checks do localStorage
-  const loadCompletedStepsFromStorage = async () => {
-    try {
-      const key = `completed_steps_${workOrder.id}`;
-      const stored = await AsyncStorage.getItem(key);
-      if (stored) {
-        try {
-          const completedArray = JSON.parse(stored);
-          setCompletedSteps(new Set(completedArray));
-          console.log(`📱 Checklist carregado para OS ${workOrder.id}: ${completedArray.length} itens completados`);
-        } catch (parseError) {
-          console.error('❌ Erro ao fazer parse do checklist salvo:', parseError);
-          // Se não conseguir fazer parse, inicializar vazio
-          setCompletedSteps(new Set());
-        }
-      } else {
-        console.log(`📱 Nenhum checklist salvo encontrado para OS ${workOrder.id}`);
-        setCompletedSteps(new Set());
-      }
-    } catch (error) {
-      console.error('❌ Erro ao carregar checks do localStorage:', error);
-      // Se falhar ao carregar, inicializar vazio
-      setCompletedSteps(new Set());
-    }
-  };
-
   if (isLoadingSteps) {
     return (
       <SafeAreaView style={styles.container}>
@@ -658,18 +544,6 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
           </View>
           
           <Text style={styles.serviceTitle}>{workOrder.title}</Text>
-
-          {/* Progresso */}
-          {totalSteps > 0 && (
-            <View style={styles.progressSection}>
-              <Text style={styles.progressText}>
-                Progresso: {completedCount}/{totalSteps} ({percentage}%)
-              </Text>
-              <View style={styles.progressBar}>
-                <View style={[styles.progressFill, { width: `${percentage}%` }]} />
-              </View>
-            </View>
-          )}
         </View>
 
         {/* Informações Úteis */}
@@ -718,7 +592,10 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
                 {steps.map((step, index) => (
                   <View key={step.id} style={styles.stepGroup}>
                     {/* Cabeçalho da Etapa */}
-                    <View style={styles.stepHeader}>
+                    <TouchableOpacity 
+                      style={styles.stepHeader}
+                      onPress={() => toggleStepExpansion(step.id)}
+                    >
                       <View style={styles.stepHeaderTextContainer}>
                         <Text style={styles.stepHeaderText}>{step.titulo}</Text>
                         {step.entradas && step.entradas.length > 0 && (
@@ -727,30 +604,26 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
                           </Text>
                         )}
                       </View>
-                    </View>
+                      <Ionicons 
+                        name={expandedSteps.has(step.id) ? "chevron-up" : "chevron-down"} 
+                        size={20} 
+                        color="#6b7280" 
+                      />
+                    </TouchableOpacity>
 
-                    {/* Mostrar Entradas da Etapa como itens clicáveis */}
-                    {step.entradas && step.entradas.length > 0 ? (
+                    {/* Mostrar Entradas da Etapa apenas se expandida */}
+                    {expandedSteps.has(step.id) && step.entradas && step.entradas.length > 0 ? (
                       <View style={styles.entriesContainer}>
                         {step.entradas.map((entrada, entryIndex) => (
-                          <TouchableOpacity 
+                          <View 
                             key={entrada.id} 
                             style={styles.entryItem}
-                            onPress={() => toggleEntryCompletion(entrada.id)}
                           >
-                            <View style={[
-                              styles.entryBullet,
-                              completedSteps.has(entrada.id) && styles.entryBulletCompleted
-                            ]}>
-                              {completedSteps.has(entrada.id) ? (
-                                <Ionicons name="checkmark" size={12} color="white" />
-                              ) : null}
+                            <View style={styles.entryBullet}>
+                              <Text style={styles.entryBulletText}>•</Text>
                             </View>
                             <View style={styles.entryTextContainer}>
-                              <Text style={[
-                                styles.entryText,
-                                completedSteps.has(entrada.id) && styles.entryTextCompleted
-                              ]}>
+                              <Text style={styles.entryText}>
                                 {entrada.titulo || entrada.valor || 'Item sem título'}
                               </Text>
                               {entrada.foto_base64 && (
@@ -759,16 +632,16 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
                                 </Text>
                               )}
                             </View>
-                          </TouchableOpacity>
+                          </View>
                         ))}
                       </View>
-                    ) : (
+                    ) : expandedSteps.has(step.id) && (!step.entradas || step.entradas.length === 0) ? (
                       <View style={styles.noEntriesContainer}>
                         <Text style={styles.noEntriesText}>
                           Nenhum item encontrado para esta etapa
                         </Text>
                       </View>
-                    )}
+                    ) : null}
                   </View>
                 ))}
               </View>
@@ -924,6 +797,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
   },
   stepHeaderTextContainer: {
     flex: 1,
@@ -939,7 +814,7 @@ const styles = StyleSheet.create({
     color: '#6b7280',
   },
   entriesContainer: {
-    marginLeft: 32,
+    marginLeft: 16,
     marginTop: 8,
     paddingLeft: 16,
     borderLeftWidth: 2,
@@ -954,16 +829,14 @@ const styles = StyleSheet.create({
   entryBullet: {
     width: 20,
     height: 20,
-    borderRadius: 10,
-    backgroundColor: '#e5e7eb',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#d1d5db',
+    marginTop: 2,
   },
-  entryBulletCompleted: {
-    backgroundColor: '#10b981',
-    borderColor: '#10b981',
+  entryBulletText: {
+    fontSize: RFValue(16),
+    fontWeight: '600',
+    color: '#6b7280',
   },
   entryTextContainer: {
     flex: 1,
@@ -972,10 +845,6 @@ const styles = StyleSheet.create({
     fontSize: RFValue(12),
     color: '#374151',
     marginBottom: 2,
-  },
-  entryTextCompleted: {
-    color: '#6b7280',
-    textDecorationLine: 'line-through',
   },
   entryPhotoIndicator: {
     fontSize: RFValue(12),
@@ -1020,30 +889,6 @@ const styles = StyleSheet.create({
   loadingText: {
     fontSize: RFValue(16),
     color: '#6b7280',
-  },
-  progressSection: {
-    marginTop: 16,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-  },
-  progressText: {
-    fontSize: RFValue(14),
-    fontWeight: '500',
-    color: '#374151',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  progressBar: {
-    height: 8,
-    backgroundColor: '#e5e7eb',
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#10b981',
-    borderRadius: 4,
   },
   sectionSubtitle: {
     fontSize: RFValue(13),
