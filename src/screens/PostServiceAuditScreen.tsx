@@ -685,7 +685,7 @@ const styles = StyleSheet.create({
   actionButtonText: {
     fontSize: RFValue(16),
     fontWeight: '600',
-    color: '#1f2937',
+    color: '#000000',
   },
   actionButtonTextDisabled: {
     color: '#6b7280',

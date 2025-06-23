@@ -135,20 +135,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   downloadButton: {
-    backgroundColor: '#fbbf24', // Amarelo
+    backgroundColor: '#E0ED54',
   },
   viewOrdersButton: {
-    backgroundColor: '#3b82f6', // Azul
+    backgroundColor: '#E0ED54',
   },
   downloadButtonText: {
     fontSize: RFValue(16),
     fontWeight: '600',
-    color: '#000',
+    color: '#000000',
   },
   viewOrdersButtonText: {
     fontSize: RFValue(16),
     fontWeight: '600',
-    color: 'white',
+    color: '#000000',
   },
 });
 

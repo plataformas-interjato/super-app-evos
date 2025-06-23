@@ -16,7 +16,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { RFValue } from 'react-native-responsive-fontsize';
 import * as ImagePicker from 'expo-image-picker';
 import { WorkOrder, User } from '../types/workOrder';
-import BottomNavigation from '../components/BottomNavigation';
 import { ServiceStep, ServiceStepData } from '../services/serviceStepsService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -942,6 +941,15 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
 
       {/* Navigation Buttons */}
       <View style={styles.navigationContainer}>
+        <TouchableOpacity
+          style={[styles.navButton, styles.previousButton]}
+          onPress={handleBackPress}
+        >
+          <Text style={styles.previousButtonText}>
+            Voltar
+          </Text>
+        </TouchableOpacity>
+
         {activeStepIndex === steps.length - 1 ? (
           <TouchableOpacity
             style={[styles.navButton, styles.finishButton]}
@@ -957,24 +965,9 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
             <Text style={styles.nextButtonText}>Próximo</Text>
           </TouchableOpacity>
         )}
-
-        <TouchableOpacity
-          style={[styles.navButton, styles.previousButton]}
-          onPress={handleBackPress}
-        >
-          <Text style={styles.previousButtonText}>
-            Voltar
-          </Text>
-        </TouchableOpacity>
       </View>
 
-      {/* Bottom Navigation */}
-      <View style={styles.bottomNavigationContainer}>
-        <BottomNavigation 
-          activeTab="home" 
-          onTabPress={onTabPress}
-        />
-      </View>
+      {/* Bottom Navigation - REMOVIDO */}
 
       {/* Modal de Foto Modelo em Tela Cheia */}
       <Modal
@@ -1066,7 +1059,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8f9fa',
-    paddingBottom: 80, // Espaço para o menu inferior
   },
   header: {
     flexDirection: 'row',
@@ -1233,7 +1225,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   navigationContainer: {
-    flexDirection: 'column',
+    flexDirection: 'row',
     paddingHorizontal: 20,
     paddingVertical: 15,
     backgroundColor: 'white',
@@ -1242,7 +1234,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   navButton: {
-    width: '100%',
+    flex: 1,
     paddingVertical: 15,
     borderRadius: 8,
     alignItems: 'center',
@@ -1252,10 +1244,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#3b82f6',
   },
   nextButton: {
-    backgroundColor: '#22c55e',
+    backgroundColor: '#E0ED54',
   },
   finishButton: {
-    backgroundColor: '#22c55e',
+    backgroundColor: '#E0ED54',
   },
   previousButtonText: {
     fontSize: RFValue(14),
@@ -1265,12 +1257,12 @@ const styles = StyleSheet.create({
   nextButtonText: {
     fontSize: RFValue(14),
     fontWeight: '600',
-    color: 'white',
+    color: '#000000',
   },
   finishButtonText: {
     fontSize: RFValue(14),
     fontWeight: '600',
-    color: 'white',
+    color: '#000000',
   },
   bottomNavigationContainer: {
     backgroundColor: 'white',
