@@ -391,7 +391,15 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
   };
 
   const handleWorkOrderPress = (workOrder: WorkOrder) => {
-    // Não permite clique em OS encerradas (finalizadas ou canceladas)
+    // Gestores podem ver detalhes de qualquer OS
+    if (user.userType === 'gestor') {
+      if (onOpenWorkOrder) {
+        onOpenWorkOrder(workOrder);
+      }
+      return;
+    }
+
+    // Para técnicos, não permite clique em OS encerradas
     if (workOrder.status === 'finalizada' || workOrder.status === 'cancelada') {
       return;
     }

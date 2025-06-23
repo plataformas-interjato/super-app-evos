@@ -20,6 +20,9 @@ interface WorkOrderDetailScreenProps {
   onBackPress: () => void;
   onTabPress: (tab: 'home' | 'profile') => void;
   onStartService: () => void;
+  onDownloadReport?: () => void;
+  onEvaluateOrder?: () => void;
+  onReopenOrder?: () => void;
 }
 
 const { width } = Dimensions.get('window');
@@ -30,6 +33,9 @@ const WorkOrderDetailScreen: React.FC<WorkOrderDetailScreenProps> = ({
   onBackPress,
   onTabPress,
   onStartService,
+  onDownloadReport,
+  onEvaluateOrder,
+  onReopenOrder,
 }) => {
   const getStatusColor = (status: string): string => {
     switch (status) {
@@ -87,30 +93,29 @@ const WorkOrderDetailScreen: React.FC<WorkOrderDetailScreenProps> = ({
           {/* Título */}
           <Text style={styles.title}>{workOrder.title}</Text>
 
-          {/* Informações de Status */}
-          <View style={styles.infoRow}>
-            <View style={styles.infoItem}>
-              <Ionicons name="location-outline" size={16} color="#666" />
-              <Text style={styles.infoLabel}>Distância</Text>
-              <Text style={styles.infoValue}>4km</Text>
+          {/* Informações dinâmicas - apenas para OSs finalizadas e gestores */}
+          {workOrder.status === 'finalizada' && user.userType === 'gestor' && (
+            <View style={styles.infoRow}>
+              <View style={styles.infoItem}>
+                <Ionicons name="people" size={16} color="#666" />
+                <Text style={styles.infoLabel}>Técnicos</Text>
+                <View style={styles.tecnicosContainer}>
+                  <Text style={styles.infoValue}>{workOrder.tecnico_principal || 'Robert'}</Text>
+                  <Text style={styles.infoValue}>{workOrder.tecnico_auxiliar || 'Jacob'}</Text>
+                </View>
+              </View>
+              
+              <View style={styles.infoItem}>
+                <Ionicons name="time" size={16} color="#666" />
+                <Text style={styles.infoLabel}>Execução</Text>
+                <Text style={styles.infoValue}>{workOrder.tempo_execucao || '40min'}</Text>
+              </View>
             </View>
-            
-            <View style={styles.infoItem}>
-              <Ionicons name="time-outline" size={16} color="#666" />
-              <Text style={styles.infoLabel}>Tempo</Text>
-              <Text style={styles.infoValue}>40min</Text>
-            </View>
-            
-            <View style={styles.infoItem}>
-              <Ionicons name="battery-half-outline" size={16} color="#666" />
-              <Text style={styles.infoLabel}>Bateria</Text>
-              <Text style={styles.infoValue}>70%</Text>
-            </View>
-          </View>
+          )}
         </View>
 
-        {/* Informações Úteis */}
-        <View style={styles.usefulInfoSection}>
+        {/* Informações Úteis - sem background */}
+        <View style={styles.clientInfoSection}>
           <Text style={styles.sectionTitle}>Informações úteis</Text>
           
           <View style={styles.infoDetailRow}>
@@ -134,6 +139,32 @@ const WorkOrderDetailScreen: React.FC<WorkOrderDetailScreenProps> = ({
             {workOrder.os_conteudo || 'Descrição da atividade não disponível.'}
           </Text>
         </View>
+
+        {/* Botões de ação para OSs finalizadas - apenas para gestores */}
+        {workOrder.status === 'finalizada' && user.userType === 'gestor' && (
+          <View style={styles.actionButtonsContainer}>
+            <TouchableOpacity 
+              style={[styles.actionButton, styles.downloadButton]} 
+              onPress={onDownloadReport}
+            >
+              <Text style={[styles.actionButtonText, styles.downloadButtonText]}>Baixar relatório</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.actionButton, styles.evaluateButton]} 
+              onPress={onEvaluateOrder}
+            >
+              <Text style={styles.actionButtonText}>Avaliar ordem de serviço</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.actionButton, styles.reopenButton]} 
+              onPress={onReopenOrder}
+            >
+              <Text style={styles.actionButtonText}>Reabrir ordem de serviço</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Botão de Iniciar - apenas para técnicos */}
         {user.userType === 'tecnico' && (
@@ -239,40 +270,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#f3f4f6',
+    gap: 12,
   },
   infoItem: {
-    alignItems: 'center',
     flex: 1,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
   },
   infoLabel: {
     fontSize: RFValue(11),
     color: '#6b7280',
-    marginTop: 4,
-    marginBottom: 2,
+    marginTop: 8,
+    marginBottom: 4,
+    textAlign: 'center',
   },
   infoValue: {
-    fontSize: RFValue(14),
+    fontSize: RFValue(12),
     fontWeight: '600',
     color: '#1f2937',
+    textAlign: 'center',
+    lineHeight: 16,
   },
-  usefulInfoSection: {
-    backgroundColor: 'white',
-    borderRadius: 16,
-    padding: 20,
+  clientInfoSection: {
     marginTop: 16,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-  },
-  sectionTitle: {
-    fontSize: RFValue(16),
-    fontWeight: '600',
-    color: '#1f2937',
-    marginBottom: 16,
+    paddingHorizontal: 16,
   },
   infoDetailRow: {
     flexDirection: 'row',
@@ -324,6 +355,51 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
+  },
+  actionButtonsContainer: {
+    flexDirection: 'column',
+    gap: 12,
+    marginTop: 16,
+    paddingHorizontal: 16,
+  },
+  actionButton: {
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  downloadButton: {
+    backgroundColor: '#E0ED54',
+  },
+  evaluateButton: {
+    backgroundColor: '#3b82f6',
+  },
+  reopenButton: {
+    backgroundColor: '#ef4444',
+  },
+  actionButtonText: {
+    color: 'white',
+    fontSize: RFValue(16),
+    fontWeight: '600',
+  },
+  downloadButtonText: {
+    color: '#1f2937',
+  },
+  sectionTitle: {
+    fontSize: RFValue(18),
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 16,
+  },
+  tecnicosContainer: {
+    flexDirection: 'column',
+    alignItems: 'center',
   },
 });
 

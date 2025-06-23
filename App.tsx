@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Alert } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import LoginScreen from './src/screens/LoginScreen';
@@ -7,6 +7,7 @@ import MainScreen from './src/screens/MainScreen';
 import ManagerScreen from './src/screens/ManagerScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import WorkOrderDetailScreen from './src/screens/WorkOrderDetailScreen';
+import OrderEvaluationScreen from './src/screens/OrderEvaluationScreen';
 import StartServiceScreen from './src/screens/StartServiceScreen';
 import ServiceStepsScreen from './src/screens/ServiceStepsScreen';
 import PostServiceAuditScreen from './src/screens/PostServiceAuditScreen';
@@ -18,9 +19,10 @@ import { WorkOrder } from './src/types/workOrder';
 import { startAutoSync, syncAllPendingActions } from './src/services/offlineService';
 import { updateLocalWorkOrderStatus } from './src/services/localStatusService';
 import { updateWorkOrderStatus } from './src/services/workOrderService';
+import { saveEvaluation } from './src/services/evaluationService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'startService' | 'steps' | 'audit' | 'photoCollection' | 'auditSaving' | 'auditSuccess';
+type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'orderEvaluation' | 'startService' | 'steps' | 'audit' | 'photoCollection' | 'auditSaving' | 'auditSuccess';
 
 function AppContent() {
   const { appUser, loading, initialLoading, initialProgress } = useAuth();
@@ -388,6 +390,17 @@ function AppContent() {
 
   const handleDownloadReport = () => {
     // TODO: Implementar download do relatório
+    console.log('📄 Download do relatório solicitado');
+  };
+
+  const handleEvaluateOrder = () => {
+    console.log('⭐ Navegando para tela de avaliação da ordem de serviço');
+    setCurrentScreen('orderEvaluation');
+  };
+
+  const handleReopenOrder = () => {
+    // TODO: Implementar reabertura da ordem de serviço
+    console.log('🔄 Reabertura da ordem de serviço solicitada');
   };
 
   const handleViewWorkOrders = () => {
@@ -402,6 +415,50 @@ function AppContent() {
     setRefreshMainScreen(prev => prev + 1);
     
     console.log('✅ Navegação para main concluída com atualização forçada');
+  };
+
+  const handleSaveEvaluation = async (evaluationData: any) => {
+    try {
+      console.log('💾 Salvando avaliação da ordem de serviço...');
+      
+      const { success, error } = await saveEvaluation(evaluationData);
+      
+      if (success) {
+        Alert.alert(
+          'Avaliação Salva',
+          'A avaliação da ordem de serviço foi salva com sucesso!',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                // Voltar para a tela de detalhes
+                setCurrentScreen('workOrderDetail');
+                // Forçar atualização da tela principal para refletir a avaliação
+                setRefreshMainScreen(prev => prev + 1);
+              }
+            }
+          ]
+        );
+      } else {
+        Alert.alert(
+          'Erro ao Salvar',
+          error || 'Não foi possível salvar a avaliação. Tente novamente.',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error) {
+      console.error('💥 Erro inesperado ao salvar avaliação:', error);
+      Alert.alert(
+        'Erro',
+        'Erro inesperado ao salvar avaliação. Tente novamente.',
+        [{ text: 'OK' }]
+      );
+    }
+  };
+
+  const handleBackFromEvaluation = () => {
+    console.log('🔙 Voltando da tela de avaliação para detalhes');
+    setCurrentScreen('workOrderDetail');
   };
 
   if (loading) {
@@ -444,6 +501,17 @@ function AppContent() {
           onBackPress={handleBackToMain}
           onTabPress={handleTabPressInWorkOrder}
           onStartService={handleStartService}
+          onDownloadReport={handleDownloadReport}
+          onEvaluateOrder={handleEvaluateOrder}
+          onReopenOrder={handleReopenOrder}
+        />
+      )}
+      {currentScreen === 'orderEvaluation' && selectedWorkOrder && (
+        <OrderEvaluationScreen
+          workOrder={selectedWorkOrder}
+          user={appUser}
+          onBackPress={handleBackFromEvaluation}
+          onSaveEvaluation={handleSaveEvaluation}
         />
       )}
       {currentScreen === 'steps' && selectedWorkOrder && (

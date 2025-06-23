@@ -14,6 +14,12 @@ export interface WorkOrder {
   supervisor_id?: number; // ID do supervisor
   supervisor_name?: string; // Nome do supervisor
   is_evaluated?: boolean; // Se a OS foi avaliada
+  // Campos para OSs finalizadas
+  tecnico_principal?: string; // Nome do técnico principal
+  tecnico_auxiliar?: string; // Nome do técnico auxiliar
+  tempo_execucao?: string; // Tempo de execução (ex: "40min")
+  data_inicio?: Date; // Data/hora de início
+  data_finalizacao?: Date; // Data/hora de finalização
 }
 
 export interface User {

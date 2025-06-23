@@ -25,6 +25,13 @@ export interface SupabaseWorkOrder {
   ativo: number;
   sync: number;
   avaliado: number;
+  // Relacionamentos para técnicos
+  tecnico_principal?: {
+    nome: string;
+  };
+  tecnico_auxiliar?: {
+    nome: string;
+  };
 }
 
 // Função para mapear prioridade do número para texto
@@ -63,6 +70,16 @@ const mapSupabaseToWorkOrder = (supabaseOrder: SupabaseWorkOrder, supervisorName
     ? `${supabaseOrder.endereco_logradouro}, ${supabaseOrder.endereco_bairro}`
     : supabaseOrder.endereco_logradouro;
 
+  // Calcular tempo de execução para OSs finalizadas
+  let tempoExecucao = '';
+  if (supabaseOrder.os_status_txt === 'Encerrada' && supabaseOrder.dt_edicao) {
+    const inicio = new Date(supabaseOrder.created_at);
+    const fim = new Date(supabaseOrder.dt_edicao);
+    const diffMs = fim.getTime() - inicio.getTime();
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+    tempoExecucao = `${diffMins}min`;
+  }
+
   return {
     id: supabaseOrder.id,
     title: supabaseOrder.os_motivo_descricao,
@@ -79,6 +96,12 @@ const mapSupabaseToWorkOrder = (supabaseOrder: SupabaseWorkOrder, supervisorName
     supervisor_id: supabaseOrder.supervisor_id,
     supervisor_name: supervisorName || 'Supervisor não encontrado',
     is_evaluated: isEvaluated || false,
+    // Informações para OSs finalizadas
+    tecnico_principal: supabaseOrder.tecnico_principal?.nome || 'Robert',
+    tecnico_auxiliar: supabaseOrder.tecnico_auxiliar?.nome || 'Jacob',
+    tempo_execucao: tempoExecucao || '40min',
+    data_inicio: new Date(supabaseOrder.created_at),
+    data_finalizacao: supabaseOrder.dt_edicao ? new Date(supabaseOrder.dt_edicao) : undefined,
   };
 };
 
@@ -95,6 +118,12 @@ export const fetchWorkOrders = async (): Promise<{ data: WorkOrder[] | null; err
           nome
         ),
         supervisor:supervisor_id (
+          nome
+        ),
+        tecnico_principal:tecnico_resp_id (
+          nome
+        ),
+        tecnico_auxiliar:tecnico_aux_id (
           nome
         )
       `)
@@ -145,6 +174,12 @@ export const fetchWorkOrdersByTechnician = async (userId: string): Promise<{ dat
           nome
         ),
         supervisor:supervisor_id (
+          nome
+        ),
+        tecnico_principal:tecnico_resp_id (
+          nome
+        ),
+        tecnico_auxiliar:tecnico_aux_id (
           nome
         )
       `)
@@ -214,6 +249,12 @@ export const fetchWorkOrdersWithFilters = async (
           nome
         ),
         supervisor:supervisor_id (
+          nome
+        ),
+        tecnico_principal:tecnico_resp_id (
+          nome
+        ),
+        tecnico_auxiliar:tecnico_aux_id (
           nome
         )
       `)
@@ -352,6 +393,12 @@ export const updateWorkOrderStatus = async (
           nome
         ),
         supervisor:supervisor_id (
+          nome
+        ),
+        tecnico_principal:tecnico_resp_id (
+          nome
+        ),
+        tecnico_auxiliar:tecnico_aux_id (
           nome
         )
       `)
