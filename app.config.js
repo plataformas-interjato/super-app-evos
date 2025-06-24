@@ -1,7 +1,7 @@
 export default {
   expo: {
     name: "SuperAppEvos",
-    slug: "SuperAppEvos",
+    slug: "app-do-futuro",
     version: "1.0.0",
     orientation: "portrait",
     icon: "./assets/logo-app.png",

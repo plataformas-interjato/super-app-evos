@@ -35,6 +35,7 @@ interface ManagerScreenProps {
 
 const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenWorkOrder }) => {
   const [searchText, setSearchText] = useState('');
+  const [currentSearchText, setCurrentSearchText] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterStatus>('todas');
   const [activeTab, setActiveTab] = useState<'home' | 'profile'>('home');
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
@@ -79,10 +80,10 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
     };
   }, []);
 
-  // Recarregar quando filtros ou busca mudarem
+  // Recarregar apenas quando filtros ou busca atual mudarem (removido searchText)
   useEffect(() => {
     loadWorkOrders();
-  }, [activeFilter, searchText]);
+  }, [activeFilter, currentSearchText]);
 
   const loadUserStats = async () => {
     try {
@@ -115,7 +116,7 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
       
       console.log('🔍 Carregando todas as ordens de serviço para o gestor...');
       console.log('📋 Filtro ativo:', activeFilter);
-      console.log('🔎 Busca:', searchText);
+      console.log('🔎 Busca:', currentSearchText);
       
       // Verificar conectividade antes de fazer a requisição
       const netInfo = await NetInfo.fetch();
@@ -146,7 +147,7 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
           data = filterCachedWorkOrders(
             data,
             activeFilter,
-            searchText.trim() || undefined
+            currentSearchText.trim() || undefined
           );
         }
       } else {
@@ -156,7 +157,7 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
           () => fetchWorkOrders(), // Busca todas as OS
           undefined, // Sem userId para o gestor
           activeFilter,
-          searchText.trim() || undefined
+          currentSearchText.trim() || undefined
         );
         
         data = result.data;
@@ -241,7 +242,7 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
         const filteredData = filterCachedWorkOrders(
           freshData.data,
           activeFilter,
-          searchText.trim() || undefined
+          currentSearchText.trim() || undefined
         );
         
         console.log(`✅ ${filteredData.length} ordens filtradas de ${freshData.data.length} totais`);
@@ -423,6 +424,17 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
     { key: 'finalizada' as FilterStatus, label: 'FINALIZADAS', icon: 'checkmark-circle' },
   ];
 
+  // Função para executar a pesquisa
+  const handleSearch = () => {
+    setCurrentSearchText(searchText);
+  };
+
+  // Função para limpar a pesquisa
+  const handleClearSearch = () => {
+    setSearchText('');
+    setCurrentSearchText('');
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ImageBackground
@@ -462,7 +474,7 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
             {/* Linha divisória - FIXO */}
             <View style={styles.dividerLine} />
             
-            {/* Barra de busca - FIXO */}
+            {/* Barra de busca - MODIFICADA */}
             <View style={styles.searchContainer}>
               <View style={styles.searchInputContainer}>
                 <TextInput
@@ -471,8 +483,16 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
                   placeholderTextColor="#9ca3af"
                   value={searchText}
                   onChangeText={setSearchText}
+                  onSubmitEditing={handleSearch}
                 />
-                <Ionicons name="search" size={20} color="#9ca3af" style={styles.searchIcon} />
+                {searchText.length > 0 && (
+                  <TouchableOpacity onPress={handleClearSearch} style={styles.clearButton}>
+                    <Ionicons name="close" size={18} color="#9ca3af" />
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity onPress={handleSearch} style={styles.searchButton}>
+                  <Ionicons name="search" size={20} color="#3b82f6" />
+                </TouchableOpacity>
               </View>
             </View>
             
@@ -533,7 +553,7 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
                   <Ionicons name="document-text-outline" size={64} color="#9ca3af" />
                   <Text style={styles.emptyTitle}>Nenhuma ordem de serviço encontrada</Text>
                   <Text style={styles.emptySubtitle}>
-                    {searchText ? 'Tente usar outros termos de busca' : 'Não há ordens de serviço no momento'}
+                    {currentSearchText ? 'Tente usar outros termos de busca' : 'Não há ordens de serviço no momento'}
                   </Text>
                 </View>
               )}
@@ -691,7 +711,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#e5e7eb',
     marginHorizontal: 15,
   },
-  // Barra de busca
+  // Barra de busca - MODIFICADA
   searchContainer: {
     paddingHorizontal: 15,
     paddingVertical: 15,
@@ -701,7 +721,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#f9fafb',
     borderRadius: 10,
-    paddingHorizontal: 15,
     height: 45,
     borderWidth: 1,
     borderColor: '#e5e7eb',
@@ -711,9 +730,23 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     color: '#374151',
+    paddingHorizontal: 15,
   },
-  searchIcon: {
-    marginLeft: 10,
+  searchButton: {
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    backgroundColor: '#f0f9ff',
+    borderLeftWidth: 1,
+    borderLeftColor: '#e5e7eb',
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 50,
+  },
+  clearButton: {
+    paddingHorizontal: 8,
+    paddingVertical: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   // Filtros
   filtersContainer: {
