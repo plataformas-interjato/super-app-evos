@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import ProfileHeader from '../components/ProfileHeader';
 import UserStatsCard from '../components/UserStatsCard';
 import OSSearchSection from '../components/OSSearchSection';
+import OSSearchSectionManager from '../components/OSSearchSectionManager';
 import OSCard from '../components/OSCard';
 import BottomNavigation from '../components/BottomNavigation';
 
@@ -43,6 +44,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
 }) => {
   const [searchText, setSearchText] = useState('');
   const [searchDate, setSearchDate] = useState('');
+  const [searchTechnician, setSearchTechnician] = useState('');
   const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
@@ -59,6 +61,10 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
 
+  // Verificar se é gestor/supervisor
+  const funcao = user.funcao_original?.toLowerCase() || user.userType;
+  const isManagerUser = funcao === 'gestor' || funcao === 'supervisor' || user.userType === 'gestor';
+
   useEffect(() => {
     loadCompletedOS();
     loadUserStats();
@@ -72,45 +78,67 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
   // Detectar quando campos de pesquisa são limpos para recarregar dados
   useEffect(() => {
-    if (!searchText.trim() && !searchDate) {
+    if (!searchText.trim() && !searchDate && !searchTechnician.trim()) {
       loadCompletedOS();
       setItemsToShow(10);
     }
-  }, [searchText, searchDate]);
+  }, [searchText, searchDate, searchTechnician]);
 
   const loadCompletedOS = async () => {
     try {
-      const cachedResult = await getCachedWorkOrders(user.id);
-      
-      if (cachedResult.data && cachedResult.data.length > 0) {
-        const completedOS = cachedResult.data.filter(wo => wo.status === 'finalizada');
-        const sortedOS = completedOS.sort((a, b) => 
-          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-        );
-        
-        setAllWorkOrders(sortedOS);
-      } else {
+      // Para gestores/supervisores, buscar todas as OSs finalizadas do sistema
+      if (isManagerUser) {
         try {
-          const serverResult = await fetchWorkOrdersWithFilters(
-            user.id,
-            'finalizada',
-            undefined
-          );
+          const { fetchWorkOrders } = require('../services/workOrderService');
+          const serverResult = await fetchWorkOrders(); // Busca todas as OSs
           
           if (serverResult.data && !serverResult.error) {
-            const sortedOS = serverResult.data.sort((a, b) => 
+            const completedOS = serverResult.data.filter((wo: any) => wo.status === 'finalizada');
+            const sortedOS = completedOS.sort((a: any, b: any) => 
               new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
             );
             
             setAllWorkOrders(sortedOS);
-            
-            const { cacheWorkOrders } = require('../services/workOrderCacheService');
-            await cacheWorkOrders(serverResult.data, user.id);
           } else {
             setAllWorkOrders([]);
           }
         } catch (serverError) {
           setAllWorkOrders([]);
+        }
+      } else {
+        // Para técnicos, manter lógica original
+        const cachedResult = await getCachedWorkOrders(user.id);
+        
+        if (cachedResult.data && cachedResult.data.length > 0) {
+          const completedOS = cachedResult.data.filter(wo => wo.status === 'finalizada');
+          const sortedOS = completedOS.sort((a, b) => 
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+          );
+          
+          setAllWorkOrders(sortedOS);
+        } else {
+          try {
+            const serverResult = await fetchWorkOrdersWithFilters(
+              user.id,
+              'finalizada',
+              undefined
+            );
+            
+            if (serverResult.data && !serverResult.error) {
+              const sortedOS = serverResult.data.sort((a, b) => 
+                new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+              );
+              
+              setAllWorkOrders(sortedOS);
+              
+              const { cacheWorkOrders } = require('../services/workOrderCacheService');
+              await cacheWorkOrders(serverResult.data, user.id);
+            } else {
+              setAllWorkOrders([]);
+            }
+          } catch (serverError) {
+            setAllWorkOrders([]);
+          }
         }
       }
     } catch (error) {
@@ -119,6 +147,11 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   };
 
   const loadUserStats = async () => {
+    // Só carregar estatísticas para técnicos
+    if (isManagerUser) {
+      return;
+    }
+    
     try {
       const cachedResult = await getCachedWorkOrders(user.id);
       
@@ -136,7 +169,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   };
 
   const handleSearch = async () => {
-    if (!searchText.trim() && !searchDate) {
+    if (!searchText.trim() && !searchDate && !searchTechnician.trim()) {
       // Se não há filtros, recarregar todas as OS finalizadas
       await loadCompletedOS();
       setItemsToShow(10);
@@ -148,32 +181,78 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
     try {
       let searchQuery = searchText.trim() || undefined;
       
-      const result = await fetchWorkOrdersWithFilters(
-        user.id,
-        'finalizada',
-        searchQuery
-      );
-      
-      if (result.data && !result.error) {
-        let filteredData = result.data;
+      if (isManagerUser) {
+        // Para gestores/supervisores, buscar em todas as OSs
+        const { fetchWorkOrders } = require('../services/workOrderService');
+        const result = await fetchWorkOrders(); // Busca todas as OSs
         
-        if (searchDate) {
-          const [day, month, year] = searchDate.split('/');
-          const fullYear = year.length === 2 ? `20${year}` : year;
-          const filterDate = new Date(parseInt(fullYear), parseInt(month) - 1, parseInt(day));
-          const filterStart = new Date(filterDate.getFullYear(), filterDate.getMonth(), filterDate.getDate());
-          const filterEnd = new Date(filterDate.getFullYear(), filterDate.getMonth(), filterDate.getDate() + 1);
+        if (result.data && !result.error) {
+          let filteredData = result.data.filter((wo: any) => wo.status === 'finalizada');
           
-          filteredData = filteredData.filter(wo => {
-            const woDate = new Date(wo.updatedAt);
-            return woDate >= filterStart && woDate < filterEnd;
-          });
+          // Filtrar por texto (ID ou título)
+          if (searchQuery) {
+            filteredData = filteredData.filter((wo: any) => 
+              wo.id.toString().includes(searchQuery) || 
+              wo.title.toLowerCase().includes(searchQuery.toLowerCase())
+            );
+          }
+          
+          // Filtrar por data
+          if (searchDate) {
+            const [day, month, year] = searchDate.split('/');
+            const fullYear = year.length === 2 ? `20${year}` : year;
+            const filterDate = new Date(parseInt(fullYear), parseInt(month) - 1, parseInt(day));
+            const filterStart = new Date(filterDate.getFullYear(), filterDate.getMonth(), filterDate.getDate());
+            const filterEnd = new Date(filterDate.getFullYear(), filterDate.getMonth(), filterDate.getDate() + 1);
+            
+            filteredData = filteredData.filter((wo: any) => {
+              const woDate = new Date(wo.updatedAt);
+              return woDate >= filterStart && woDate < filterEnd;
+            });
+          }
+          
+          // Filtrar por técnico
+          if (searchTechnician.trim()) {
+            filteredData = filteredData.filter((wo: any) => 
+              (wo.tecnico_principal && wo.tecnico_principal.toLowerCase().includes(searchTechnician.toLowerCase())) ||
+              (wo.tecnico_auxiliar && wo.tecnico_auxiliar.toLowerCase().includes(searchTechnician.toLowerCase()))
+            );
+          }
+          
+          setAllWorkOrders(filteredData);
+          setItemsToShow(10);
+        } else {
+          Alert.alert('Erro', 'Erro ao realizar busca. Tente novamente.');
         }
-        
-        setAllWorkOrders(filteredData);
-        setItemsToShow(10);
       } else {
-        Alert.alert('Erro', 'Erro ao realizar busca. Tente novamente.');
+        // Para técnicos, manter lógica original
+        const result = await fetchWorkOrdersWithFilters(
+          user.id,
+          'finalizada',
+          searchQuery
+        );
+        
+        if (result.data && !result.error) {
+          let filteredData = result.data;
+          
+          if (searchDate) {
+            const [day, month, year] = searchDate.split('/');
+            const fullYear = year.length === 2 ? `20${year}` : year;
+            const filterDate = new Date(parseInt(fullYear), parseInt(month) - 1, parseInt(day));
+            const filterStart = new Date(filterDate.getFullYear(), filterDate.getMonth(), filterDate.getDate());
+            const filterEnd = new Date(filterDate.getFullYear(), filterDate.getMonth(), filterDate.getDate() + 1);
+            
+            filteredData = filteredData.filter(wo => {
+              const woDate = new Date(wo.updatedAt);
+              return woDate >= filterStart && woDate < filterEnd;
+            });
+          }
+          
+          setAllWorkOrders(filteredData);
+          setItemsToShow(10);
+        } else {
+          Alert.alert('Erro', 'Erro ao realizar busca. Tente novamente.');
+        }
       }
     } catch (error) {
       Alert.alert('Erro', 'Erro inesperado ao realizar busca.');
@@ -294,30 +373,51 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
           }
         >
-          <UserStatsCard stats={userStats} />
-          
-          <View style={styles.dividerLine} />
+          {/* Mostrar UserStatsCard apenas para técnicos */}
+          {!isManagerUser && (
+            <>
+              <UserStatsCard stats={userStats} />
+              <View style={styles.dividerLine} />
+            </>
+          )}
         
-          <OSSearchSection
-            searchValue={searchText}
-            onSearchChange={setSearchText}
-            searchDate={searchDate}
-            onSearchDateChange={setSearchDate}
-            showAdvancedSearch={showAdvancedSearch}
-            onToggleAdvancedSearch={setShowAdvancedSearch}
-            onSearch={handleSearch}
-            isSearching={isSearching}
-            onDatePickerPress={handleDatePickerPress}
-          />
+          {/* Usar componente de pesquisa específico baseado no tipo de usuário */}
+          {isManagerUser ? (
+            <OSSearchSectionManager
+              searchValue={searchText}
+              onSearchChange={setSearchText}
+              searchDate={searchDate}
+              onSearchDateChange={setSearchDate}
+              searchTechnician={searchTechnician}
+              onSearchTechnicianChange={setSearchTechnician}
+              showAdvancedSearch={showAdvancedSearch}
+              onToggleAdvancedSearch={setShowAdvancedSearch}
+              onSearch={handleSearch}
+              isSearching={isSearching}
+              onDatePickerPress={handleDatePickerPress}
+            />
+          ) : (
+            <OSSearchSection
+              searchValue={searchText}
+              onSearchChange={setSearchText}
+              searchDate={searchDate}
+              onSearchDateChange={setSearchDate}
+              showAdvancedSearch={showAdvancedSearch}
+              onToggleAdvancedSearch={setShowAdvancedSearch}
+              onSearch={handleSearch}
+              isSearching={isSearching}
+              onDatePickerPress={handleDatePickerPress}
+            />
+          )}
           
           <View style={styles.osContainer}>
             {workOrders.length === 0 && !isSearching && (
               <View style={styles.emptyContainer}>
                 <Text style={styles.emptyText}>
-                  Nenhuma OS finalizada encontrada
+                  {isManagerUser ? 'Nenhuma OS encontrada' : 'Nenhuma OS finalizada encontrada'}
                 </Text>
                 <Text style={styles.emptySubText}>
-                  As OS finalizadas aparecerão aqui
+                  {isManagerUser ? 'Use os filtros para encontrar OSs específicas' : 'As OS finalizadas aparecerão aqui'}
                 </Text>
               </View>
             )}
