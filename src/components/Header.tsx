@@ -39,9 +39,9 @@ const Header: React.FC<HeaderProps> = ({ user }) => {
 
 const styles = StyleSheet.create({
   headerWrapper: {
-    paddingTop: 50,
+    paddingTop: 15,
     paddingHorizontal: 20,
-    paddingBottom: 10,
+    paddingBottom: 15,
   },
   headerImage: {
     borderRadius: 8,

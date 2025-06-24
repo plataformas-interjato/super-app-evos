@@ -10,34 +10,71 @@ interface RealManagerStats {
 }
 
 interface ManagerStatsCardProps {
+  funcaoUsuario: string; // Função real do usuário (gestor, supervisor, tecnico, etc.)
   realStats?: {
     totalFinalized: number;
     totalAudited: number;
+    totalNotAudited: number;
     osStats: RealManagerStats;
   };
 }
 
-const ManagerStatsCard: React.FC<ManagerStatsCardProps> = ({ realStats }) => {
+const ManagerStatsCard: React.FC<ManagerStatsCardProps> = ({ funcaoUsuario, realStats }) => {
   // Função para formatar porcentagens com zero à esquerda
   const formatPercentage = (num: number): string => {
     const rounded = Math.round(num);
     return rounded < 10 ? `0${rounded}%` : `${rounded}%`;
   };
 
-  // Dados estáticos mais realistas para demonstração
-  const staticData = {
-    totalFinalized: 45,
-    totalAudited: 12,
+  // Usar dados reais se disponíveis, senão usar dados estáticos
+  const statsData = realStats || {
+    totalFinalized: 0,
+    totalAudited: 0,
+    totalNotAudited: 0,
     osStats: {
-      executed: 73,   // 73 OS executadas
-      delayed: 18,    // 18 OS atrasadas
-      pending: 24,    // 24 OS pendentes
+      executed: 0,
+      delayed: 0,
+      pending: 0,
     },
   };
 
-  // Calcular percentuais dos dados estáticos
+  // Função para obter os labels baseados na função real do usuário
+  const getLabels = () => {
+    const funcao = funcaoUsuario?.toLowerCase();
+    
+    switch (funcao) {
+      case 'supervisor':
+        return {
+          first: 'Supervisionadas',
+          second: 'Auditadas',
+          third: 'Não auditadas',
+        };
+      case 'gestor':
+        return {
+          first: 'Realizadas',
+          second: 'Auditadas',
+          third: 'Não auditadas',
+        };
+      case 'tecnico':
+        return {
+          first: 'Executadas',
+          second: 'Avaliadas',
+          third: 'Pendentes',
+        };
+      default:
+        return {
+          first: 'Finalizadas',
+          second: 'Auditadas',
+          third: 'Não auditadas',
+        };
+    }
+  };
+
+  const labels = getLabels();
+
+  // Calcular percentuais dos dados
   const calculatePercentages = () => {
-    const { executed, delayed, pending } = staticData.osStats;
+    const { executed, delayed, pending } = statsData.osStats;
     const total = executed + delayed + pending;
 
     if (total === 0) {
@@ -52,7 +89,7 @@ const ManagerStatsCard: React.FC<ManagerStatsCardProps> = ({ realStats }) => {
   };
 
   const percentages = calculatePercentages();
-  const osData = staticData.osStats;
+  const osData = statsData.osStats;
 
   return (
     <View style={styles.container}>
@@ -61,7 +98,7 @@ const ManagerStatsCard: React.FC<ManagerStatsCardProps> = ({ realStats }) => {
         <View style={styles.userInfoHeader}>
           <View style={styles.titleContainer}>
             <Ionicons name="analytics-outline" size={20} color="#3b82f6" />
-            <Text style={styles.userInfoTitle}>Informações do usuário</Text>
+            <Text style={styles.userInfoTitle}>Estatísticas das OS</Text>
           </View>
         </View>
         
@@ -72,10 +109,10 @@ const ManagerStatsCard: React.FC<ManagerStatsCardProps> = ({ realStats }) => {
                 <Ionicons name="checkmark-circle" size={20} color="#10b981" />
               </View>
               <Text style={styles.userStatNumber}>
-                {staticData.totalFinalized}
+                {statsData.totalFinalized}
               </Text>
             </View>
-            <Text style={styles.userStatLabel}>OS realizadas</Text>
+            <Text style={styles.userStatLabel}>{labels.first}</Text>
           </View>
           
           <View style={styles.statDivider} />
@@ -86,10 +123,24 @@ const ManagerStatsCard: React.FC<ManagerStatsCardProps> = ({ realStats }) => {
                 <Ionicons name="star" size={20} color="#f59e0b" />
               </View>
               <Text style={styles.userStatNumber}>
-                {staticData.totalAudited}
+                {statsData.totalAudited}
               </Text>
             </View>
-            <Text style={styles.userStatLabel}>OS auditadas</Text>
+            <Text style={styles.userStatLabel}>{labels.second}</Text>
+          </View>
+          
+          <View style={styles.statDivider} />
+          
+          <View style={styles.userStatItem}>
+            <View style={styles.numberRow}>
+              <View style={[styles.statIconContainer, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
+                <Ionicons name="alert-circle" size={20} color="#ef4444" />
+              </View>
+              <Text style={styles.userStatNumber}>
+                {statsData.totalNotAudited}
+              </Text>
+            </View>
+            <Text style={styles.userStatLabel}>{labels.third}</Text>
           </View>
         </View>
       </View>
@@ -109,7 +160,6 @@ const ManagerStatsCard: React.FC<ManagerStatsCardProps> = ({ realStats }) => {
                   <View style={[styles.indicatorDot, { backgroundColor: '#3b82f6' }]} />
                   <Text style={styles.indicatorNumber}>{osData.executed}</Text>
                 </View>
-                <Text style={styles.indicatorPercentage}>{formatPercentage(percentages.executed)}</Text>
               </View>
               <Text style={styles.indicatorLabel}>Executadas</Text>
             </View>
@@ -120,7 +170,6 @@ const ManagerStatsCard: React.FC<ManagerStatsCardProps> = ({ realStats }) => {
                   <View style={[styles.indicatorDot, { backgroundColor: '#ef4444' }]} />
                   <Text style={styles.indicatorNumber}>{osData.delayed}</Text>
                 </View>
-                <Text style={styles.indicatorPercentage}>{formatPercentage(percentages.delayed)}</Text>
               </View>
               <Text style={styles.indicatorLabel}>Atrasadas</Text>
             </View>
@@ -131,7 +180,6 @@ const ManagerStatsCard: React.FC<ManagerStatsCardProps> = ({ realStats }) => {
                   <View style={[styles.indicatorDot, { backgroundColor: '#94a3b8' }]} />
                   <Text style={styles.indicatorNumber}>{osData.pending}</Text>
                 </View>
-                <Text style={styles.indicatorPercentage}>{formatPercentage(percentages.pending)}</Text>
               </View>
               <Text style={styles.indicatorLabel}>Pendentes</Text>
             </View>
@@ -214,7 +262,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
-    marginTop: 20,
+    marginTop: 10,
     marginBottom: 20,
   },
   userInfoHeader: {
@@ -240,7 +288,7 @@ const styles = StyleSheet.create({
   userStatItem: {
     flex: 1,
     alignItems: 'center',
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
   },
   numberRow: {
     flexDirection: 'row',
@@ -252,18 +300,19 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(59, 130, 246, 0.1)',
     borderRadius: 10,
     padding: 6,
-    marginRight: 10,
+    marginRight: 8,
   },
   userStatNumber: {
-    fontSize: RFValue(18),
+    fontSize: RFValue(16),
     fontWeight: 'bold',
     color: '#1f2937',
   },
   userStatLabel: {
-    fontSize: RFValue(12),
+    fontSize: RFValue(10),
     color: '#6b7280',
     textAlign: 'center',
     fontWeight: '500',
+    lineHeight: 14,
   },
   statDivider: {
     width: 1,
@@ -293,12 +342,11 @@ const styles = StyleSheet.create({
   chartContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
   },
   indicators: {
     flex: 1,
-    marginRight: 0,
-    paddingRight: 15,
+    marginRight: 10,
   },
   indicatorItem: {
     marginBottom: 12,
@@ -307,7 +355,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 4,
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
   },
   leftContent: {
     flexDirection: 'row',
@@ -340,13 +388,13 @@ const styles = StyleSheet.create({
   },
   verticalDivider: {
     width: 1,
-    height: 100,
+    height: 120,
     backgroundColor: '#e5e7eb',
-    marginHorizontal: 20,
+    marginHorizontal: 15,
   },
   columnChart: {
-    width: 120,
-    height: 120,
+    width: 150,
+    height: 140,
   },
   chartArea: {
     width: '100%',
@@ -363,7 +411,7 @@ const styles = StyleSheet.create({
   },
   columnBackground: {
     width: 20,
-    height: 80,
+    height: 100,
     backgroundColor: '#f8fafc',
     borderRadius: 4,
     justifyContent: 'flex-end',

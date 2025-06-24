@@ -53,6 +53,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   });
   const [isSearching, setIsSearching] = useState(false);
   const [itemsToShow, setItemsToShow] = useState(10);
+  const [currentUser, setCurrentUser] = useState<User>(user); // Estado para o usuário atual
   
   // Estados para o date picker
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -264,6 +265,17 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const groupedWorkOrders = groupWorkOrdersByDate(workOrders);
   const hasMoreItems = itemsToShow < allWorkOrders.length;
 
+  // Callback para atualização da foto
+  const handlePhotoUpdated = (newPhotoUrl: string) => {
+    console.log('📸 Foto atualizada na ProfileScreen:', newPhotoUrl);
+    
+    // Atualizar o estado local do usuário
+    setCurrentUser(prevUser => ({
+      ...prevUser,
+      url_foto: newPhotoUrl
+    }));
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ImageBackground
@@ -273,7 +285,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({
       >
         <StatusBar style="auto" />
       
-        <ProfileHeader user={user} onBackPress={onBackPress} />
+        <ProfileHeader user={currentUser} onBackPress={onBackPress} onPhotoUpdated={handlePhotoUpdated} />
       
         <ScrollView
           style={styles.mainScrollContainer}

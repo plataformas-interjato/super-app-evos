@@ -30,6 +30,7 @@ export interface User {
   userType: 'gestor' | 'tecnico';
   avatar?: string;
   url_foto?: string;
+  funcao_original?: string; // Função original da tabela usuario
 }
 
 export type FilterStatus = 'todas' | 'aguardando' | 'em_progresso' | 'finalizada' | 'cancelada' | 'atrasada'; 

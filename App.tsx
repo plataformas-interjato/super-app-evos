@@ -25,7 +25,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'orderEvaluation' | 'startService' | 'steps' | 'audit' | 'photoCollection' | 'auditSaving' | 'auditSuccess';
 
 function AppContent() {
-  const { appUser, loading, initialLoading, initialProgress } = useAuth();
+  const { appUser, loading } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<CurrentScreen>('main');
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
   const [activeTab, setActiveTab] = useState<'home' | 'profile'>('home');
@@ -182,7 +182,7 @@ function AppContent() {
         if (hasPhoto) {
           console.log('✅ Foto inicial existe - pulando para etapas');
           // Atualizar status local para em_progresso se ainda não estiver
-          if (selectedWorkOrder.status !== 'em_progresso') {
+          if ((selectedWorkOrder.status as string) !== 'em_progresso') {
             await updateLocalWorkOrderStatus(selectedWorkOrder.id, 'em_progresso', false);
             setSelectedWorkOrder({
               ...selectedWorkOrder,
@@ -475,8 +475,11 @@ function AppContent() {
   }
 
   const renderMainScreen = () => {
-    // Regra de negócio: Gestor vê ManagerScreen, Técnico vê MainScreen
-    if (appUser.userType === 'gestor') {
+    // Regra de negócio atualizada: Gestor e Supervisor veem ManagerScreen, Técnico vê MainScreen
+    const funcao = appUser.funcao_original?.toLowerCase() || appUser.userType;
+    const isManagerUser = funcao === 'gestor' || funcao === 'supervisor' || appUser.userType === 'gestor';
+    
+    if (isManagerUser) {
       return <ManagerScreen user={appUser} onTabPress={handleTabPress} onOpenWorkOrder={handleOpenWorkOrder} />;
     } else {
       return <MainScreen user={appUser} onTabPress={handleTabPress} onOpenWorkOrder={handleOpenWorkOrder} refreshTrigger={refreshMainScreen} />;

@@ -21,11 +21,26 @@ export const useAuth = () => {
   return context;
 };
 
+// Função para atualizar dados do usuário globalmente
+export const updateAppUser = (updatedUser: Partial<User>) => {
+  // Esta função será implementada no provider
+  console.log('🔄 updateAppUser chamada:', updatedUser);
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [appUser, setAppUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Função para atualizar dados do usuário
+  const updateUser = (updatedData: Partial<User>) => {
+    if (appUser) {
+      const updatedUser = { ...appUser, ...updatedData };
+      setAppUser(updatedUser);
+      console.log('✅ AppUser atualizado:', updatedUser);
+    }
+  };
 
   // Função para mapear usuário do Supabase para usuário do app
   const mapSupabaseUserToAppUser = async (supabaseUser: SupabaseUser): Promise<User | null> => {
@@ -51,17 +66,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
       }
 
-      // Mapear a função conforme suas regras de negócio
+      // Mapear a função conforme suas regras de negócio - mantendo cargo real
       const funcao = userProfile.funcao?.toLowerCase();
       const isGestor = funcao === 'supervisor' || funcao === 'gestor';
+      
+      // Função para obter o cargo para exibição
+      const getRoleDisplay = (funcao: string) => {
+        if (!funcao) return 'Técnico';
+        
+        switch (funcao.toLowerCase()) {
+          case 'supervisor': return 'Supervisor';
+          case 'gestor': return 'Gestor';
+          case 'tecnico': return 'Técnico';
+          default: return funcao.charAt(0).toUpperCase() + funcao.slice(1).toLowerCase();
+        }
+      };
 
       return {
         id: userProfile.id.toString(), // ID numérico como ID principal
         uuid: userProfile.user_id || supabaseUser.id, // UUID como referência
         name: userProfile.nome || userProfile.name || supabaseUser.email?.split('@')[0] || 'Usuário',
-        role: isGestor ? 'Gestor' : 'Técnico',
-        userType: isGestor ? 'gestor' : 'tecnico',
+        role: getRoleDisplay(userProfile.funcao), // Cargo real da tabela
+        userType: isGestor ? 'gestor' : 'tecnico', // Tipo para lógica interna (supervisor = gestor para permissões)
         url_foto: userProfile.url_foto,
+        funcao_original: userProfile.funcao, // Manter função original para referência
       };
     } catch (error) {
       console.log('Erro no mapeamento do usuário:', error);
@@ -194,6 +222,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     loading,
     signIn,
     signOut,
+    updateUser,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

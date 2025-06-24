@@ -24,6 +24,7 @@ import ManagerStatsCard from '../components/ManagerStatsCard';
 import { fetchWorkOrders } from '../services/workOrderService';
 import { getLocalWorkOrderStatuses } from '../services/localStatusService';
 import { getWorkOrdersWithCache, filterCachedWorkOrders, clearWorkOrdersCache, cacheWorkOrders } from '../services/workOrderCacheService';
+import { getStatsForUserType, UserStats } from '../services/managerStatsService';
 import { supabase } from '../services/supabase';
 
 interface ManagerScreenProps {
@@ -41,13 +42,14 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [realStats, setRealStats] = useState({
+  const [userStats, setUserStats] = useState<UserStats>({
     totalFinalized: 0,
     totalAudited: 0,
+    totalNotAudited: 0,
     osStats: {
-      executed: 0, // Todas OS finalizadas
-      delayed: 0,  // OS finalizadas há mais de 1 dia sem avaliação
-      pending: 0,  // OS pendentes de avaliação
+      executed: 0,
+      delayed: 0,
+      pending: 0,
     },
   });
   const [managerStats, setManagerStats] = useState<ManagerStats>({
@@ -65,7 +67,7 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
   useEffect(() => {
     loadWorkOrders();
     loadManagerStats();
-    loadRealStats();
+    loadUserStats();
     
     // Monitor de conectividade
     const unsubscribe = NetInfo.addEventListener(state => {
@@ -81,6 +83,24 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
   useEffect(() => {
     loadWorkOrders();
   }, [activeFilter, searchText]);
+
+  const loadUserStats = async () => {
+    try {
+      console.log('📊 Carregando estatísticas do usuário:', user.funcao_original || user.userType, user.id);
+      
+      const stats = await getStatsForUserType(
+        user.funcao_original || user.userType,
+        user.id
+      );
+      
+      setUserStats(stats);
+      console.log('✅ Estatísticas carregadas:', stats);
+      
+    } catch (error) {
+      console.error('❌ Erro ao carregar estatísticas do usuário:', error);
+      // Manter valores padrão em caso de erro
+    }
+  };
 
   const loadWorkOrders = async () => {
     // Proteção contra execuções simultâneas
@@ -184,133 +204,6 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
     });
   };
 
-  const loadRealStats = async () => {
-    try {
-      console.log('📊 Carregando estatísticas reais para o manager:', user.id);
-      
-      // 1. Buscar OS finalizadas onde o usuário atual é supervisor
-      const { data: finalizedOrders, error: finalizedError } = await supabase
-        .from('ordem_servico')
-        .select('id, data_agendamento')
-        .eq('supervisor_id', parseInt(user.id))
-        .eq('os_status_txt', 'Encerrada')
-        .eq('ativo', 1);
-
-      if (finalizedError) {
-        console.error('❌ Erro ao buscar OS finalizadas:', finalizedError);
-        throw finalizedError;
-      }
-
-      const totalFinalized = finalizedOrders?.length || 0;
-      console.log(`✅ ${totalFinalized} OS finalizadas encontradas`);
-
-      // 2. Buscar todas as OS finalizadas (independente do supervisor) para "executadas"
-      const { data: allFinalizedOrders, error: allFinalizedError } = await supabase
-        .from('ordem_servico')
-        .select('id, data_agendamento')
-        .eq('os_status_txt', 'Encerrada')
-        .eq('ativo', 1);
-
-      if (allFinalizedError) {
-        console.error('❌ Erro ao buscar todas as OS finalizadas:', allFinalizedError);
-        throw allFinalizedError;
-      }
-
-      const totalExecuted = allFinalizedOrders?.length || 0;
-      console.log(`✅ ${totalExecuted} OS executadas (todas finalizadas) encontradas`);
-
-      // 3. Buscar OS auditadas da tabela avaliacao_os
-      const supervisedOrderIds = finalizedOrders?.map(order => order.id) || [];
-      
-      let totalAudited = 0;
-      
-      if (supervisedOrderIds.length > 0) {
-        const { data: auditedOrders, error: auditedError } = await supabase
-          .from('avaliacao_os')
-          .select('ordem_servico_id')
-          .in('ordem_servico_id', supervisedOrderIds);
-
-        if (auditedError) {
-          console.error('❌ Erro ao buscar OS auditadas:', auditedError);
-          throw auditedError;
-        }
-
-        // Contar avaliações únicas (remover duplicatas caso existam)
-        const uniqueAuditedIds = new Set(auditedOrders?.map(audit => audit.ordem_servico_id) || []);
-        totalAudited = uniqueAuditedIds.size;
-        console.log(`✅ ${totalAudited} OS auditadas encontradas`);
-      }
-
-      // 4. Buscar todas as OS auditadas para verificar quais foram avaliadas
-      const { data: allAuditedOrders, error: allAuditedError } = await supabase
-        .from('avaliacao_os')
-        .select('ordem_servico_id');
-
-      if (allAuditedError) {
-        console.error('❌ Erro ao buscar todas as OS auditadas:', allAuditedError);
-        throw allAuditedError;
-      }
-
-      const allAuditedIds = new Set(allAuditedOrders?.map((audit: any) => audit.ordem_servico_id) || []);
-
-      // 5. Calcular OS atrasadas (finalizadas com data_agendamento anterior ao dia atual e não avaliadas)
-      const today = new Date();
-      today.setHours(0, 0, 0, 0); // Zerar horas para comparar apenas a data
-
-      const delayedOrders = allFinalizedOrders?.filter(order => {
-        if (!order.data_agendamento) return false;
-        
-        const scheduledDate = new Date(order.data_agendamento);
-        scheduledDate.setHours(0, 0, 0, 0); // Zerar horas para comparar apenas a data
-        
-        const isOverdue = scheduledDate < today; // data_agendamento menor que hoje = atrasada
-        const isNotEvaluated = !allAuditedIds.has(order.id);
-        
-        return isOverdue && isNotEvaluated;
-      }) || [];
-
-      const totalDelayed = delayedOrders.length;
-      console.log(`✅ ${totalDelayed} OS atrasadas encontradas`);
-
-      // 6. Calcular OS pendentes de avaliação (todas as finalizadas que não foram avaliadas)
-      const pendingOrders = allFinalizedOrders?.filter(order => 
-        !allAuditedIds.has(order.id)
-      ) || [];
-
-      const totalPending = pendingOrders.length;
-      console.log(`✅ ${totalPending} OS pendentes de avaliação encontradas`);
-      
-      setRealStats({
-        totalFinalized,
-        totalAudited,
-        osStats: {
-          executed: totalExecuted,
-          delayed: totalDelayed,
-          pending: totalPending,
-        },
-      });
-      
-      // Atualizar o totalEvaluated no managerStats
-      setManagerStats(prev => ({
-        ...prev,
-        totalEvaluated: totalFinalized
-      }));
-      
-    } catch (error) {
-      console.error('💥 Erro ao carregar estatísticas reais:', error);
-      // Em caso de erro, manter valores padrão
-      setRealStats({
-        totalFinalized: 0,
-        totalAudited: 0,
-        osStats: {
-          executed: 0,
-          delayed: 0,
-          pending: 0,
-        },
-      });
-    }
-  };
-
   const handleRefresh = async () => {
     if (refreshing) return;
     
@@ -360,7 +253,7 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
         // Recarregar estatísticas também
         await Promise.all([
           loadManagerStats(),
-          loadRealStats()
+          loadUserStats()
         ]);
         
         console.log('🎉 Pull-to-refresh concluído - dados frescos do servidor aplicados');
@@ -550,7 +443,10 @@ const ManagerScreen: React.FC<ManagerScreenProps> = ({ user, onTabPress, onOpenW
           }
         >
           {/* Cards de estatísticas */}
-          <ManagerStatsCard realStats={realStats} />
+          <ManagerStatsCard 
+            funcaoUsuario={user.funcao_original || user.userType} 
+            realStats={userStats} 
+          />
           
           {/* Container branco com conteúdo - igual ao MainScreen */}
           <View style={styles.contentContainer}>
@@ -760,7 +656,7 @@ const styles = StyleSheet.create({
   contentContainer: {
     backgroundColor: 'white',
     marginHorizontal: 20,
-    marginTop: 10,
+    marginTop: 5,
     marginBottom: 10,
     borderRadius: 15,
     paddingVertical: 20,
@@ -986,7 +882,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#374151',
-    marginTop: 16,
+    marginTop: 10,
     marginBottom: 8,
     textAlign: 'center',
   },
