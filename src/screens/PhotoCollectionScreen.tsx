@@ -10,6 +10,7 @@ import {
   Dimensions,
   Modal,
   TextInput,
+  StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -399,10 +400,22 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
         }));
         
         console.log(`📸 Foto capturada para entrada ${entryId}`);
+        
+        // Restaurar StatusBar após captura
+        setTimeout(() => {
+          StatusBar.setBackgroundColor('#3b82f6', true);
+          StatusBar.setBarStyle('light-content', true);
+        }, 50);
       }
     } catch (error) {
       Alert.alert('Erro', 'Não foi possível tirar a foto. Tente novamente.');
       console.error('Erro ao tirar foto:', error);
+    } finally {
+      // Garantir que o StatusBar seja restaurado mesmo em caso de erro
+      setTimeout(() => {
+        StatusBar.setBackgroundColor('#3b82f6', true);
+        StatusBar.setBarStyle('light-content', true);
+      }, 100);
     }
   };
 
@@ -531,6 +544,12 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
             
             console.log('✅ Foto salva offline com sucesso');
             console.log(`✅ Foto capturada e salva para entrada ${selectedEntryForModel.id}`);
+            
+            // Restaurar StatusBar após captura
+            setTimeout(() => {
+              StatusBar.setBackgroundColor('#3b82f6', true);
+              StatusBar.setBarStyle('light-content', true);
+            }, 50);
           } catch (offlineError) {
             console.error('💥 Erro ao salvar foto offline:', offlineError);
             Alert.alert('Erro', 'Não foi possível salvar a foto. Tente novamente.');
@@ -543,6 +562,12 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
     } catch (error) {
       console.error('💥 Erro inesperado ao tirar foto:', error);
       Alert.alert('Erro', 'Ocorreu um erro inesperado. Tente novamente.');
+    } finally {
+      // Garantir que o StatusBar seja restaurado mesmo em caso de erro
+      setTimeout(() => {
+        StatusBar.setBackgroundColor('#3b82f6', true);
+        StatusBar.setBarStyle('light-content', true);
+      }, 150);
     }
   };
 
@@ -821,6 +846,17 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
     );
   };
 
+  // Forçar restauração do StatusBar após mudanças de foto
+  useEffect(() => {
+    // Pequeno delay para garantir que qualquer interferência do ImagePicker tenha terminado
+    const timeout = setTimeout(() => {
+      StatusBar.setBackgroundColor('#3b82f6', true);
+      StatusBar.setBarStyle('light-content', true);
+    }, 100);
+
+    return () => clearTimeout(timeout);
+  }, [collectedPhotos, fotosSalvasUsuario]);
+
   if (isLoading) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
@@ -835,7 +871,9 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   const currentStep = steps[activeStepIndex];
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container}>
+      <StatusBar backgroundColor="#3b82f6" barStyle="light-content" />
+      
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={handleBackPress}>
@@ -967,15 +1005,15 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
         )}
       </View>
 
-      {/* Bottom Navigation - REMOVIDO */}
-
       {/* Modal de Foto Modelo em Tela Cheia */}
       <Modal
         visible={showModelPhotoModal}
         animationType="fade"
         onRequestClose={closeModelPhotoModal}
       >
-        <SafeAreaView style={styles.modalContainer} edges={['top', 'bottom']}>
+        <SafeAreaView style={styles.modalContainer}>
+          <StatusBar backgroundColor="black" barStyle="light-content" />
+          
           {/* Header do Modal */}
           <View style={styles.modalHeader}>
             <TouchableOpacity style={styles.modalCloseButton} onPress={closeModelPhotoModal}>
@@ -1022,7 +1060,9 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
         animationType="fade"
         onRequestClose={closeCurrentPhotoModal}
       >
-        <SafeAreaView style={styles.modalContainer} edges={['top', 'bottom']}>
+        <SafeAreaView style={styles.modalContainer}>
+          <StatusBar backgroundColor="black" barStyle="light-content" />
+          
           {/* Foto Atual - Ocupa mais espaço sem header e texto */}
           <View style={styles.modalImageContainerFullscreen}>
             {selectedEntryForCurrent && (
@@ -1063,7 +1103,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 10,
+    paddingVertical: 15,
     backgroundColor: '#3b82f6',
   },
   backButton: {
@@ -1261,15 +1301,6 @@ const styles = StyleSheet.create({
     fontSize: RFValue(14),
     fontWeight: '600',
     color: '#000000',
-  },
-  bottomNavigationContainer: {
-    backgroundColor: 'white',
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
   },
   loadingContainer: {
     flex: 1,
