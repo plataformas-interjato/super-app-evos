@@ -1,4 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+// Removed direct AsyncStorage import - using storageAdapter dynamically in functions
+// to avoid circular dependencies and ensure hybrid storage compatibility
 import { ServiceStep, ServiceStepData } from './serviceStepsService';
 import { WorkOrder } from '../types/workOrder';
 
@@ -20,11 +21,11 @@ export interface CachedServiceEntries {
   [etapaId: number]: ServiceStepData[];
 }
 
-export interface PreloadStatus {
-  lastPreload: string;
-  workOrderIds: number[];
+interface PreloadStatus {
   success: boolean;
+  workOrderIds: number[];
   errors: string[];
+  timestamp: string;
 }
 
 /**
@@ -32,16 +33,76 @@ export interface PreloadStatus {
  */
 const isCacheValid = async (): Promise<boolean> => {
   try {
-    const timestamp = await AsyncStorage.getItem(CACHE_KEYS.CACHE_TIMESTAMP);
-    if (!timestamp) return false;
+    const { default: storageAdapter } = await import('./storageAdapter');
+    const timestampStr = await storageAdapter.getItem(CACHE_KEYS.CACHE_TIMESTAMP);
+    
+    if (!timestampStr) {
+      return false;
+    }
 
-    const cacheTime = new Date(timestamp);
+    const timestamp = new Date(timestampStr);
     const now = new Date();
-    const diffHours = (now.getTime() - cacheTime.getTime()) / (1000 * 60 * 60);
+    const diffHours = (now.getTime() - timestamp.getTime()) / (1000 * 60 * 60);
 
     return diffHours < CACHE_EXPIRY_HOURS;
   } catch (error) {
     console.error('❌ Erro ao verificar validade do cache:', error);
+    return false;
+  }
+};
+
+/**
+ * Verifica se existe cache de etapas
+ */
+const hasStepsCache = async (): Promise<boolean> => {
+  try {
+    const { default: storageAdapter } = await import('./storageAdapter');
+    const stepsCache = await storageAdapter.getItem(CACHE_KEYS.SERVICE_STEPS);
+    return !!stepsCache;
+  } catch (error) {
+    console.error('❌ Erro ao verificar cache de etapas:', error);
+    return false;
+  }
+};
+
+/**
+ * Verifica se existe cache de entradas
+ */
+const hasEntriesCache = async (): Promise<boolean> => {
+  try {
+    const { default: storageAdapter } = await import('./storageAdapter');
+    const entriesCache = await storageAdapter.getItem(CACHE_KEYS.SERVICE_ENTRIES);
+    return !!entriesCache;
+  } catch (error) {
+    console.error('❌ Erro ao verificar cache de entradas:', error);
+    return false;
+  }
+};
+
+/**
+ * Verifica se cache de OSs existe
+ */
+const hasWorkOrdersCache = async (): Promise<boolean> => {
+  try {
+    const { default: storageAdapter } = await import('./storageAdapter');
+    const cachedStr = await storageAdapter.getItem(CACHE_KEYS.WORK_ORDERS_CACHE);
+    return !!cachedStr;
+  } catch (error) {
+    console.error('❌ Erro ao verificar cache de OSs:', error);
+    return false;
+  }
+};
+
+/**
+ * Verifica se pré-carregamento já foi feito
+ */
+const hasPreloadStatus = async (): Promise<boolean> => {
+  try {
+    const { default: storageAdapter } = await import('./storageAdapter');
+    const statusStr = await storageAdapter.getItem(CACHE_KEYS.PRELOAD_STATUS);
+    return !!statusStr;
+  } catch (error) {
+    console.error('❌ Erro ao verificar status de pré-carregamento:', error);
     return false;
   }
 };
@@ -54,8 +115,11 @@ export const cacheServiceSteps = async (
   steps: ServiceStep[]
 ): Promise<{ success: boolean; error: string | null }> => {
   try {
+    // Usar storageAdapter ao invés do AsyncStorage direto
+    const { default: storageAdapter } = await import('./storageAdapter');
+    
     // Buscar cache existente
-    const existingCacheStr = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_STEPS);
+    const existingCacheStr = await storageAdapter.getItem(CACHE_KEYS.SERVICE_STEPS);
     const existingCache: CachedServiceSteps = existingCacheStr 
       ? JSON.parse(existingCacheStr) 
       : {};
@@ -64,10 +128,10 @@ export const cacheServiceSteps = async (
     existingCache[tipoOsId] = steps;
 
     // Salvar cache atualizado
-    await AsyncStorage.setItem(CACHE_KEYS.SERVICE_STEPS, JSON.stringify(existingCache));
+    await storageAdapter.setItem(CACHE_KEYS.SERVICE_STEPS, JSON.stringify(existingCache));
     
     // Atualizar timestamp
-    await AsyncStorage.setItem(CACHE_KEYS.CACHE_TIMESTAMP, new Date().toISOString());
+    await storageAdapter.setItem(CACHE_KEYS.CACHE_TIMESTAMP, new Date().toISOString());
 
     return { success: true, error: null };
   } catch (error) {
@@ -83,8 +147,11 @@ export const cacheServiceEntries = async (
   entriesByStep: CachedServiceEntries
 ): Promise<{ success: boolean; error: string | null }> => {
   try {
+    // Usar storageAdapter ao invés do AsyncStorage direto
+    const { default: storageAdapter } = await import('./storageAdapter');
+    
     // Buscar cache existente
-    const existingCacheStr = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_ENTRIES);
+    const existingCacheStr = await storageAdapter.getItem(CACHE_KEYS.SERVICE_ENTRIES);
     const existingCache: CachedServiceEntries = existingCacheStr 
       ? JSON.parse(existingCacheStr) 
       : {};
@@ -93,10 +160,10 @@ export const cacheServiceEntries = async (
     const updatedCache = { ...existingCache, ...entriesByStep };
 
     // Salvar cache atualizado
-    await AsyncStorage.setItem(CACHE_KEYS.SERVICE_ENTRIES, JSON.stringify(updatedCache));
+    await storageAdapter.setItem(CACHE_KEYS.SERVICE_ENTRIES, JSON.stringify(updatedCache));
     
     // Atualizar timestamp
-    await AsyncStorage.setItem(CACHE_KEYS.CACHE_TIMESTAMP, new Date().toISOString());
+    await storageAdapter.setItem(CACHE_KEYS.CACHE_TIMESTAMP, new Date().toISOString());
 
     const totalEntries = Object.values(entriesByStep).reduce((sum, entries) => sum + entries.length, 0);
     return { success: true, error: null };
@@ -115,7 +182,10 @@ export const getCachedServiceSteps = async (
   try {
     console.log(`🔍 Buscando etapas no cache para tipo ${tipoOsId}...`);
     
-    const cacheStr = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_STEPS);
+    // Usar storageAdapter ao invés do AsyncStorage direto
+    const { default: storageAdapter } = await import('./storageAdapter');
+    const cacheStr = await storageAdapter.getItem(CACHE_KEYS.SERVICE_STEPS);
+    
     if (!cacheStr) {
       console.log('📭 Nenhum cache de etapas encontrado');
       return { data: null, error: 'Cache não encontrado', fromCache: false };
@@ -146,7 +216,10 @@ export const getCachedServiceEntries = async (
   try {
     console.log(`🔍 Buscando entradas no cache para ${etapaIds.length} etapas...`);
     
-    const cacheStr = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_ENTRIES);
+    // Usar storageAdapter ao invés do AsyncStorage direto
+    const { default: storageAdapter } = await import('./storageAdapter');
+    const cacheStr = await storageAdapter.getItem(CACHE_KEYS.SERVICE_ENTRIES);
+    
     if (!cacheStr) {
       console.log('📭 Nenhum cache de entradas encontrado');
       return { data: null, error: 'Cache não encontrado', fromCache: false };
@@ -215,10 +288,11 @@ export const getCachedServiceStepsWithData = async (
  */
 export const clearServiceCache = async (): Promise<{ success: boolean; error: string | null }> => {
   try {
-    await AsyncStorage.multiRemove([
-      CACHE_KEYS.SERVICE_STEPS,
-      CACHE_KEYS.SERVICE_ENTRIES,
-      CACHE_KEYS.CACHE_TIMESTAMP,
+    const { default: storageAdapter } = await import('./storageAdapter');
+    await Promise.all([
+      storageAdapter.removeItem(CACHE_KEYS.SERVICE_STEPS),
+      storageAdapter.removeItem(CACHE_KEYS.SERVICE_ENTRIES),
+      storageAdapter.removeItem(CACHE_KEYS.CACHE_TIMESTAMP),
     ]);
 
     console.log('🗑️ Cache de etapas e entradas limpo');
@@ -239,19 +313,20 @@ export const getCacheInfo = async (): Promise<{
   entriesCount: number;
 }> => {
   try {
+    const { default: storageAdapter } = await import('./storageAdapter');
     const isValid = await isCacheValid();
-    const timestamp = await AsyncStorage.getItem(CACHE_KEYS.CACHE_TIMESTAMP);
+    const timestamp = await storageAdapter.getItem(CACHE_KEYS.CACHE_TIMESTAMP);
     
     let stepsCount = 0;
     let entriesCount = 0;
 
-    const stepsCache = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_STEPS);
+    const stepsCache = await storageAdapter.getItem(CACHE_KEYS.SERVICE_STEPS);
     if (stepsCache) {
       const steps: CachedServiceSteps = JSON.parse(stepsCache);
       stepsCount = Object.values(steps).reduce((sum, stepArray) => sum + stepArray.length, 0);
     }
 
-    const entriesCache = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_ENTRIES);
+    const entriesCache = await storageAdapter.getItem(CACHE_KEYS.SERVICE_ENTRIES);
     if (entriesCache) {
       const entries: CachedServiceEntries = JSON.parse(entriesCache);
       entriesCount = Object.values(entries).reduce((sum, entryArray) => sum + entryArray.length, 0);
@@ -282,6 +357,12 @@ export const preloadAllWorkOrdersData = async (workOrders: WorkOrder[]): Promise
     // Carregar dados para cada tipo de OS
     for (const tipoOsId of tiposOsIds) {
       try {
+        // Verificar se tipoOsId é válido
+        if (!tipoOsId || typeof tipoOsId !== 'number') {
+          console.warn(`⚠️ Tipo OS inválido: ${tipoOsId}`);
+          continue;
+        }
+        
         // Importar a função dinamicamente
         const { getServiceStepsWithDataCached } = await import('./serviceStepsService');
         
@@ -297,6 +378,10 @@ export const preloadAllWorkOrdersData = async (workOrders: WorkOrder[]): Promise
       }
     }
 
+    // Salvar status do pré-carregamento
+    const workOrderIds = workOrders.map(wo => wo.id);
+    await savePreloadStatus(errors.length === 0, workOrderIds, errors);
+
     return {
       success: errors.length === 0,
       cached,
@@ -305,6 +390,11 @@ export const preloadAllWorkOrdersData = async (workOrders: WorkOrder[]): Promise
   } catch (error) {
     const errorMsg = `Erro geral no pré-carregamento: ${error}`;
     errors.push(errorMsg);
+    
+    // Salvar status de falha
+    const workOrderIds = workOrders.map(wo => wo.id);
+    await savePreloadStatus(false, workOrderIds, errors);
+    
     return {
       success: false,
       cached,
@@ -318,7 +408,8 @@ export const preloadAllWorkOrdersData = async (workOrders: WorkOrder[]): Promise
  */
 export const shouldPreload = async (currentWorkOrders: WorkOrder[]): Promise<boolean> => {
   try {
-    const preloadStatusStr = await AsyncStorage.getItem(CACHE_KEYS.PRELOAD_STATUS);
+    const { default: storageAdapter } = await import('./storageAdapter');
+    const preloadStatusStr = await storageAdapter.getItem(CACHE_KEYS.PRELOAD_STATUS);
     
     if (!preloadStatusStr) {
       console.log('📱 Nenhum pré-carregamento anterior encontrado');
@@ -361,40 +452,61 @@ export const shouldPreload = async (currentWorkOrders: WorkOrder[]): Promise<boo
 };
 
 /**
+ * Salva o status do pré-carregamento
+ */
+const savePreloadStatus = async (
+  success: boolean,
+  workOrderIds: number[],
+  errors: string[]
+): Promise<void> => {
+  try {
+    const { default: storageAdapter } = await import('./storageAdapter');
+    
+    const preloadStatus: PreloadStatus = {
+      success,
+      workOrderIds,
+      errors,
+      timestamp: new Date().toISOString(),
+    };
+
+    await storageAdapter.setItem(
+      CACHE_KEYS.PRELOAD_STATUS,
+      JSON.stringify(preloadStatus)
+    );
+  } catch (error) {
+    console.error('❌ Erro ao salvar status de pré-carregamento:', error);
+  }
+};
+
+/**
  * Obtém OSs do cache local
  */
 export const getCachedWorkOrders = async (): Promise<WorkOrder[] | null> => {
   try {
-    const cachedStr = await AsyncStorage.getItem(CACHE_KEYS.WORK_ORDERS_CACHE);
-    
-    if (!cachedStr) {
-      return null;
-    }
+    const { default: storageAdapter } = await import('./storageAdapter');
+    const cachedStr = await storageAdapter.getItem(CACHE_KEYS.WORK_ORDERS_CACHE);
+    if (!cachedStr) return null;
 
-    const workOrders: WorkOrder[] = JSON.parse(cachedStr);
-    console.log(`📱 ${workOrders.length} OSs carregadas do cache`);
-    
-    return workOrders;
+    const cached = JSON.parse(cachedStr);
+    return cached.workOrders || null;
   } catch (error) {
-    console.error('❌ Erro ao carregar OSs do cache:', error);
+    console.error('❌ Erro ao buscar OSs do cache:', error);
     return null;
   }
 };
 
 /**
- * Obtém status do pré-carregamento
+ * Obtém o status do pré-carregamento
  */
 export const getPreloadStatus = async (): Promise<PreloadStatus | null> => {
   try {
-    const statusStr = await AsyncStorage.getItem(CACHE_KEYS.PRELOAD_STATUS);
-    
-    if (!statusStr) {
-      return null;
-    }
+    const { default: storageAdapter } = await import('./storageAdapter');
+    const statusStr = await storageAdapter.getItem(CACHE_KEYS.PRELOAD_STATUS);
+    if (!statusStr) return null;
 
     return JSON.parse(statusStr);
   } catch (error) {
-    console.error('❌ Erro ao obter status do pré-carregamento:', error);
+    console.error('❌ Erro ao obter status de pré-carregamento:', error);
     return null;
   }
 };
@@ -404,12 +516,13 @@ export const getPreloadStatus = async (): Promise<PreloadStatus | null> => {
  */
 export const clearAllCache = async (): Promise<void> => {
   try {
+    const { default: storageAdapter } = await import('./storageAdapter');
     await Promise.all([
-      AsyncStorage.removeItem(CACHE_KEYS.SERVICE_STEPS),
-      AsyncStorage.removeItem(CACHE_KEYS.SERVICE_ENTRIES),
-      AsyncStorage.removeItem(CACHE_KEYS.CACHE_TIMESTAMP),
-      AsyncStorage.removeItem(CACHE_KEYS.WORK_ORDERS_CACHE),
-      AsyncStorage.removeItem(CACHE_KEYS.PRELOAD_STATUS),
+      storageAdapter.removeItem(CACHE_KEYS.SERVICE_STEPS),
+      storageAdapter.removeItem(CACHE_KEYS.SERVICE_ENTRIES),
+      storageAdapter.removeItem(CACHE_KEYS.CACHE_TIMESTAMP),
+      storageAdapter.removeItem(CACHE_KEYS.WORK_ORDERS_CACHE),
+      storageAdapter.removeItem(CACHE_KEYS.PRELOAD_STATUS),
     ]);
     
     console.log('🧹 Cache completo limpo');
@@ -429,10 +542,12 @@ const arraysEqual = (a: number[], b: number[]): boolean => {
  */
 export const debugCacheContents = async (): Promise<void> => {
   try {
+    const { default: storageAdapter } = await import('./storageAdapter');
+    
     console.log('🔍 === DEBUG DO CACHE ===');
     
     // 1. Verificar cache de etapas
-    const stepsCache = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_STEPS);
+    const stepsCache = await storageAdapter.getItem(CACHE_KEYS.SERVICE_STEPS);
     if (stepsCache) {
       const steps: CachedServiceSteps = JSON.parse(stepsCache);
       console.log('📋 ETAPAS NO CACHE:');
@@ -447,7 +562,7 @@ export const debugCacheContents = async (): Promise<void> => {
     }
     
     // 2. Verificar cache de entradas
-    const entriesCache = await AsyncStorage.getItem(CACHE_KEYS.SERVICE_ENTRIES);
+    const entriesCache = await storageAdapter.getItem(CACHE_KEYS.SERVICE_ENTRIES);
     if (entriesCache) {
       const entries: CachedServiceEntries = JSON.parse(entriesCache);
       console.log('📝 ENTRADAS NO CACHE:');
@@ -459,7 +574,7 @@ export const debugCacheContents = async (): Promise<void> => {
     }
     
     // 3. Verificar timestamp
-    const timestamp = await AsyncStorage.getItem(CACHE_KEYS.CACHE_TIMESTAMP);
+    const timestamp = await storageAdapter.getItem(CACHE_KEYS.CACHE_TIMESTAMP);
     if (timestamp) {
       const date = new Date(timestamp);
       const now = new Date();
@@ -472,23 +587,20 @@ export const debugCacheContents = async (): Promise<void> => {
     }
     
     // 4. Verificar status de pré-carregamento
-    const preloadStatus = await AsyncStorage.getItem(CACHE_KEYS.PRELOAD_STATUS);
+    const preloadStatus = await storageAdapter.getItem(CACHE_KEYS.PRELOAD_STATUS);
     if (preloadStatus) {
       const status: PreloadStatus = JSON.parse(preloadStatus);
-      console.log('🚀 STATUS DO PRÉ-CARREGAMENTO:');
-      console.log(`  - Último pré-carregamento: ${new Date(status.lastPreload).toLocaleString()}`);
+      console.log('🔄 STATUS DE PRÉ-CARREGAMENTO:');
       console.log(`  - Sucesso: ${status.success ? 'SIM' : 'NÃO'}`);
-      console.log(`  - OSs incluídas: ${status.workOrderIds.length}`);
+      console.log(`  - OSs processadas: ${status.workOrderIds.length}`);
       console.log(`  - Erros: ${status.errors.length}`);
-      if (status.errors.length > 0) {
-        status.errors.forEach(error => console.log(`    - ${error}`));
-      }
+      console.log(`  - Timestamp: ${new Date(status.timestamp).toLocaleString()}`);
     } else {
       console.log('❌ Nenhum status de pré-carregamento encontrado');
     }
     
-    console.log('🔍 === FIM DEBUG DO CACHE ===');
+    console.log('🔍 === FIM DO DEBUG ===');
   } catch (error) {
-    console.error('💥 Erro ao fazer debug do cache:', error);
+    console.error('💥 Erro no debug do cache:', error);
   }
 }; 

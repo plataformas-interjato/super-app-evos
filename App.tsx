@@ -596,14 +596,19 @@ export default function App() {
       console.log('✅ Adaptador de armazenamento inicializado');
       
       // Obter estatísticas iniciais
-      const storageStats = await storageAdapter.getStorageStats();
-      console.log('📊 Estatísticas iniciais do armazenamento:', {
-        asyncStorageSize: `${(storageStats.asyncStorageSize / 1024 / 1024).toFixed(2)} MB`,
-        hybridStorageSize: `${(storageStats.hybridStorageStats.totalSize / 1024 / 1024).toFixed(2)} MB`,
-        totalItems: storageStats.hybridStorageStats.totalItems,
-        totalPhotos: storageStats.hybridStorageStats.totalPhotos,
-        migrationCompleted: storageStats.migrationStatus.completed
-      });
+      try {
+        const storageStats = await storageAdapter.getStorageStats();
+        console.log('📊 Estatísticas iniciais do armazenamento:', {
+          asyncStorageKeys: storageStats.asyncStorageSize, // Agora é apenas contagem
+          hybridStorageSize: `${(storageStats.hybridStorageStats.totalSize / 1024 / 1024).toFixed(2)} MB`,
+          totalItems: storageStats.hybridStorageStats.totalItems,
+          totalPhotos: storageStats.hybridStorageStats.totalPhotos,
+          migrationCompleted: storageStats.migrationStatus.completed
+        });
+      } catch (error) {
+        console.warn('⚠️ Erro ao obter estatísticas iniciais:', error);
+        // Continuar inicialização mesmo com erro nas estatísticas
+      }
       
       setAppReady(true);
     } catch (error) {

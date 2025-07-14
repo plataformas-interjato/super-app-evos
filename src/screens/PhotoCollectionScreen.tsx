@@ -247,19 +247,21 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
         return;
       }
 
-      console.log('🔍 Carregando etapas DIRETO do AsyncStorage para evitar loops...');
+      console.log('🔍 Carregando etapas do armazenamento híbrido...');
       
       try {
-        // BUSCAR DIRETAMENTE DO ASYNCSTORAGE - SEM IMPORTS DINÂMICOS
-        const stepsCache = await AsyncStorage.getItem('cached_service_steps');
-        const entriesCache = await AsyncStorage.getItem('cached_service_entries');
+        // USAR STORAGE ADAPTER ao invés do AsyncStorage direto
+        const { default: storageAdapter } = await import('../services/storageAdapter');
+        
+        const stepsCache = await storageAdapter.getItem('cached_service_steps');
+        const entriesCache = await storageAdapter.getItem('cached_service_entries');
         
         if (stepsCache) {
           const cache = JSON.parse(stepsCache);
           const stepsData = cache[workOrder.tipo_os_id];
           
           if (stepsData && stepsData.length > 0) {
-            console.log(`📝 ${stepsData.length} etapas encontradas no cache direto`);
+            console.log(`📝 ${stepsData.length} etapas encontradas no armazenamento híbrido`);
             
             // Processar entradas se existirem
             let finalSteps = stepsData;
@@ -457,7 +459,7 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
             
             if (hasPhoto) {
               // Se é foto da sessão atual, remover da sessão
-              console.log(`🗑️ Removendo foto da sessão via modal (entrada ${entryId})`);
+              console.log(`��️ Removendo foto da sessão via modal (entrada ${entryId})`);
               removePhoto(entryId);
             } else if (hasFotoSalva) {
               // Se é foto salva, remover do estado local

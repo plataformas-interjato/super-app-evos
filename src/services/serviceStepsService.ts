@@ -758,10 +758,10 @@ export const getServiceStepsWithDataCached = async (
           console.warn('⚠️ Erro ao fazer cache dos dados do servidor:', cacheError);
         }
         
-        return { data: serverResult.data, error: null, fromCache: false };
+        return { ...serverResult, fromCache: false };
       } else {
         console.error('❌ Erro do servidor:', serverResult.error);
-        return serverResult;
+        return { ...serverResult, fromCache: false };
       }
     } catch (serverError) {
       console.error('💥 Erro de conexão com servidor:', serverError);

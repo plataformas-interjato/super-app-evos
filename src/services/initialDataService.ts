@@ -342,6 +342,7 @@ export const performInitialDataLoad = async (
       });
     } catch (error) {
       console.warn('⚠️ Erro ao obter estatísticas do armazenamento:', error);
+      // Continuar execução mesmo com erro nas estatísticas
     }
     
     return { success: true, stats: finalStats };

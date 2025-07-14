@@ -117,28 +117,30 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
         console.log('📱 MODO OFFLINE: Buscando apenas do cache local...');
         
         try {
-          // Buscar APENAS do AsyncStorage direto
-          const stepsCache = await AsyncStorage.getItem('cached_service_steps');
-          const entriesCache = await AsyncStorage.getItem('cached_service_entries');
+          // USAR STORAGE ADAPTER ao invés do AsyncStorage direto
+          const { default: storageAdapter } = await import('../services/storageAdapter');
+          
+          const stepsCache = await storageAdapter.getItem('cached_service_steps');
+          const entriesCache = await storageAdapter.getItem('cached_service_entries');
           
           if (stepsCache) {
             const cache = JSON.parse(stepsCache);
             const steps = cache[tipoOsId];
             
             if (steps && steps.length > 0) {
-              console.log(`📝 OFFLINE: ${steps.length} etapas encontradas no cache`);
+              console.log(`📝 OFFLINE: ${steps.length} etapas encontradas no armazenamento híbrido`);
               
               // Buscar entradas se existirem
               let stepsWithData = steps;
               if (entriesCache) {
                 const entriesData = JSON.parse(entriesCache);
-                stepsWithData = steps.map(step => ({
+                stepsWithData = steps.map((step: ServiceStep) => ({
                   ...step,
                   entradas: entriesData[step.id] || []
                 }));
               }
               
-              console.log('✅ OFFLINE: Dados carregados diretamente do AsyncStorage');
+              console.log('✅ OFFLINE: Dados carregados do armazenamento híbrido');
               setSteps(stepsWithData);
               return;
             }

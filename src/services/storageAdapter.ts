@@ -309,7 +309,7 @@ class StorageAdapter {
   }
 
   /**
-   * Obtém estatísticas do armazenamento
+   * Obtém estatísticas simplificadas do armazenamento
    */
   async getStorageStats(): Promise<{
     asyncStorageSize: number;
@@ -319,22 +319,41 @@ class StorageAdapter {
     await this.initialize();
 
     try {
-      // Obter estatísticas do AsyncStorage
+      // Simplificar cálculo do AsyncStorage - apenas contar chaves sem calcular tamanho
       const asyncStorageKeys = await AsyncStorage.getAllKeys();
-      let asyncStorageSize = 0;
-      
-      for (const key of asyncStorageKeys) {
-        const value = await AsyncStorage.getItem(key);
-        if (value) {
-          asyncStorageSize += new Blob([value]).size;
-        }
-      }
+      const asyncStorageSize = asyncStorageKeys.length; // Usar contagem em vez de tamanho real
 
-      // Obter estatísticas do armazenamento híbrido
-      const hybridStorageStats = await hybridStorage.getStorageStats();
+      // Obter estatísticas do armazenamento híbrido de forma simplificada
+      let hybridStorageStats = {
+        totalItems: 0,
+        totalPhotos: 0,
+        totalSize: 0,
+        storageByType: {}
+      };
+
+      try {
+        hybridStorageStats = await hybridStorage.getStorageStats();
+      } catch (error) {
+        console.warn('⚠️ Erro ao obter estatísticas do armazenamento híbrido:', error);
+        // Usar valores padrão em caso de erro
+      }
       
-      // Obter status da migração
-      const migrationStatus = await migrationService.getMigrationStatus();
+      // Obter status da migração de forma simplificada
+      let migrationStatus = {
+        version: 1,
+        completed: false,
+        migratedKeys: [],
+        lastMigrationDate: new Date().toISOString(),
+        photosConverted: 0,
+        totalItemsMigrated: 0
+      };
+
+      try {
+        migrationStatus = await migrationService.getMigrationStatus();
+      } catch (error) {
+        console.warn('⚠️ Erro ao obter status da migração:', error);
+        // Usar valores padrão em caso de erro
+      }
 
       return {
         asyncStorageSize,
@@ -343,10 +362,23 @@ class StorageAdapter {
       };
     } catch (error) {
       console.error('❌ Erro ao obter estatísticas:', error);
+      // Retornar estatísticas básicas em caso de erro
       return {
         asyncStorageSize: 0,
-        hybridStorageStats: {},
-        migrationStatus: {}
+        hybridStorageStats: {
+          totalItems: 0,
+          totalPhotos: 0,
+          totalSize: 0,
+          storageByType: {}
+        },
+        migrationStatus: {
+          version: 1,
+          completed: false,
+          migratedKeys: [],
+          lastMigrationDate: new Date().toISOString(),
+          photosConverted: 0,
+          totalItemsMigrated: 0
+        }
       };
     }
   }
@@ -359,7 +391,8 @@ class StorageAdapter {
       return await migrationService.performMigration();
     } catch (error) {
       console.error('❌ Erro ao forçar migração:', error);
-      return { success: false, migratedCount: 0, error: error.message };
+      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+      return { success: false, migratedCount: 0, error: errorMessage };
     }
   }
 
