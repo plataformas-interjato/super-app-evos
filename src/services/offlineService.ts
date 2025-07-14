@@ -3,6 +3,8 @@ import NetInfo from '@react-native-community/netinfo';
 import { AuditoriaTecnico, savePhotoInicio, saveAuditoriaFinal } from './auditService';
 import { markLocalStatusAsSynced, clearAllLocalDataForWorkOrder } from './localStatusService';
 import { saveDadosRecord, saveComentarioEtapa } from './serviceStepsService';
+import storageAdapter from './storageAdapter';
+import hybridStorage from './hybridStorageService';
 
 // Tipos para dados offline
 export interface OfflineAction {
@@ -20,6 +22,7 @@ export interface OfflinePhotoAction extends OfflineAction {
   type: 'PHOTO_INICIO' | 'PHOTO_FINAL';
   data: {
     photoUri: string;
+    photoId?: string; // ID da foto no armazenamento híbrido
     base64?: string;
     motivo?: string;
   };
@@ -94,16 +97,28 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
 };
 
 /**
- * Salva ação offline no AsyncStorage
+ * Salva ação offline no armazenamento híbrido
  */
 const saveOfflineAction = async (action: OfflineAction): Promise<void> => {
   try {
     const existingActions = await getOfflineActions();
     const updatedActions = [...existingActions, action];
     
-    await AsyncStorage.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(updatedActions));
+    // Usar armazenamento híbrido para ações offline
+    await storageAdapter.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(updatedActions));
+    
+    console.log('💾 Ação offline salva no armazenamento híbrido:', action.type);
   } catch (error) {
     console.error('❌ Erro ao salvar ação offline:', error);
+    
+    // Fallback para AsyncStorage em caso de erro
+    try {
+      const existingActions = await getOfflineActions();
+      const updatedActions = [...existingActions, action];
+      await AsyncStorage.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(updatedActions));
+    } catch (fallbackError) {
+      console.error('❌ Erro no fallback para AsyncStorage:', fallbackError);
+    }
   }
 };
 
@@ -112,11 +127,19 @@ const saveOfflineAction = async (action: OfflineAction): Promise<void> => {
  */
 export const getOfflineActions = async (): Promise<OfflineAction[]> => {
   try {
-    const actionsJson = await AsyncStorage.getItem(OFFLINE_ACTIONS_KEY);
+    const actionsJson = await storageAdapter.getItem(OFFLINE_ACTIONS_KEY);
     return actionsJson ? JSON.parse(actionsJson) : [];
   } catch (error) {
-    console.error('❌ Erro ao recuperar ações offline:', error);
-    return [];
+    console.error('❌ Erro ao recuperar ações offline do armazenamento híbrido:', error);
+    
+    // Fallback para AsyncStorage
+    try {
+      const actionsJson = await AsyncStorage.getItem(OFFLINE_ACTIONS_KEY);
+      return actionsJson ? JSON.parse(actionsJson) : [];
+    } catch (fallbackError) {
+      console.error('❌ Erro no fallback para AsyncStorage:', fallbackError);
+      return [];
+    }
   }
 };
 
@@ -180,7 +203,7 @@ const incrementSyncAttempts = async (actionId: string): Promise<void> => {
 };
 
 /**
- * Salva foto de início com suporte offline
+ * Salva foto de início com suporte offline usando armazenamento híbrido
  */
 export const savePhotoInicioOffline = async (
   workOrderId: number,
@@ -190,7 +213,21 @@ export const savePhotoInicioOffline = async (
   const actionId = `photo_inicio_${workOrderId}_${technicoId}_${Date.now()}`;
   
   try {
-    // 1. Sempre salvar offline primeiro
+    // 1. Salvar foto no armazenamento híbrido
+    const photoSaveResult = await hybridStorage.savePhoto(
+      photoUri,
+      'PHOTO_INICIO',
+      workOrderId,
+      actionId
+    );
+    
+    if (!photoSaveResult.success) {
+      return { success: false, error: photoSaveResult.error };
+    }
+    
+    console.log('📸 Foto de início salva no armazenamento híbrido:', photoSaveResult.id);
+
+    // 2. Salvar ação offline
     const offlineAction: OfflinePhotoAction = {
       id: actionId,
       type: 'PHOTO_INICIO',
@@ -199,6 +236,7 @@ export const savePhotoInicioOffline = async (
       technicoId,
       data: {
         photoUri,
+        photoId: photoSaveResult.id,
       },
       synced: false,
       attempts: 0
@@ -206,36 +244,44 @@ export const savePhotoInicioOffline = async (
 
     await saveOfflineAction(offlineAction);
 
-    // 2. Verificar conexão e tentar salvar online
+    // 3. Verificar conexão e tentar salvar online
     const isOnline = await checkNetworkConnection();
     
     if (isOnline) {
-      const { data, error } = await savePhotoInicio(workOrderId, technicoId, photoUri);
+      // Converter foto para base64 para upload
+      const { base64 } = await hybridStorage.getPhotoAsBase64(photoSaveResult.id);
       
-      if (!error && data) {
-        // Sucesso online - marcar como sincronizado
-        await markActionAsSynced(actionId);
+      if (base64) {
+        // Criar arquivo temporário para upload
+        const tempUri = await createTempFileFromBase64(base64);
         
-        // Limpar apenas o status local para foto de início (não todos os dados)
-        // pois a OS ainda pode estar em progresso
-        await markLocalStatusAsSynced(workOrderId);
-        
-        return { success: true };
-      } else {
-        // Falha online - manter offline para sincronização posterior
-        return { success: true, savedOffline: true, error: `Salvo offline: ${error}` };
+        if (tempUri) {
+          const { data, error } = await savePhotoInicio(workOrderId, technicoId, tempUri);
+          
+          if (!error && data) {
+            // Sucesso online - marcar como sincronizado
+            await markActionAsSynced(actionId);
+            await markLocalStatusAsSynced(workOrderId);
+            
+            return { success: true };
+          } else {
+            // Falha online - manter offline para sincronização posterior
+            return { success: true, savedOffline: true, error: `Salvo offline: ${error}` };
+          }
+        }
       }
-    } else {
-      return { success: true, savedOffline: true, error: 'Sem conexão - salvo offline' };
     }
+    
+    return { success: true, savedOffline: true, error: 'Sem conexão - salvo offline' };
 
   } catch (error) {
+    console.error('❌ Erro ao salvar foto de início offline:', error);
     return { success: false, error: 'Erro inesperado ao salvar foto' };
   }
 };
 
 /**
- * Salva foto final com suporte offline
+ * Salva foto final com suporte offline usando armazenamento híbrido
  */
 export const savePhotoFinalOffline = async (
   workOrderId: number,
@@ -245,39 +291,58 @@ export const savePhotoFinalOffline = async (
   const actionId = `photo_final_${workOrderId}_${technicoId}_${Date.now()}`;
   
   try {
-    // 1. Verificar conexão primeiro
+    // 1. Salvar foto no armazenamento híbrido
+    const photoSaveResult = await hybridStorage.savePhoto(
+      photoUri,
+      'PHOTO_FINAL',
+      workOrderId,
+      actionId
+    );
+    
+    if (!photoSaveResult.success) {
+      return { success: false, error: photoSaveResult.error };
+    }
+    
+    console.log('📸 Foto final salva no armazenamento híbrido:', photoSaveResult.id);
+
+    // 2. Verificar conexão primeiro
     const isOnline = await checkNetworkConnection();
     
     if (isOnline) {
       console.log('🌐 Conexão disponível, tentando salvar foto final online...');
       
       try {
-        // Tentar salvar online direto
-        const { saveAuditoriaFinal } = await import('./auditService');
+        // Converter foto para base64 para upload
+        const { base64 } = await hybridStorage.getPhotoAsBase64(photoSaveResult.id);
         
-        const { data: auditData, error: auditError } = await saveAuditoriaFinal(
-          workOrderId,
-          technicoId,
-          photoUri,
-          true, // trabalhoRealizado
-          '', // motivo
-          '' // comentario
-        );
-        
-        if (!auditError && auditData) {
-          console.log('✅ Foto final salva online com sucesso:', auditData.id);
-          return { success: true, savedOffline: false };
-        } else {
-          console.warn('⚠️ Falha ao salvar online, salvando offline...', auditError);
-          // Se falhar online, salvar offline
+        if (base64) {
+          // Criar arquivo temporário para upload
+          const tempUri = await createTempFileFromBase64(base64);
+          
+          if (tempUri) {
+            const { data: auditData, error: auditError } = await saveAuditoriaFinal(
+              workOrderId,
+              technicoId,
+              tempUri,
+              true, // trabalhoRealizado
+              '', // motivo
+              '' // comentario
+            );
+            
+            if (!auditError && auditData) {
+              console.log('✅ Foto final salva online com sucesso:', auditData.id);
+              return { success: true, savedOffline: false };
+            } else {
+              console.warn('⚠️ Falha ao salvar online, salvando offline...', auditError);
+            }
+          }
         }
       } catch (onlineError) {
         console.warn('⚠️ Erro ao tentar salvar online, salvando offline...', onlineError);
-        // Se der erro online, salvar offline
       }
     }
 
-    // 2. Salvar offline (seja por estar offline ou falha online)
+    // 3. Salvar ação offline
     const offlineAction: OfflinePhotoAction = {
       id: actionId,
       type: 'PHOTO_FINAL',
@@ -286,6 +351,7 @@ export const savePhotoFinalOffline = async (
       technicoId,
       data: {
         photoUri,
+        photoId: photoSaveResult.id,
       },
       synced: false,
       attempts: 0
@@ -293,16 +359,12 @@ export const savePhotoFinalOffline = async (
 
     await saveOfflineAction(offlineAction);
     console.log('📱 Foto final salva offline para sincronização posterior');
-    
-    return { 
-      success: true, 
-      savedOffline: true, 
-      error: isOnline ? 'Salvo offline após falha online' : 'Salvo offline - sem conexão' 
-    };
+
+    return { success: true, savedOffline: true, error: 'Foto salva offline' };
 
   } catch (error) {
-    console.error('💥 Erro inesperado ao salvar foto final:', error);
-    return { success: false, error: 'Erro inesperado ao salvar foto final' };
+    console.error('❌ Erro ao salvar foto final offline:', error);
+    return { success: false, error: 'Erro inesperado ao salvar foto' };
   }
 };
 
@@ -995,7 +1057,7 @@ const notifySyncCallbacks = (result: { total: number; synced: number; failed: nu
 };
 
 /**
- * Salva dados da coleta (fotos) com suporte offline
+ * Salva dados da coleta (fotos) com suporte offline usando armazenamento híbrido
  */
 export const saveDadosRecordOffline = async (
   workOrderId: number,
@@ -1006,7 +1068,21 @@ export const saveDadosRecordOffline = async (
   const actionId = `dados_record_${workOrderId}_${entradaDadosId}_${Date.now()}`;
   
   try {
-    // 1. Sempre salvar offline primeiro
+    // 1. Salvar foto no armazenamento híbrido
+    const photoSaveResult = await hybridStorage.savePhoto(
+      photoUri,
+      'DADOS_RECORD',
+      workOrderId,
+      actionId
+    );
+    
+    if (!photoSaveResult.success) {
+      return { success: false, error: photoSaveResult.error };
+    }
+    
+    console.log('📸 Foto de dados salva no armazenamento híbrido:', photoSaveResult.id);
+
+    // 2. Salvar ação offline
     const offlineAction: OfflineAction = {
       id: actionId,
       type: 'DADOS_RECORD',
@@ -1016,6 +1092,7 @@ export const saveDadosRecordOffline = async (
       data: {
         entradaDadosId,
         photoUri,
+        photoId: photoSaveResult.id,
       },
       synced: false,
       attempts: 0
@@ -1023,27 +1100,38 @@ export const saveDadosRecordOffline = async (
 
     await saveOfflineAction(offlineAction);
 
-    // 2. Verificar conexão e tentar salvar online
+    // 3. Verificar conexão e tentar salvar online
     const isOnline = await checkNetworkConnection();
     
     if (isOnline) {
       console.log('🌐 Conexão disponível, tentando salvar dados da coleta online...');
       
-      const { data, error } = await saveDadosRecord(workOrderId, entradaDadosId, photoUri);
+      // Converter foto para base64 para upload
+      const { base64 } = await hybridStorage.getPhotoAsBase64(photoSaveResult.id);
       
-      if (!error && data) {
-        // Sucesso online - marcar como sincronizado
-        await markActionAsSynced(actionId);
-        return { success: true };
-      } else {
-        // Falha online - manter offline para sincronização posterior
-        return { success: true, savedOffline: true, error: `Salvo offline: ${error}` };
+      if (base64) {
+        // Criar arquivo temporário para upload
+        const tempUri = await createTempFileFromBase64(base64);
+        
+        if (tempUri) {
+          const { data, error } = await saveDadosRecord(workOrderId, entradaDadosId, tempUri);
+          
+          if (!error && data) {
+            // Sucesso online - marcar como sincronizado
+            await markActionAsSynced(actionId);
+            return { success: true };
+          } else {
+            // Falha online - manter offline para sincronização posterior
+            return { success: true, savedOffline: true, error: `Salvo offline: ${error}` };
+          }
+        }
       }
-    } else {
-      return { success: true, savedOffline: true, error: 'Sem conexão - salvo offline' };
     }
+    
+    return { success: true, savedOffline: true, error: 'Sem conexão - salvo offline' };
 
   } catch (error) {
+    console.error('❌ Erro ao salvar dados da coleta offline:', error);
     return { success: false, error: 'Erro inesperado ao salvar dados da coleta' };
   }
 };
@@ -1103,7 +1191,30 @@ export const saveComentarioEtapaOffline = async (
 };
 
 /**
- * Salva dados de checklist de etapa com suporte offline
+ * Cria arquivo temporário a partir de base64 para upload
+ */
+const createTempFileFromBase64 = async (base64: string): Promise<string | null> => {
+  try {
+    const FileSystem = await import('expo-file-system');
+    
+    // Extrair dados base64
+    const base64Data = base64.replace(/^data:image\/[a-z]+;base64,/, '');
+    const tempUri = `${FileSystem.FileSystem.cacheDirectory}temp_upload_${Date.now()}.jpg`;
+    
+    // Salvar como arquivo temporário
+    await FileSystem.FileSystem.writeAsStringAsync(tempUri, base64Data, {
+      encoding: FileSystem.FileSystem.EncodingType.Base64,
+    });
+    
+    return tempUri;
+  } catch (error) {
+    console.error('❌ Erro ao criar arquivo temporário:', error);
+    return null;
+  }
+};
+
+/**
+ * Salva checklist de etapa com suporte offline
  */
 export const saveChecklistEtapaOffline = async (
   workOrderId: number,

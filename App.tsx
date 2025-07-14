@@ -21,6 +21,8 @@ import { updateLocalWorkOrderStatus } from './src/services/localStatusService';
 import { updateWorkOrderStatus } from './src/services/workOrderService';
 import { saveEvaluation } from './src/services/evaluationService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import storageAdapter from './src/services/storageAdapter';
+import hybridStorage from './src/services/hybridStorageService';
 
 type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'orderEvaluation' | 'startService' | 'steps' | 'audit' | 'photoCollection' | 'auditSaving' | 'auditSuccess';
 
@@ -575,11 +577,57 @@ function AppContent() {
 }
 
 export default function App() {
+  const [appReady, setAppReady] = useState(false);
+
+  useEffect(() => {
+    initializeApp();
+  }, []);
+
+  const initializeApp = async () => {
+    try {
+      console.log('🚀 Inicializando aplicativo...');
+      
+      // Inicializar armazenamento híbrido
+      await hybridStorage.initialize();
+      console.log('✅ Armazenamento híbrido inicializado');
+      
+      // Inicializar adaptador de armazenamento
+      await storageAdapter.initialize();
+      console.log('✅ Adaptador de armazenamento inicializado');
+      
+      // Obter estatísticas iniciais
+      const storageStats = await storageAdapter.getStorageStats();
+      console.log('📊 Estatísticas iniciais do armazenamento:', {
+        asyncStorageSize: `${(storageStats.asyncStorageSize / 1024 / 1024).toFixed(2)} MB`,
+        hybridStorageSize: `${(storageStats.hybridStorageStats.totalSize / 1024 / 1024).toFixed(2)} MB`,
+        totalItems: storageStats.hybridStorageStats.totalItems,
+        totalPhotos: storageStats.hybridStorageStats.totalPhotos,
+        migrationCompleted: storageStats.migrationStatus.completed
+      });
+      
+      setAppReady(true);
+    } catch (error) {
+      console.error('❌ Erro ao inicializar aplicativo:', error);
+      
+      // Continuar mesmo em caso de erro na inicialização
+      setAppReady(true);
+    }
+  };
+
+  if (!appReady) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#0066CC" />
+      </View>
+    );
+  }
+
   return (
     <SafeAreaProvider>
       <AuthProvider>
         <AppContent />
       </AuthProvider>
+      <StatusBar style="light" />
     </SafeAreaProvider>
   );
 }
