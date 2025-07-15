@@ -167,49 +167,100 @@ export const hasInitialPhoto = async (
   workOrderId: number
 ): Promise<{ hasPhoto: boolean; error: string | null }> => {
   try {
+    console.log(`🔍 ===== VERIFICANDO FOTO INICIAL DA OS ${workOrderId} =====`);
+    
     // Verificar conectividade primeiro
     const NetInfo = require('@react-native-community/netinfo');
     const netInfo = await NetInfo.fetch();
+    const isOnline = netInfo.isConnected === true && netInfo.isInternetReachable === true;
+    console.log(`📶 Status de conexão: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
     
-    // Se offline, verificar dados offline primeiro
-    if (!netInfo.isConnected) {
+    if (isOnline) {
+      // ONLINE: Verificar servidor PRIMEIRO (fonte da verdade)
+      console.log(`🌐 Verificando foto inicial no SERVIDOR...`);
+      
+      const { data, error } = await supabase
+        .from('auditoria_tecnico')
+        .select('id, foto_inicial')
+        .eq('ordem_servico_id', workOrderId)
+        .not('foto_inicial', 'is', null)
+        .limit(1);
+
+      if (error) {
+        console.error(`❌ Erro ao verificar servidor:`, error);
+        // Em caso de erro no servidor, verificar offline como fallback
+        console.log(`📱 Fallback: verificando dados offline...`);
+      } else {
+        const hasServerPhoto = data && data.length > 0 && data[0].foto_inicial;
+        console.log(`🌐 Resultado do servidor: ${hasServerPhoto ? 'FOTO ENCONTRADA' : 'SEM FOTO'}`);
+        
+        if (hasServerPhoto) {
+          console.log(`✅ RESULTADO FINAL: FOTO INICIAL EXISTE NO SERVIDOR`);
+          return { hasPhoto: true, error: null };
+        } else {
+          console.log(`❌ Servidor não tem foto - verificando dados offline não sincronizados...`);
+        }
+      }
+      
+      // Verificar dados offline não sincronizados
       try {
         const { getOfflineActions } = await import('./offlineService');
         const offlineActions = await getOfflineActions();
+        console.log(`📱 Total de ações offline: ${offlineActions.length}`);
         
-        // Procurar por ação de foto inicial para esta OS
+        const offlinePhotoActions = offlineActions.filter(action => 
+          action.type === 'PHOTO_INICIO' && 
+          action.workOrderId === workOrderId &&
+          !action.synced // Importante: apenas não sincronizadas
+        );
+        
+        console.log(`📱 Ações de foto inicial offline para OS ${workOrderId}: ${offlinePhotoActions.length}`);
+        
+        if (offlinePhotoActions.length > 0) {
+          console.log(`✅ RESULTADO FINAL: FOTO INICIAL EXISTE OFFLINE (não sincronizada)`);
+          offlinePhotoActions.forEach(action => {
+            console.log(`   - Ação: ${action.id}, Synced: ${action.synced}, Tentativas: ${action.attempts}`);
+          });
+          return { hasPhoto: true, error: null };
+        } else {
+          console.log(`❌ RESULTADO FINAL: NÃO HÁ FOTO INICIAL (nem servidor nem offline)`);
+          return { hasPhoto: false, error: null };
+        }
+      } catch (offlineError) {
+        console.error(`❌ Erro ao verificar offline:`, offlineError);
+        return { hasPhoto: false, error: null };
+      }
+      
+    } else {
+      // OFFLINE: Verificar apenas dados offline
+      console.log(`📱 Verificando foto inicial OFFLINE...`);
+      
+      try {
+        const { getOfflineActions } = await import('./offlineService');
+        const offlineActions = await getOfflineActions();
+        console.log(`📱 Total de ações offline: ${offlineActions.length}`);
+        
         const hasOfflinePhoto = offlineActions.some(action => 
           action.type === 'PHOTO_INICIO' && 
           action.workOrderId === workOrderId
         );
         
-        if (hasOfflinePhoto) {
-          console.log('✅ Foto inicial encontrada offline');
-          return { hasPhoto: true, error: null };
-        }
+        console.log(`📱 Resultado offline: ${hasOfflinePhoto ? 'FOTO ENCONTRADA' : 'SEM FOTO'}`);
         
-        return { hasPhoto: false, error: null };
+        if (hasOfflinePhoto) {
+          console.log(`✅ RESULTADO FINAL: FOTO INICIAL EXISTE OFFLINE`);
+          return { hasPhoto: true, error: null };
+        } else {
+          console.log(`❌ RESULTADO FINAL: NÃO HÁ FOTO INICIAL OFFLINE`);
+          return { hasPhoto: false, error: null };
+        }
       } catch (offlineError) {
+        console.error(`❌ Erro ao verificar dados offline:`, offlineError);
         return { hasPhoto: false, error: null };
       }
     }
-    
-    // Se online, verificar no servidor
-    const { data, error } = await supabase
-      .from('auditoria_tecnico')
-      .select('id, foto_inicial')
-      .eq('ordem_servico_id', workOrderId)
-      .not('foto_inicial', 'is', null)
-      .limit(1);
-
-    if (error) {
-      return { hasPhoto: false, error: error.message };
-    }
-
-    const hasPhoto = data && data.length > 0 && data[0].foto_inicial;
-    
-    return { hasPhoto: !!hasPhoto, error: null };
   } catch (error) {
+    console.error(`💥 Erro crítico ao verificar foto inicial:`, error);
     return { hasPhoto: false, error: 'Erro inesperado ao verificar foto inicial' };
   }
 };
