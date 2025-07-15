@@ -40,6 +40,15 @@ interface PhotoEntry {
   fotoModelo?: string; // Foto modelo do banco de dados
 }
 
+// NOVA INTERFACE: Para fotos extras com múltiplos containers
+interface ExtraPhotoEntry {
+  id: string;
+  titulo: string;
+  stepId: number;
+  photoUri?: string;
+  created_at: string;
+}
+
 const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   workOrder,
   user,
@@ -58,10 +67,17 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   const stageScrollViewRef = useRef<ScrollView>(null);
   const [comentarios, setComentarios] = useState<{ [stepId: number]: string }>({});
   const [fotosSalvasUsuario, setFotosSalvasUsuario] = useState<{ [entryId: number]: string }>({});
+  
+  // NOVA FUNCIONALIDADE: Estado para múltiplas fotos extras por etapa
+  const [extraPhotoEntries, setExtraPhotoEntries] = useState<{ [stepId: number]: ExtraPhotoEntry[] }>({});
 
   // Estados para o modal de foto atual
   const [showCurrentPhotoModal, setShowCurrentPhotoModal] = useState(false);
   const [selectedEntryForCurrent, setSelectedEntryForCurrent] = useState<PhotoEntry | null>(null);
+  
+  // NOVA FUNCIONALIDADE: Estado para modal de foto extra
+  const [showExtraPhotoModal, setShowExtraPhotoModal] = useState(false);
+  const [selectedExtraEntry, setSelectedExtraEntry] = useState<ExtraPhotoEntry | null>(null);
 
   // Estado para armazenar alturas mínimas dos títulos por etapa
   const [titleHeightsByStep, setTitleHeightsByStep] = useState<{ [stepId: number]: number }>({});
@@ -247,107 +263,135 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
         return;
       }
 
-      console.log('🔍 Carregando etapas do armazenamento híbrido...');
+      console.log('🔍 Carregando etapas para coleta de fotos...');
       
-      try {
-        // USAR STORAGE ADAPTER ao invés do AsyncStorage direto
-        const { default: storageAdapter } = await import('../services/storageAdapter');
+      // Usar a função corrigida getServiceStepsWithDataCached
+      const { getServiceStepsWithDataCached } = await import('../services/serviceStepsService');
+      const { data: stepsFromService, error: serviceError, fromCache } = await getServiceStepsWithDataCached(
+        workOrder.tipo_os_id,
+        workOrder.id
+      );
+      
+      if (serviceError) {
+        console.error('❌ Erro ao carregar etapas:', serviceError);
+        setSteps([]);
+        setPhotoEntries([]);
+        return;
+      }
+      
+      if (stepsFromService && stepsFromService.length > 0) {
+        const totalEntries = stepsFromService.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
+        console.log(`✅ ${stepsFromService.length} etapas com ${totalEntries} entradas carregadas ${fromCache ? 'do cache' : 'do servidor'}`);
         
-        const stepsCache = await storageAdapter.getItem('cached_service_steps');
-        const entriesCache = await storageAdapter.getItem('cached_service_entries');
+        setSteps(stepsFromService);
         
-        if (stepsCache) {
-          const cache = JSON.parse(stepsCache);
-          const stepsData = cache[workOrder.tipo_os_id];
-          
-          if (stepsData && stepsData.length > 0) {
-            console.log(`📝 ${stepsData.length} etapas encontradas no armazenamento híbrido`);
+        // Criar lista de entradas para fotos
+        const entries: PhotoEntry[] = [];
+        stepsFromService.forEach((step: ServiceStep) => {
+          step.entradas?.forEach((entry: ServiceStepData) => {
+            const titulo = entry.titulo || entry.valor || `Entrada ${entry.ordem_entrada}`;
             
-            // Processar entradas se existirem
-            let finalSteps = stepsData;
-            if (entriesCache) {
-              try {
-                const entriesData = JSON.parse(entriesCache);
-                finalSteps = stepsData.map((step: ServiceStep) => ({
-                  ...step,
-                  entradas: entriesData[step.id] || []
-                }));
-              } catch (entriesError) {
-                console.warn('⚠️ Erro ao processar entradas, usando etapas sem entradas:', entriesError);
-                finalSteps = stepsData.map((step: ServiceStep) => ({ ...step, entradas: [] }));
-              }
-            } else {
-              finalSteps = stepsData.map((step: ServiceStep) => ({ ...step, entradas: [] }));
-            }
-            
-            setSteps(finalSteps);
-            
-            // Criar lista de entradas para fotos
-            const entries: PhotoEntry[] = [];
-            finalSteps.forEach((step: ServiceStep) => {
-              step.entradas?.forEach((entry: ServiceStepData) => {
-                const titulo = entry.titulo || entry.valor || `Entrada ${entry.ordem_entrada}`;
-                
-                entries.push({
-                  id: entry.id,
-                  titulo,
-                  stepTitle: step.titulo,
-                  stepId: step.id,
-                  fotoModelo: entry.foto_modelo,
-                });
-              });
+            entries.push({
+              id: entry.id,
+              titulo,
+              stepTitle: step.titulo,
+              stepId: step.id,
+              fotoModelo: entry.foto_modelo,
             });
+          });
+        });
+        
+        setPhotoEntries(entries);
+        console.log(`📸 ${entries.length} entradas de foto processadas`);
+        
+        // Tentar carregar fotos salvas sem bloquear
+        if (entries.length > 0) {
+          try {
+            // Buscar dados da tabela offline primeiro
+            const offlineData = await AsyncStorage.getItem('offline_dados_records');
+            const offlinePhotos: { [entradaId: number]: string } = {};
             
-            setPhotoEntries(entries);
-            console.log(`📸 ${entries.length} entradas de foto processadas`);
-            
-            // Tentar carregar fotos salvas sem bloquear
-            if (entries.length > 0) {
-              try {
-                // Buscar dados da tabela offline primeiro
-                const offlineData = await AsyncStorage.getItem('offline_dados_records');
-                const offlinePhotos: { [entradaId: number]: string } = {};
-                
-                if (offlineData) {
-                  const records = JSON.parse(offlineData);
-                  Object.values(records).forEach((record: any) => {
-                    if (record.ordem_servico_id === workOrder.id && record.valor) {
-                      offlinePhotos[record.entrada_dados_id] = record.valor;
-                    }
-                  });
+            if (offlineData) {
+              const records = JSON.parse(offlineData);
+              Object.values(records).forEach((record: any) => {
+                if (record.ordem_servico_id === workOrder.id && record.valor) {
+                  offlinePhotos[record.entrada_dados_id] = record.valor;
                 }
-                
-                setFotosSalvasUsuario(offlinePhotos);
-                console.log(`📸 ${Object.keys(offlinePhotos).length} fotos offline carregadas`);
-              } catch (fotosError) {
-                console.warn('⚠️ Erro ao carregar fotos offline:', fotosError);
-                setFotosSalvasUsuario({});
-              }
+              });
             }
             
-            return;
+            setFotosSalvasUsuario(offlinePhotos);
+            console.log(`📸 ${Object.keys(offlinePhotos).length} fotos offline carregadas`);
+          } catch (fotosError) {
+            console.warn('⚠️ Erro ao carregar fotos offline:', fotosError);
+            setFotosSalvasUsuario({});
           }
         }
         
-        console.log('❌ Nenhum dado no cache encontrado');
-        setSteps([]);
-        setPhotoEntries([]);
-        setFotosSalvasUsuario({});
+        // NOVA FUNCIONALIDADE: Carregar fotos extras salvas offline
+        await loadExtraPhotos();
         
-      } catch (cacheError) {
-        console.error('💥 Erro ao buscar cache:', cacheError);
-        setSteps([]);
-        setPhotoEntries([]);
-        setFotosSalvasUsuario({});
+        return;
       }
-    } catch (error) {
-      console.error('💥 Erro inesperado no carregamento:', error);
+      
+      // Se não encontrou nada
+      console.warn('⚠️ Nenhuma etapa encontrada');
       setSteps([]);
       setPhotoEntries([]);
-      setFotosSalvasUsuario({});
+      
+    } catch (error) {
+      console.error('💥 Erro inesperado ao carregar etapas:', error);
+      setSteps([]);
+      setPhotoEntries([]);
     } finally {
-      setIsLoading(false);
       setIsLoadingSteps(false);
+      setIsLoading(false);
+    }
+  };
+
+  // NOVA FUNCIONALIDADE: Carregar fotos extras salvas offline
+  const loadExtraPhotos = async () => {
+    try {
+      const offlineExtrasData = await AsyncStorage.getItem('offline_fotos_extras');
+      const loadedExtraEntries: { [stepId: number]: ExtraPhotoEntry[] } = {};
+      
+      if (offlineExtrasData) {
+        const extrasRecords = JSON.parse(offlineExtrasData);
+        
+        // Agrupar por etapa_id
+        Object.entries(extrasRecords).forEach(([recordKey, record]: [string, any]) => {
+          if (record.ordem_servico_id === workOrder.id && record.valor) {
+            const stepId = record.etapa_id;
+            
+            if (!loadedExtraEntries[stepId]) {
+              loadedExtraEntries[stepId] = [];
+            }
+            
+            loadedExtraEntries[stepId].push({
+              id: recordKey,
+              titulo: record.titulo || `Foto Extra ${loadedExtraEntries[stepId].length + 1}`,
+              stepId: stepId,
+              photoUri: record.valor,
+              created_at: record.created_at || new Date().toISOString()
+            });
+          }
+        });
+        
+        // Ordenar por data de criação
+        Object.keys(loadedExtraEntries).forEach(stepId => {
+          loadedExtraEntries[parseInt(stepId)].sort((a, b) => 
+            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          );
+        });
+      }
+      
+      setExtraPhotoEntries(loadedExtraEntries);
+      
+      const totalExtras = Object.values(loadedExtraEntries).reduce((sum, entries) => sum + entries.length, 0);
+      console.log(`📸 ${totalExtras} fotos extras carregadas em ${Object.keys(loadedExtraEntries).length} etapas`);
+    } catch (error) {
+      console.warn('⚠️ Erro ao carregar fotos extras offline:', error);
+      setExtraPhotoEntries({});
     }
   };
 
@@ -419,64 +463,6 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
         StatusBar.setBarStyle('light-content', true);
       }, 100);
     }
-  };
-
-  const openModelPhotoModal = (entry: PhotoEntry) => {
-    setSelectedEntryForModel(entry);
-    setShowModelPhotoModal(true);
-  };
-
-  const closeModelPhotoModal = () => {
-    setShowModelPhotoModal(false);
-    setSelectedEntryForModel(null);
-  };
-
-  const openCurrentPhotoModal = (entry: PhotoEntry) => {
-    setSelectedEntryForCurrent(entry);
-    setShowCurrentPhotoModal(true);
-  };
-
-  const closeCurrentPhotoModal = () => {
-    setShowCurrentPhotoModal(false);
-    setSelectedEntryForCurrent(null);
-  };
-
-  const removePhotoFromModal = () => {
-    if (!selectedEntryForCurrent) return;
-    
-    Alert.alert(
-      'Confirmar Remoção',
-      'Tem certeza que deseja remover esta foto?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { 
-          text: 'Remover', 
-          style: 'destructive',
-          onPress: () => {
-            const entryId = selectedEntryForCurrent.id;
-            const hasPhoto = collectedPhotos[entryId];
-            const hasFotoSalva = fotosSalvasUsuario[entryId];
-            
-            if (hasPhoto) {
-              // Se é foto da sessão atual, remover da sessão
-              console.log(`��️ Removendo foto da sessão via modal (entrada ${entryId})`);
-              removePhoto(entryId);
-            } else if (hasFotoSalva) {
-              // Se é foto salva, remover do estado local
-              console.log(`🗑️ Removendo foto salva via modal (entrada ${entryId})`);
-              setFotosSalvasUsuario(prev => {
-                const updated = { ...prev };
-                delete updated[entryId];
-                return updated;
-              });
-            }
-            
-            // Fechar modal após remoção
-            closeCurrentPhotoModal();
-          }
-        }
-      ]
-    );
   };
 
   const takePhotoFromModal = async () => {
@@ -573,12 +559,260 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
     }
   };
 
+  const removePhotoFromModal = () => {
+    if (!selectedEntryForCurrent) return;
+    
+    Alert.alert(
+      'Confirmar Remoção',
+      'Tem certeza que deseja remover esta foto?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Remover', 
+          style: 'destructive',
+          onPress: () => {
+            const entryId = selectedEntryForCurrent.id;
+            const hasPhoto = collectedPhotos[entryId];
+            const hasFotoSalva = fotosSalvasUsuario[entryId];
+            
+            if (hasPhoto) {
+              // Se é foto da sessão atual, remover da sessão
+              console.log(`🗑️ Removendo foto da sessão via modal (entrada ${entryId})`);
+              removePhoto(entryId);
+            } else if (hasFotoSalva) {
+              // Se é foto salva, remover do estado local
+              console.log(`🗑️ Removendo foto salva via modal (entrada ${entryId})`);
+              setFotosSalvasUsuario(prev => {
+                const updated = { ...prev };
+                delete updated[entryId];
+                return updated;
+              });
+            }
+            
+            // Fechar modal após remoção
+            closeCurrentPhotoModal();
+          }
+        }
+      ]
+    );
+  };
+
   const removePhoto = (entryId: number) => {
     setCollectedPhotos(prev => {
       const updated = { ...prev };
       delete updated[entryId];
       return updated;
     });
+  };
+
+  // NOVA FUNCIONALIDADE: Adicionar nova entrada de foto extra
+  const addExtraPhotoEntry = (stepId: number) => {
+    const currentEntries = extraPhotoEntries[stepId] || [];
+    const newEntry: ExtraPhotoEntry = {
+      id: `extra_${workOrder.id}_${stepId}_${Date.now()}`,
+      titulo: `Foto Extra ${currentEntries.length + 1}`,
+      stepId: stepId,
+      created_at: new Date().toISOString()
+    };
+    
+    setExtraPhotoEntries(prev => ({
+      ...prev,
+      [stepId]: [...(prev[stepId] || []), newEntry]
+    }));
+  };
+
+  // NOVA FUNCIONALIDADE: Remover entrada de foto extra
+  const removeExtraPhotoEntry = (stepId: number, entryId: string) => {
+    Alert.alert(
+      'Confirmar Remoção',
+      'Tem certeza que deseja remover este container de foto extra?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Remover', 
+          style: 'destructive',
+          onPress: async () => {
+            // Remover do AsyncStorage se existir
+            try {
+              const offlineExtrasData = await AsyncStorage.getItem('offline_fotos_extras');
+              if (offlineExtrasData) {
+                const extrasRecords = JSON.parse(offlineExtrasData);
+                if (extrasRecords[entryId]) {
+                  delete extrasRecords[entryId];
+                  await AsyncStorage.setItem('offline_fotos_extras', JSON.stringify(extrasRecords));
+                }
+              }
+            } catch (error) {
+              console.warn('⚠️ Erro ao remover foto extra do AsyncStorage:', error);
+            }
+            
+            // Remover do estado local
+            setExtraPhotoEntries(prev => {
+              const updated = { ...prev };
+              if (updated[stepId]) {
+                updated[stepId] = updated[stepId].filter(entry => entry.id !== entryId);
+                if (updated[stepId].length === 0) {
+                  delete updated[stepId];
+                }
+              }
+              return updated;
+            });
+          }
+        }
+      ]
+    );
+  };
+
+  // NOVA FUNCIONALIDADE: Tirar foto para entrada específica
+  const takeExtraPhoto = async (extraEntry: ExtraPhotoEntry) => {
+    // Solicitar permissão da câmera
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert(
+        'Permissão Necessária',
+        'É necessário permitir o acesso à câmera para tirar fotos.'
+      );
+      return;
+    }
+
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+        allowsEditing: false,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const photoUri = result.assets[0].uri;
+        
+        // Salvar foto extra no AsyncStorage
+        try {
+          const offlineKey = 'offline_fotos_extras';
+          const existingDataStr = await AsyncStorage.getItem(offlineKey);
+          const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
+          
+          existingData[extraEntry.id] = {
+            ativo: 1,
+            valor: photoUri,
+            ordem_servico_id: workOrder.id,
+            etapa_id: extraEntry.stepId,
+            titulo: extraEntry.titulo,
+            tipo: 'FOTO_EXTRA',
+            created_at: extraEntry.created_at,
+            synced: false
+          };
+          
+          await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
+          
+          // Atualizar estado local
+          setExtraPhotoEntries(prev => ({
+            ...prev,
+            [extraEntry.stepId]: prev[extraEntry.stepId].map(entry => 
+              entry.id === extraEntry.id ? { ...entry, photoUri } : entry
+            )
+          }));
+          
+          console.log('✅ Foto extra salva offline com sucesso');
+          
+          // Restaurar StatusBar após captura
+          setTimeout(() => {
+            StatusBar.setBackgroundColor('#3b82f6', true);
+            StatusBar.setBarStyle('light-content', true);
+          }, 50);
+        } catch (offlineError) {
+          console.error('💥 Erro ao salvar foto extra offline:', offlineError);
+          Alert.alert('Erro', 'Não foi possível salvar a foto extra. Tente novamente.');
+        }
+      }
+    } catch (error) {
+      Alert.alert('Erro', 'Não foi possível tirar a foto extra. Tente novamente.');
+      console.error('Erro ao tirar foto extra:', error);
+    } finally {
+      // Garantir que o StatusBar seja restaurado mesmo em caso de erro
+      setTimeout(() => {
+        StatusBar.setBackgroundColor('#3b82f6', true);
+        StatusBar.setBarStyle('light-content', true);
+      }, 100);
+    }
+  };
+
+  // NOVA FUNCIONALIDADE: Funções para modal de foto extra
+  const openExtraPhotoModal = (extraEntry: ExtraPhotoEntry) => {
+    setSelectedExtraEntry(extraEntry);
+    setShowExtraPhotoModal(true);
+  };
+
+  const closeExtraPhotoModal = () => {
+    setShowExtraPhotoModal(false);
+    setSelectedExtraEntry(null);
+  };
+
+  const takeExtraPhotoFromModal = async () => {
+    if (!selectedExtraEntry) return;
+    
+    // Fechar modal primeiro
+    closeExtraPhotoModal();
+    
+    // Tirar foto extra
+    await takeExtraPhoto(selectedExtraEntry);
+  };
+
+  const removeExtraPhotoFromModal = () => {
+    if (!selectedExtraEntry) return;
+    
+    Alert.alert(
+      'Confirmar Remoção',
+      'Tem certeza que deseja remover esta foto extra?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Remover', 
+          style: 'destructive',
+          onPress: () => {
+            // Remover apenas a foto, não o container
+            setExtraPhotoEntries(prev => ({
+              ...prev,
+              [selectedExtraEntry.stepId]: prev[selectedExtraEntry.stepId].map(entry => 
+                entry.id === selectedExtraEntry.id ? { ...entry, photoUri: undefined } : entry
+              )
+            }));
+            
+            // Remover do AsyncStorage
+            AsyncStorage.getItem('offline_fotos_extras').then(offlineExtrasData => {
+              if (offlineExtrasData) {
+                const extrasRecords = JSON.parse(offlineExtrasData);
+                if (extrasRecords[selectedExtraEntry.id]) {
+                  delete extrasRecords[selectedExtraEntry.id];
+                  AsyncStorage.setItem('offline_fotos_extras', JSON.stringify(extrasRecords));
+                }
+              }
+            });
+            
+            closeExtraPhotoModal();
+          }
+        }
+      ]
+    );
+  };
+
+  const openModelPhotoModal = (entry: PhotoEntry) => {
+    setSelectedEntryForModel(entry);
+    setShowModelPhotoModal(true);
+  };
+
+  const closeModelPhotoModal = () => {
+    setShowModelPhotoModal(false);
+    setSelectedEntryForModel(null);
+  };
+
+  const openCurrentPhotoModal = (entry: PhotoEntry) => {
+    setSelectedEntryForCurrent(entry);
+    setShowCurrentPhotoModal(true);
+  };
+
+  const closeCurrentPhotoModal = () => {
+    setShowCurrentPhotoModal(false);
+    setSelectedEntryForCurrent(null);
   };
 
   // Função de back personalizada que considera a etapa atual
@@ -848,6 +1082,96 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
     );
   };
 
+  // NOVA FUNCIONALIDADE: Renderizar card de foto extra
+  const renderExtraPhotoCard = (extraEntry: ExtraPhotoEntry) => {
+    const hasPhoto = !!extraEntry.photoUri;
+    
+    // Obter altura mínima do título para esta etapa
+    const currentStep = steps[activeStepIndex];
+    const titleMinHeight = titleHeightsByStep[currentStep?.id] || 40;
+    
+    return (
+      <View key={extraEntry.id} style={styles.photoCard}>
+        <View style={[styles.photoCardTitleContainer, { minHeight: titleMinHeight }]}>
+          <Text style={styles.photoCardTitle}>{extraEntry.titulo}</Text>
+          {/* Botão para remover container */}
+          <TouchableOpacity
+            style={styles.removeContainerButton}
+            onPress={() => removeExtraPhotoEntry(extraEntry.stepId, extraEntry.id)}
+          >
+            <Ionicons name="close-circle" size={20} color="#ef4444" />
+          </TouchableOpacity>
+        </View>
+        
+        <View style={styles.photoContainer}>
+          <TouchableOpacity
+            style={[
+              styles.photoArea,
+              hasPhoto && styles.photoAreaWithCapturedImage,
+            ]}
+            onPress={() => {
+              if (hasPhoto) {
+                console.log(`📷 Abrindo modal da foto extra (${extraEntry.id})`);
+                openExtraPhotoModal(extraEntry);
+              } else {
+                console.log(`📷 Tirando foto extra (${extraEntry.id})`);
+                takeExtraPhoto(extraEntry);
+              }
+            }}
+          >
+            {hasPhoto && extraEntry.photoUri ? (
+              <Image source={{ uri: extraEntry.photoUri }} style={styles.photoImage} />
+            ) : (
+              <Ionicons name="camera" size={40} color="#000000" />
+            )}
+          </TouchableOpacity>
+          
+          {/* Botão de remoção da foto */}
+          {hasPhoto && (
+            <TouchableOpacity
+              style={styles.removePhotoButton}
+              onPress={() => {
+                Alert.alert(
+                  'Confirmar Remoção',
+                  'Tem certeza que deseja remover esta foto extra?',
+                  [
+                    { text: 'Cancelar', style: 'cancel' },
+                    { 
+                      text: 'Remover', 
+                      style: 'destructive',
+                      onPress: () => {
+                        // Remover apenas a foto, manter o container
+                        setExtraPhotoEntries(prev => ({
+                          ...prev,
+                          [extraEntry.stepId]: prev[extraEntry.stepId].map(entry => 
+                            entry.id === extraEntry.id ? { ...entry, photoUri: undefined } : entry
+                          )
+                        }));
+                        
+                        // Remover do AsyncStorage
+                        AsyncStorage.getItem('offline_fotos_extras').then(offlineExtrasData => {
+                          if (offlineExtrasData) {
+                            const extrasRecords = JSON.parse(offlineExtrasData);
+                            if (extrasRecords[extraEntry.id]) {
+                              delete extrasRecords[extraEntry.id];
+                              AsyncStorage.setItem('offline_fotos_extras', JSON.stringify(extrasRecords));
+                            }
+                          }
+                        });
+                      }
+                    }
+                  ]
+                );
+              }}
+            >
+              <Ionicons name="trash" size={16} color="#ef4444" />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    );
+  };
+
   // Forçar restauração do StatusBar após mudanças de foto
   useEffect(() => {
     // Pequeno delay para garantir que qualquer interferência do ImagePicker tenha terminado
@@ -954,8 +1278,34 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
       {/* Photo Grid */}
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.photoGrid}>
-          {currentStepEntries.map(entry => renderPhotoCard(entry))}
+          {currentStepEntries.map((entry: PhotoEntry) => renderPhotoCard(entry))}
         </View>
+        
+        {/* NOVA FUNCIONALIDADE: Fotos Extras Dinâmicas */}
+        {steps.length > 0 && (
+          <View style={styles.extraPhotosSection}>
+            <Text style={styles.extraPhotosSectionTitle}>Fotos Extras</Text>
+            <Text style={styles.extraPhotosSectionSubtitle}>
+              Adicione fotos extras se necessário (opcional)
+            </Text>
+            
+            {/* Renderizar containers de fotos extras existentes */}
+            {extraPhotoEntries[steps[activeStepIndex]?.id] && (
+              <View style={styles.extraPhotoGrid}>
+                {extraPhotoEntries[steps[activeStepIndex].id].map((extraEntry: ExtraPhotoEntry) => renderExtraPhotoCard(extraEntry))}
+              </View>
+            )}
+            
+            {/* Botão para adicionar nova foto extra */}
+            <TouchableOpacity
+              style={styles.addExtraPhotoButton}
+              onPress={() => addExtraPhotoEntry(steps[activeStepIndex].id)}
+            >
+              <Ionicons name="add-circle" size={24} color="#3b82f6" />
+              <Text style={styles.addExtraPhotoButtonText}>Adicionar Foto Extra</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         
         {currentStepEntries.length === 0 && (
           <View style={styles.emptyContainer}>
@@ -1085,6 +1435,60 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
             </TouchableOpacity>
             
             <TouchableOpacity style={styles.modalRemovePhotoButton} onPress={removePhotoFromModal}>
+              <Ionicons name="trash" size={20} color="white" style={styles.modalButtonIcon} />
+              <Text style={styles.modalRemovePhotoButtonText}>Remover Foto</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Modal de Foto Extra em Tela Cheia */}
+      <Modal
+        visible={showExtraPhotoModal}
+        animationType="fade"
+        onRequestClose={closeExtraPhotoModal}
+      >
+        <SafeAreaView style={styles.modalContainer}>
+          <StatusBar backgroundColor="black" barStyle="light-content" />
+          
+          {/* Header do Modal */}
+          <View style={styles.modalHeader}>
+            <TouchableOpacity style={styles.modalCloseButton} onPress={closeExtraPhotoModal}>
+              <Ionicons name="close" size={24} color="white" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Foto Extra */}
+          <View style={styles.modalImageContainer}>
+            {selectedExtraEntry && selectedExtraEntry.photoUri && (
+              <Image
+                source={{ uri: selectedExtraEntry.photoUri }}
+                style={styles.modalImage}
+                resizeMode="contain"
+              />
+            )}
+          </View>
+
+          {/* Texto Explicativo */}
+          <View style={styles.modalTextContainer}>
+            <Text style={styles.modalTitle}>Foto Extra</Text>
+            <Text style={styles.modalDescription}>
+              Esta é uma foto extra a ser capturada. Use-a como referência para capturar sua foto.
+            </Text>
+          </View>
+
+          {/* Botões de Ação */}
+          <View style={styles.modalButtonContainer}>
+            <TouchableOpacity style={styles.modalBackButton} onPress={closeExtraPhotoModal}>
+              <Text style={styles.modalBackButtonText}>Voltar</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.modalTakePhotoButton} onPress={takeExtraPhotoFromModal}>
+              <Ionicons name="camera" size={20} color="white" style={styles.modalButtonIcon} />
+              <Text style={styles.modalTakePhotoButtonText}>Tirar Foto</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.modalRemovePhotoButton} onPress={removeExtraPhotoFromModal}>
               <Ionicons name="trash" size={20} color="white" style={styles.modalButtonIcon} />
               <Text style={styles.modalRemovePhotoButtonText}>Remover Foto</Text>
             </TouchableOpacity>
@@ -1496,6 +1900,72 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: 80,
     paddingBottom: 200,
+  },
+  extraPhotosSection: {
+    marginTop: 20,
+    padding: 20,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    alignItems: 'center',
+  },
+  extraPhotosSectionTitle: {
+    fontSize: RFValue(16),
+    fontWeight: 'bold',
+    color: '#374151',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  extraPhotosSectionSubtitle: {
+    fontSize: RFValue(12),
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 15,
+  },
+  addExtraPhotoButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 15,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    backgroundColor: '#f9f9f9',
+    borderWidth: 2,
+    borderColor: '#3b82f6',
+    borderStyle: 'dashed',
+    width: '80%',
+    maxWidth: 250,
+    minHeight: 50,
+  },
+  addExtraPhotoButtonText: {
+    fontSize: RFValue(14),
+    fontWeight: '600',
+    color: '#3b82f6',
+    marginLeft: 10,
+  },
+  removeContainerButton: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    backgroundColor: 'white',
+    borderRadius: 15,
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 5,
+  },
+  extraPhotoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    paddingVertical: 20,
+    gap: 10,
   },
 });
 

@@ -24,6 +24,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import storageAdapter from './src/services/storageAdapter';
 import hybridStorage from './src/services/hybridStorageService';
 
+// Importar debug function
+import { debugEntradasDados } from './src/services/debugEntradasDados';
+
+// Disponibilizar debug no console global
+(global as any).debugEntradasDados = debugEntradasDados;
+
 type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'orderEvaluation' | 'startService' | 'steps' | 'audit' | 'photoCollection' | 'auditSaving' | 'auditSuccess';
 
 function AppContent() {

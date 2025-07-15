@@ -1,10 +1,7 @@
-import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Configurações do armazenamento híbrido
-const DB_NAME = 'app_offline.db';
-const DB_VERSION = 1;
 const PHOTOS_DIR = `${FileSystem.documentDirectory}photos/`;
 
 // Interface para dados estruturados
@@ -29,19 +26,8 @@ export interface PhotoStorageItem {
   actionType?: 'PHOTO_INICIO' | 'PHOTO_FINAL' | 'DADOS_RECORD';
 }
 
-// Interface para operações da fila
-interface QueueOperation {
-  id: string;
-  operation: () => Promise<any>;
-  resolve: (value: any) => void;
-  reject: (error: any) => void;
-}
-
 class HybridStorageService {
-  private db: SQLite.SQLiteDatabase | null = null;
   private initialized = false;
-  private operationQueue: QueueOperation[] = [];
-  private isProcessingQueue = false;
 
   /**
    * Inicializa o serviço de armazenamento híbrido
@@ -50,103 +36,14 @@ class HybridStorageService {
     if (this.initialized) return;
 
     try {
-      // 1. Inicializar SQLite
-      this.db = await SQLite.openDatabaseAsync(DB_NAME);
-      
-      // 2. Criar tabelas se não existirem
-      await this.createTables();
-      
-      // 3. Criar diretório de fotos se não existir
+      // Criar diretório de fotos
       await this.createPhotosDirectory();
       
       this.initialized = true;
-      console.log('✅ Serviço de armazenamento híbrido inicializado com sucesso');
+      console.log('✅ Serviço de armazenamento híbrido inicializado (AsyncStorage)');
     } catch (error) {
       console.error('❌ Erro ao inicializar armazenamento híbrido:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Adiciona uma operação à fila e a processa
-   */
-  private async queueOperation<T>(operation: () => Promise<T>): Promise<T> {
-    return new Promise((resolve, reject) => {
-      const id = `op_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const queueItem: QueueOperation = {
-        id,
-        operation,
-        resolve,
-        reject
-      };
-
-      this.operationQueue.push(queueItem);
-      this.processQueue();
-    });
-  }
-
-  /**
-   * Processa a fila de operações sequencialmente
-   */
-  private async processQueue(): Promise<void> {
-    if (this.isProcessingQueue || this.operationQueue.length === 0) {
-      return;
-    }
-
-    this.isProcessingQueue = true;
-
-    while (this.operationQueue.length > 0) {
-      const queueItem = this.operationQueue.shift();
-      if (!queueItem) break;
-
-      try {
-        const result = await queueItem.operation();
-        queueItem.resolve(result);
-      } catch (error) {
-        queueItem.reject(error);
-      }
-    }
-
-    this.isProcessingQueue = false;
-  }
-
-  /**
-   * Cria as tabelas necessárias no SQLite
-   */
-  private async createTables(): Promise<void> {
-    if (!this.db) throw new Error('Database not initialized');
-
-    const tables = [
-      // Tabela para dados estruturados (substitui AsyncStorage para dados grandes)
-      `CREATE TABLE IF NOT EXISTS hybrid_storage (
-        key TEXT PRIMARY KEY,
-        data TEXT NOT NULL,
-        type TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        size INTEGER DEFAULT 0
-      )`,
-      
-      // Tabela para metadados de fotos
-      `CREATE TABLE IF NOT EXISTS photo_storage (
-        id TEXT PRIMARY KEY,
-        fileName TEXT NOT NULL,
-        filePath TEXT NOT NULL,
-        originalUri TEXT,
-        size INTEGER NOT NULL,
-        timestamp TEXT NOT NULL,
-        workOrderId INTEGER,
-        actionType TEXT
-      )`,
-      
-      // Índices para performance
-      `CREATE INDEX IF NOT EXISTS idx_storage_type ON hybrid_storage(type)`,
-      `CREATE INDEX IF NOT EXISTS idx_storage_timestamp ON hybrid_storage(timestamp)`,
-      `CREATE INDEX IF NOT EXISTS idx_photo_workorder ON photo_storage(workOrderId)`,
-      `CREATE INDEX IF NOT EXISTS idx_photo_action ON photo_storage(actionType)`
-    ];
-
-    for (const table of tables) {
-      await this.db.execAsync(table);
+      this.initialized = true; // Continuar mesmo com erro
     }
   }
 
@@ -158,68 +55,70 @@ class HybridStorageService {
       const dirInfo = await FileSystem.getInfoAsync(PHOTOS_DIR);
       if (!dirInfo.exists) {
         await FileSystem.makeDirectoryAsync(PHOTOS_DIR, { intermediates: true });
-        console.log('📁 Diretório de fotos criado:', PHOTOS_DIR);
       }
     } catch (error) {
-      console.error('❌ Erro ao criar diretório de fotos:', error);
+      console.warn('⚠️ Erro ao criar diretório de fotos:', error);
+    }
+  }
+
+  /**
+   * Salva dados no AsyncStorage
+   */
+  async setItem(key: string, data: any, type: 'cache' | 'offline_action' | 'work_order' | 'initial_data' = 'cache'): Promise<void> {
+    await this.initialize();
+
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify(data));
+      console.log(`💾 Dados salvos no AsyncStorage: ${key}`);
+    } catch (error) {
+      console.error(`❌ Erro ao salvar item ${key}:`, error);
       throw error;
     }
   }
 
   /**
-   * Salva dados estruturados no SQLite
-   */
-  async setItem(key: string, data: any, type: 'cache' | 'offline_action' | 'work_order' | 'initial_data' = 'cache'): Promise<void> {
-    await this.initialize();
-    if (!this.db) throw new Error('Database not initialized');
-
-    return this.queueOperation(async () => {
-      const serializedData = JSON.stringify(data);
-      const size = new Blob([serializedData]).size;
-      
-      await this.db!.runAsync(
-        'INSERT OR REPLACE INTO hybrid_storage (key, data, type, timestamp, size) VALUES (?, ?, ?, ?, ?)',
-        [key, serializedData, type, new Date().toISOString(), size]
-      );
-      
-      console.log(`💾 Dados salvos no SQLite: ${key} (${size} bytes)`);
-    });
-  }
-
-  /**
-   * Recupera dados estruturados do SQLite
+   * Recupera dados do AsyncStorage
    */
   async getItem<T = any>(key: string): Promise<T | null> {
     await this.initialize();
-    if (!this.db) throw new Error('Database not initialized');
 
-    return this.queueOperation(async () => {
-      const result = await this.db!.getFirstAsync<{ data: string }>(
-        'SELECT data FROM hybrid_storage WHERE key = ?',
-        [key]
-      );
+    try {
+      const data = await AsyncStorage.getItem(key);
+      if (data) {
+        try {
+          return JSON.parse(data) as T;
+        } catch (parseError) {
+          console.error(`❌ Erro ao fazer parse de dados para chave ${key}:`, parseError);
+          // Se falhar no parse, remover dados corrompidos
+          await AsyncStorage.removeItem(key);
+          return null;
+        }
+      }
       
-      if (!result) return null;
-      
-      return JSON.parse(result.data) as T;
-    });
+      return null;
+    } catch (error) {
+      console.error(`❌ Erro ao recuperar item ${key}:`, error);
+      return null;
+    }
   }
 
   /**
-   * Remove dados estruturados do SQLite
+   * Remove dados do AsyncStorage
    */
   async removeItem(key: string): Promise<void> {
     await this.initialize();
-    if (!this.db) throw new Error('Database not initialized');
 
-    return this.queueOperation(async () => {
-      await this.db!.runAsync('DELETE FROM hybrid_storage WHERE key = ?', [key]);
-      console.log(`🗑️ Dados removidos do SQLite: ${key}`);
-    });
+    try {
+      await AsyncStorage.removeItem(key);
+      console.log(`🗑️ Dados removidos do AsyncStorage: ${key}`);
+    } catch (error) {
+      console.error(`❌ Erro ao remover item ${key}:`, error);
+      throw error;
+    }
   }
 
   /**
-   * Salva foto no sistema de arquivos e metadados no SQLite
+   * Salva foto no sistema de arquivos
    */
   async savePhoto(
     photoUri: string,
@@ -228,14 +127,12 @@ class HybridStorageService {
     customId?: string
   ): Promise<{ id: string; filePath: string; success: boolean; error?: string }> {
     await this.initialize();
-    if (!this.db) throw new Error('Database not initialized');
 
-    return this.queueOperation(async () => {
-      // Gerar ID único para a foto
-      const id = customId || `${actionType}_${workOrderId || 'no_wo'}_${Date.now()}`;
-      const fileName = `${id}.jpg`;
-      const filePath = `${PHOTOS_DIR}${fileName}`;
+    const id = customId || `${actionType}_${workOrderId || 'no_wo'}_${Date.now()}`;
+    const fileName = `${id}.jpg`;
+    const filePath = `${PHOTOS_DIR}${fileName}`;
 
+    try {
       // Verificar se o arquivo original existe
       const originalInfo = await FileSystem.getInfoAsync(photoUri);
       if (!originalInfo.exists) {
@@ -252,15 +149,35 @@ class HybridStorageService {
       const fileInfo = await FileSystem.getInfoAsync(filePath);
       const size = fileInfo.exists ? ((fileInfo as any).size || 0) : 0;
 
-      // Salvar metadados no SQLite
-      await this.db!.runAsync(
-        'INSERT OR REPLACE INTO photo_storage (id, fileName, filePath, originalUri, size, timestamp, workOrderId, actionType) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [id, fileName, filePath, photoUri, size, new Date().toISOString(), workOrderId, actionType]
-      );
+      // Salvar metadados no AsyncStorage
+      try {
+        const photoMetadata = {
+          id, fileName, filePath, originalUri: photoUri, size,
+          timestamp: new Date().toISOString(), workOrderId, actionType
+        };
+        await AsyncStorage.setItem(`photo_${id}`, JSON.stringify(photoMetadata));
+      } catch (metadataError) {
+        console.warn('⚠️ Erro ao salvar metadados da foto:', metadataError);
+        // Continuar mesmo com erro nos metadados
+      }
 
       console.log(`📸 Foto salva: ${fileName} (${size} bytes)`);
       return { id, filePath, success: true };
-    });
+    } catch (error) {
+      console.error(`❌ Erro ao salvar foto ${id}:`, error);
+      
+      // Tentar limpar arquivo em caso de erro
+      try {
+        const fileInfo = await FileSystem.getInfoAsync(filePath);
+        if (fileInfo.exists) {
+          await FileSystem.deleteAsync(filePath);
+        }
+      } catch (cleanupError) {
+        console.warn('⚠️ Erro ao limpar arquivo após falha:', cleanupError);
+      }
+      
+      return { id, filePath, success: false, error: error?.toString() || 'Erro desconhecido' };
+    }
   }
 
   /**
@@ -268,60 +185,71 @@ class HybridStorageService {
    */
   async getPhotoAsBase64(photoId: string): Promise<{ base64: string | null; error?: string }> {
     await this.initialize();
-    if (!this.db) throw new Error('Database not initialized');
 
-    return this.queueOperation(async () => {
-      // Buscar metadados da foto
-      const result = await this.db!.getFirstAsync<{ filePath: string }>(
-        'SELECT filePath FROM photo_storage WHERE id = ?',
-        [photoId]
-      );
-
-      if (!result) {
+    try {
+      // Buscar no AsyncStorage
+      const metadata = await AsyncStorage.getItem(`photo_${photoId}`);
+      if (!metadata) {
         return { base64: null, error: 'Foto não encontrada' };
       }
 
+      const parsed = JSON.parse(metadata);
+      const filePath = parsed.filePath;
+
+      if (!filePath) {
+        return { base64: null, error: 'Caminho da foto não encontrado' };
+      }
+
       // Verificar se o arquivo existe
-      const fileInfo = await FileSystem.getInfoAsync(result.filePath);
+      const fileInfo = await FileSystem.getInfoAsync(filePath);
       if (!fileInfo.exists) {
         return { base64: null, error: 'Arquivo de foto não encontrado' };
       }
 
       // Converter para base64
-      const base64 = await FileSystem.readAsStringAsync(result.filePath, {
+      const base64 = await FileSystem.readAsStringAsync(filePath, {
         encoding: FileSystem.EncodingType.Base64,
       });
 
       return { base64: `data:image/jpeg;base64,${base64}` };
-    });
+    } catch (error) {
+      console.error(`❌ Erro ao recuperar foto ${photoId}:`, error);
+      return { base64: null, error: error?.toString() || 'Erro desconhecido' };
+    }
   }
 
   /**
-   * Remove foto do sistema de arquivos e metadados do SQLite
+   * Remove foto do sistema de arquivos
    */
   async removePhoto(photoId: string): Promise<void> {
     await this.initialize();
-    if (!this.db) throw new Error('Database not initialized');
 
-    return this.queueOperation(async () => {
-      // Buscar metadados da foto
-      const result = await this.db!.getFirstAsync<{ filePath: string }>(
-        'SELECT filePath FROM photo_storage WHERE id = ?',
-        [photoId]
-      );
+    try {
+      // Buscar no AsyncStorage
+      const metadata = await AsyncStorage.getItem(`photo_${photoId}`);
+      let filePath: string | null = null;
+      
+      if (metadata) {
+        const parsed = JSON.parse(metadata);
+        filePath = parsed.filePath;
+      }
+      
+      // Remover metadados do AsyncStorage
+      await AsyncStorage.removeItem(`photo_${photoId}`);
 
-      if (result) {
-        // Remover arquivo se existir
-        const fileInfo = await FileSystem.getInfoAsync(result.filePath);
+      // Remover arquivo se existir
+      if (filePath) {
+        const fileInfo = await FileSystem.getInfoAsync(filePath);
         if (fileInfo.exists) {
-          await FileSystem.deleteAsync(result.filePath);
+          await FileSystem.deleteAsync(filePath);
         }
       }
 
-      // Remover metadados do SQLite
-      await this.db!.runAsync('DELETE FROM photo_storage WHERE id = ?', [photoId]);
       console.log(`🗑️ Foto removida: ${photoId}`);
-    });
+    } catch (error) {
+      console.error(`❌ Erro ao remover foto ${photoId}:`, error);
+      throw error;
+    }
   }
 
   /**
@@ -329,16 +257,32 @@ class HybridStorageService {
    */
   async getPhotosByWorkOrder(workOrderId: number): Promise<PhotoStorageItem[]> {
     await this.initialize();
-    if (!this.db) throw new Error('Database not initialized');
 
-    return this.queueOperation(async () => {
-      const results = await this.db!.getAllAsync<PhotoStorageItem>(
-        'SELECT * FROM photo_storage WHERE workOrderId = ? ORDER BY timestamp DESC',
-        [workOrderId]
-      );
-
-      return results || [];
-    });
+    try {
+      // Buscar no AsyncStorage
+      const allKeys = await AsyncStorage.getAllKeys();
+      const photoKeys = allKeys.filter(key => key.startsWith('photo_'));
+      const photos: PhotoStorageItem[] = [];
+      
+      for (const key of photoKeys) {
+        try {
+          const metadata = await AsyncStorage.getItem(key);
+          if (metadata) {
+            const parsed = JSON.parse(metadata);
+            if (parsed.workOrderId === workOrderId) {
+              photos.push(parsed);
+            }
+          }
+        } catch (error) {
+          console.warn(`⚠️ Erro ao processar foto ${key}:`, error);
+        }
+      }
+      
+      return photos.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    } catch (error) {
+      console.error(`❌ Erro ao buscar fotos da OS ${workOrderId}:`, error);
+      return [];
+    }
   }
 
   /**
@@ -346,39 +290,74 @@ class HybridStorageService {
    */
   async cleanup(daysToKeep: number = 30): Promise<void> {
     await this.initialize();
-    if (!this.db) throw new Error('Database not initialized');
 
-    return this.queueOperation(async () => {
+    try {
       const cutoffDate = new Date(Date.now() - (daysToKeep * 24 * 60 * 60 * 1000)).toISOString();
       
-      // Buscar fotos antigas para deletar arquivos
-      const oldPhotos = await this.db!.getAllAsync<{ id: string; filePath: string }>(
-        'SELECT id, filePath FROM photo_storage WHERE timestamp < ?',
-        [cutoffDate]
-      );
-
-      // Deletar arquivos de fotos antigas
-      for (const photo of oldPhotos) {
+      // Limpeza no AsyncStorage
+      const allKeys = await AsyncStorage.getAllKeys();
+      let removedCount = 0;
+      
+      for (const key of allKeys) {
         try {
-          const fileInfo = await FileSystem.getInfoAsync(photo.filePath);
-          if (fileInfo.exists) {
-            await FileSystem.deleteAsync(photo.filePath);
+          const data = await AsyncStorage.getItem(key);
+          if (data) {
+            const parsed = JSON.parse(data);
+            if (parsed.timestamp && parsed.timestamp < cutoffDate) {
+              // Se for uma foto, remover arquivo também
+              if (key.startsWith('photo_') && parsed.filePath) {
+                try {
+                  const fileInfo = await FileSystem.getInfoAsync(parsed.filePath);
+                  if (fileInfo.exists) {
+                    await FileSystem.deleteAsync(parsed.filePath);
+                  }
+                } catch (fileError) {
+                  console.warn(`⚠️ Erro ao deletar arquivo: ${parsed.filePath}`);
+                }
+              }
+              
+              await AsyncStorage.removeItem(key);
+              removedCount++;
+            }
           }
         } catch (error) {
-          console.warn(`⚠️ Erro ao deletar arquivo antigo: ${photo.filePath}`);
+          console.warn(`⚠️ Erro ao processar chave ${key} na limpeza:`, error);
         }
       }
-
-      // Limpar dados antigos do SQLite
-      await this.db!.runAsync('DELETE FROM hybrid_storage WHERE timestamp < ?', [cutoffDate]);
-      await this.db!.runAsync('DELETE FROM photo_storage WHERE timestamp < ?', [cutoffDate]);
       
-      console.log(`🧹 Limpeza concluída: ${oldPhotos.length} fotos antigas removidas`);
-    });
+      console.log(`🧹 Limpeza concluída: ${removedCount} itens antigos removidos`);
+    } catch (error) {
+      console.error('❌ Erro durante limpeza:', error);
+    }
   }
 
   /**
-   * Obtém estatísticas simplificadas de armazenamento
+   * Limpa dados corrompidos do cache
+   */
+  async clearCorruptedData(): Promise<void> {
+    await this.initialize();
+
+    try {
+      console.log('🧹 Limpando dados corrompidos do cache...');
+      
+      // Limpar AsyncStorage
+      const keys = ['cache_timestamp', 'work_orders_cache_timestamp', 'cache_cleanup_timestamp'];
+      for (const key of keys) {
+        try {
+          await AsyncStorage.removeItem(key);
+        } catch (error) {
+          console.warn(`⚠️ Erro ao remover ${key}:`, error);
+        }
+      }
+      
+      console.log('✅ Dados corrompidos removidos do AsyncStorage');
+    } catch (error) {
+      console.error('❌ Erro ao limpar dados corrompidos:', error);
+    }
+  }
+
+  /**
+   * Obtém estatísticas de armazenamento
    */
   async getStorageStats(): Promise<{
     totalItems: number;
@@ -387,86 +366,38 @@ class HybridStorageService {
     storageByType: { [type: string]: number };
   }> {
     await this.initialize();
-    if (!this.db) throw new Error('Database not initialized');
 
-    return this.queueOperation(async () => {
-      try {
-        // Contar itens por tipo de forma simplificada
-        const itemsCount = await this.db!.getFirstAsync<{ count: number }>(
-          'SELECT COUNT(*) as count FROM hybrid_storage'
-        );
-
-        const photosCount = await this.db!.getFirstAsync<{ count: number }>(
-          'SELECT COUNT(*) as count FROM photo_storage'
-        );
-
-        // Obter tamanho total de forma simplificada (sem agrupar por tipo para evitar CursorWindow)
-        const totalSizeResult = await this.db!.getFirstAsync<{ totalSize: number }>(
-          'SELECT SUM(size) as totalSize FROM hybrid_storage'
-        );
-
-        const photosSizeResult = await this.db!.getFirstAsync<{ totalSize: number }>(
-          'SELECT SUM(size) as totalSize FROM photo_storage'
-        );
-
-        // Tipos básicos sem detalhamento excessivo
-        const storageByType = {
-          'items': totalSizeResult?.totalSize || 0,
-          'photos': photosSizeResult?.totalSize || 0
-        };
-
-        return {
-          totalItems: itemsCount?.count || 0,
-          totalPhotos: photosCount?.count || 0,
-          totalSize: (totalSizeResult?.totalSize || 0) + (photosSizeResult?.totalSize || 0),
-          storageByType
-        };
-      } catch (error) {
-        console.error('❌ Erro ao obter estatísticas simplificadas:', error);
-        // Retornar estatísticas básicas em caso de erro
-        return {
-          totalItems: 0,
-          totalPhotos: 0,
-          totalSize: 0,
-          storageByType: {}
-        };
-      }
-    });
+    try {
+      // Estatísticas básicas do AsyncStorage
+      const allKeys = await AsyncStorage.getAllKeys();
+      const photoKeys = allKeys.filter(key => key.startsWith('photo_'));
+      
+      return {
+        totalItems: allKeys.length - photoKeys.length,
+        totalPhotos: photoKeys.length,
+        totalSize: 0, // Não é possível calcular facilmente no AsyncStorage
+        storageByType: {
+          'items': allKeys.length - photoKeys.length,
+          'photos': photoKeys.length
+        }
+      };
+    } catch (error) {
+      console.error('❌ Erro ao obter estatísticas:', error);
+      return {
+        totalItems: 0,
+        totalPhotos: 0,
+        totalSize: 0,
+        storageByType: {}
+      };
+    }
   }
 
   /**
-   * Migra dados do AsyncStorage para o armazenamento híbrido
+   * Migra dados do AsyncStorage para o armazenamento híbrido (não necessário)
    */
   async migrateFromAsyncStorage(keys: string[], type: 'cache' | 'offline_action' | 'work_order' | 'initial_data'): Promise<number> {
-    await this.initialize();
-    let migratedCount = 0;
-
-    return this.queueOperation(async () => {
-      for (const key of keys) {
-        try {
-          const data = await AsyncStorage.getItem(key);
-          if (data) {
-            // Aqui não podemos usar setItem pois ele também usa queueOperation
-            // Precisamos fazer a operação diretamente no SQLite
-            const serializedData = JSON.stringify(JSON.parse(data));
-            const size = new Blob([serializedData]).size;
-            
-            await this.db!.runAsync(
-              'INSERT OR REPLACE INTO hybrid_storage (key, data, type, timestamp, size) VALUES (?, ?, ?, ?, ?)',
-              [key, serializedData, type, new Date().toISOString(), size]
-            );
-            
-            migratedCount++;
-            console.log(`📦 Migrado: ${key}`);
-          }
-        } catch (error) {
-          console.warn(`⚠️ Erro ao migrar ${key}:`, error);
-        }
-      }
-      
-      console.log(`✅ Migração concluída: ${migratedCount} itens migrados`);
-      return migratedCount;
-    });
+    console.log('📦 Migração não necessária - usando AsyncStorage diretamente');
+    return 0;
   }
 }
 

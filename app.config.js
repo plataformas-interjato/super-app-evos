@@ -8,7 +8,7 @@ export default {
     userInterfaceStyle: "light",
     newArchEnabled: true,
     splash: {
-      image: "./assets/logo-app.png",
+      image: "",
       resizeMode: "contain",
       backgroundColor: "#ffffff"
     },
@@ -16,7 +16,7 @@ export default {
       supportsTablet: true,
       bundleIdentifier: "com.appfuturo.app",
       splash: {
-        image: "./src/img-ref/background_login.svg",
+        image: "",
         resizeMode: "cover",
         backgroundColor: "#ffffff"
       }
@@ -29,7 +29,7 @@ export default {
       edgeToEdgeEnabled: true,
       package: "com.appfuturo.app",
       splash: {
-        image: "./src/img-ref/background_login.svg",
+        image: "",
         resizeMode: "cover",
         backgroundColor: "#ffffff"
       }

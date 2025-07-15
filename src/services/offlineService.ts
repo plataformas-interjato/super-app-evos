@@ -606,12 +606,12 @@ const syncLocalWorkOrderStatuses = async (): Promise<{ synced: number; failed: n
 export const syncAllPendingActions = async (): Promise<{ 
   total: number; 
   synced: number; 
-  failed: number; 
+  errors: string[] 
 }> => {
   // Verificar se já está sincronizando
   if (isSyncing) {
     console.log('⏳ Sincronização já em andamento, pulando...');
-    return { total: 0, synced: 0, failed: 0 };
+    return { total: 0, synced: 0, errors: [] };
   }
 
   console.log('🔄 Iniciando sincronização de ações pendentes...');
@@ -619,140 +619,62 @@ export const syncAllPendingActions = async (): Promise<{
   const isOnline = await checkNetworkConnection();
   if (!isOnline) {
     console.log('📱 Sem conexão, pulando sincronização');
-    return { total: 0, synced: 0, failed: 0 };
+    return { total: 0, synced: 0, errors: [] };
   }
 
   // Definir lock
   isSyncing = true;
-  const syncStartTime = Date.now();
 
   try {
-    // PRIMEIRO: Sincronizar status locais das OS
-    console.log('🎯 Iniciando sincronização de status locais...');
-    const statusSyncResult = await syncLocalWorkOrderStatuses();
-    console.log(`📊 Status locais: ${statusSyncResult.synced} sincronizados, ${statusSyncResult.failed} falharam`);
-
-    // SEGUNDO: Sincronizar ações offline (fotos, auditorias, etc.)
+    // Sincronizar ações offline principais
     const actions = await getOfflineActions();
     const pendingActions = actions.filter(action => 
       !action.synced && action.attempts < MAX_SYNC_ATTEMPTS
     );
 
-    // Agrupar ações pendentes por workOrderId
-    const actionsByWorkOrder = pendingActions.reduce((acc, action) => {
-      const key = action.workOrderId.toString();
-      if (!acc[key]) {
-        acc[key] = [];
-      }
-      acc[key].push(action);
-      return acc;
-    }, {} as { [workOrderId: string]: OfflineAction[] });
+    let synced = 0;
+    const errors: string[] = [];
 
-    const totalOSs = Object.keys(actionsByWorkOrder).length;
-    const totalStatusSynced = statusSyncResult.synced;
-    const totalToSync = totalOSs + totalStatusSynced;
-    
-    console.log(`📊 ${pendingActions.length} ações de ${totalOSs} OSs + ${totalStatusSynced} status pendentes para sincronizar`);
-    remainingActionsCount = totalToSync;
-    
-    if (totalToSync === 0) {
-      console.log('✅ Nenhuma pendência para sincronizar');
-      remainingActionsCount = 0;
-      return { total: 0, synced: 0, failed: 0 };
-    }
-
-    let synced = statusSyncResult.synced; // Começar com os status já sincronizados
-    let failed = statusSyncResult.failed;
-    let processedOSs = 0;
-
-    // Processar ações agrupadas por OS
-    for (const [workOrderId, osActions] of Object.entries(actionsByWorkOrder)) {
+    // Sincronizar ações pendentes
+    for (const action of pendingActions) {
       try {
-        console.log(`🔄 Sincronizando OS ${workOrderId} (${osActions.length} ações)`);
-        
-        let osSuccess = true;
-        
-        // Sincronizar todas as ações desta OS
-        for (const action of osActions) {
-          try {
-            const actionStartTime = Date.now();
-            const success = await syncAction(action);
-            const actionDuration = Date.now() - actionStartTime;
-            
-            if (success) {
-              await markActionAsSynced(action.id);
-              console.log(`✅ Ação ${action.type} da OS ${workOrderId} sincronizada em ${actionDuration}ms`);
-            } else {
-              await incrementSyncAttempts(action.id);
-              osSuccess = false;
-              console.log(`❌ Ação ${action.type} da OS ${workOrderId} falhou após ${actionDuration}ms`);
-            }
-          } catch (actionError) {
-            console.error('💥 Erro ao processar ação:', action.id, actionError);
-            await incrementSyncAttempts(action.id);
-            osSuccess = false;
-          }
-        }
-        
-        // Contar resultado da OS
-        if (osSuccess) {
+        const success = await syncAction(action);
+        if (success) {
+          await markActionAsSynced(action.id);
           synced++;
-          console.log(`✅ OS ${workOrderId} sincronizada completamente`);
-          
-          // Limpar TODOS os dados locais da OS sincronizada (não apenas status)
-          await clearAllLocalDataForWorkOrder(parseInt(workOrderId));
-          
-          // Notificar callbacks de OS finalizada para atualizar a UI
-          notifyOSFinalizadaCallbacks(parseInt(workOrderId));
         } else {
-          failed++;
-          console.log(`❌ OS ${workOrderId} teve falhas na sincronização`);
+          await incrementSyncAttempts(action.id);
+          errors.push(`Falha ao sincronizar ação ${action.id}`);
         }
-        
-        processedOSs++;
-        // Atualizar contador de OSs restantes (incluindo status já sincronizados)
-        remainingActionsCount = totalToSync - statusSyncResult.synced - processedOSs;
-        
-      } catch (osError) {
-        console.error('💥 Erro ao processar OS:', workOrderId, osError);
-        failed++;
-        processedOSs++;
-        remainingActionsCount = totalToSync - statusSyncResult.synced - processedOSs;
-      }
-      
-      // Verificar se ainda está online a cada OS
-      const stillOnline = await checkNetworkConnection();
-      if (!stillOnline) {
-        console.log('📱 Conexão perdida durante sincronização, parando...');
-        break;
+      } catch (actionError) {
+        await incrementSyncAttempts(action.id);
+        errors.push(`Erro ao sincronizar ação ${action.id}: ${actionError.message}`);
       }
     }
 
-    // Limpar ações sincronizadas
-    if (synced > statusSyncResult.synced) {
-      await cleanSyncedActions();
+    // NOVA FUNCIONALIDADE: Sincronizar fotos extras
+    try {
+      const { synced: extrasSynced, errors: extrasErrors } = await syncFotosExtrasOffline();
+      synced += extrasSynced;
+      errors.push(...extrasErrors);
+    } catch (extrasError) {
+      errors.push(`Erro ao sincronizar fotos extras: ${extrasError.message}`);
     }
 
-    const totalDuration = Date.now() - syncStartTime;
-    const result = { total: totalToSync, synced, failed };
+    console.log(`✅ Sincronização concluída: ${synced}/${pendingActions.length} ações sincronizadas`);
     
-    console.log(`✅ Sincronização concluída: ${synced}/${totalToSync} itens sincronizados (${statusSyncResult.synced} status + ${synced - statusSyncResult.synced} OSs)`);
-    
-    // Notificar callbacks se houve alguma sincronização
-    if (synced > 0) {
-      notifySyncCallbacks(result);
-    }
-    
-    return result;
+    return { 
+      total: pendingActions.length, 
+      synced, 
+      errors 
+    };
 
   } catch (error) {
-    console.error('💥 Erro na sincronização:', error);
-    return { total: 0, synced: 0, failed: 1 };
+    console.error('❌ Erro na sincronização:', error);
+    return { total: 0, synced: 0, errors: [error.message] };
   } finally {
-    // Liberar lock e zerar contador
+    // Liberar lock
     isSyncing = false;
-    remainingActionsCount = 0;
-    console.log('🔓 Lock de sincronização liberado');
   }
 };
 
@@ -1254,5 +1176,65 @@ export const saveChecklistEtapaOffline = async (
 
   } catch (error) {
     return { success: false, error: 'Erro inesperado ao salvar checklist' };
+  }
+}; 
+
+/**
+ * Sincroniza fotos extras offline
+ * NOTA: Fotos extras não são sincronizadas com o servidor
+ * pois não há entrada correspondente na tabela entrada_dados
+ */
+export const syncFotosExtrasOffline = async (): Promise<{
+  success: boolean;
+  synced: number;
+  errors: string[];
+}> => {
+  const errors: string[] = [];
+  let syncedCount = 0;
+
+  try {
+    console.log('📸 Verificando fotos extras offline...');
+
+    const offlineExtrasData = await AsyncStorage.getItem('offline_fotos_extras');
+    if (!offlineExtrasData) {
+      return { success: true, synced: 0, errors: [] };
+    }
+
+    const extrasRecords = JSON.parse(offlineExtrasData);
+    const recordsToSync = Object.entries(extrasRecords).filter(([_, record]: [string, any]) => !record.synced);
+
+    if (recordsToSync.length === 0) {
+      return { success: true, synced: 0, errors: [] };
+    }
+
+    console.log(`📸 ${recordsToSync.length} fotos extras encontradas (mantidas offline)`);
+
+    // FOTOS EXTRAS PERMANECEM OFFLINE
+    // Não há como sincronizar fotos extras com o servidor pois não têm entrada_dados_id válida
+    // Marcar todas como "sincronizadas" para não tentar novamente
+    for (const [recordKey, record] of recordsToSync) {
+      try {
+        const recordData = record as any;
+        
+        // Marcar como sincronizada (mas mantém offline)
+        extrasRecords[recordKey].synced = true;
+        extrasRecords[recordKey].synced_at = new Date().toISOString();
+        extrasRecords[recordKey].sync_note = 'Mantida offline - não sincronizada com servidor';
+        syncedCount++;
+
+        console.log(`📸 Foto extra marcada como processada: ${recordKey}`);
+      } catch (syncError) {
+        errors.push(`Erro ao processar foto extra ${recordKey}: ${syncError}`);
+      }
+    }
+
+    // Salvar estado atualizado
+    await AsyncStorage.setItem('offline_fotos_extras', JSON.stringify(extrasRecords));
+
+    console.log(`✅ ${syncedCount} fotos extras processadas (mantidas offline)`);
+    return { success: true, synced: syncedCount, errors };
+  } catch (error) {
+    console.error('❌ Erro ao processar fotos extras offline:', error);
+    return { success: false, synced: syncedCount, errors: [...errors, error.toString()] };
   }
 }; 
