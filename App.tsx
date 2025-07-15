@@ -171,24 +171,22 @@ function AppContent() {
 
   const handleStartService = async () => {
     if (selectedWorkOrder) {
-      // Se a OS já está em progresso, ir direto para as etapas
-      if (selectedWorkOrder.status === 'em_progresso') {
-        setCurrentScreen('steps');
-        return;
-      }
-
+      // REMOVIDO: Condição de status "em_progresso" (conforme solicitado)
+      // Mantida apenas: verificação de foto inicial existente
+      
       try {
         // Verificar se já existe foto inicial (online ou offline)
         const { hasInitialPhoto } = await import('./src/services/auditService');
         const { hasPhoto, error } = await hasInitialPhoto(selectedWorkOrder.id);
         
         if (error) {
+          console.warn('⚠️ Erro ao verificar foto inicial, indo para tela de início:', error);
           setCurrentScreen('startService');
           return;
         }
 
         if (hasPhoto) {
-          console.log('✅ Foto inicial existe - pulando para etapas');
+          console.log('✅ Foto inicial já existe - pulando tela de foto e indo para etapas');
           // Atualizar status local para em_progresso se ainda não estiver
           if ((selectedWorkOrder.status as string) !== 'em_progresso') {
             await updateLocalWorkOrderStatus(selectedWorkOrder.id, 'em_progresso', false);
@@ -199,9 +197,11 @@ function AppContent() {
           }
           setCurrentScreen('steps');
         } else {
+          console.log('📱 Foto inicial não existe - indo para tela de início');
           setCurrentScreen('startService');
         }
       } catch (error) {
+        console.error('💥 Erro ao verificar foto inicial:', error);
         // Em caso de erro, ir para tela de início normalmente
         setCurrentScreen('startService');
       }

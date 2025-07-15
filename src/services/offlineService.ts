@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
+import * as FileSystem from 'expo-file-system';
 import { AuditoriaTecnico, savePhotoInicio, saveAuditoriaFinal } from './auditService';
 import { markLocalStatusAsSynced, clearAllLocalDataForWorkOrder } from './localStatusService';
 import { saveDadosRecord, saveComentarioEtapa } from './serviceStepsService';
@@ -648,7 +649,7 @@ export const syncAllPendingActions = async (): Promise<{
         }
       } catch (actionError) {
         await incrementSyncAttempts(action.id);
-        errors.push(`Erro ao sincronizar ação ${action.id}: ${actionError.message}`);
+        errors.push(`Erro ao sincronizar ação ${action.id}: ${actionError instanceof Error ? actionError.message : String(actionError)}`);
       }
     }
 
@@ -658,7 +659,7 @@ export const syncAllPendingActions = async (): Promise<{
       synced += extrasSynced;
       errors.push(...extrasErrors);
     } catch (extrasError) {
-      errors.push(`Erro ao sincronizar fotos extras: ${extrasError.message}`);
+      errors.push(`Erro ao sincronizar fotos extras: ${extrasError instanceof Error ? extrasError.message : String(extrasError)}`);
     }
 
     console.log(`✅ Sincronização concluída: ${synced}/${pendingActions.length} ações sincronizadas`);
@@ -671,7 +672,7 @@ export const syncAllPendingActions = async (): Promise<{
 
   } catch (error) {
     console.error('❌ Erro na sincronização:', error);
-    return { total: 0, synced: 0, errors: [error.message] };
+    return { total: 0, synced: 0, errors: [error instanceof Error ? error.message : String(error)] };
   } finally {
     // Liberar lock
     isSyncing = false;
@@ -1117,15 +1118,20 @@ export const saveComentarioEtapaOffline = async (
  */
 const createTempFileFromBase64 = async (base64: string): Promise<string | null> => {
   try {
-    const FileSystem = await import('expo-file-system');
-    
     // Extrair dados base64
     const base64Data = base64.replace(/^data:image\/[a-z]+;base64,/, '');
-    const tempUri = `${FileSystem.FileSystem.cacheDirectory}temp_upload_${Date.now()}.jpg`;
+    
+    // Verificar se o FileSystem tem as propriedades necessárias
+    if (!FileSystem.cacheDirectory) {
+      console.error('❌ FileSystem.cacheDirectory não disponível');
+      return null;
+    }
+    
+    const tempUri = `${FileSystem.cacheDirectory}temp_upload_${Date.now()}.jpg`;
     
     // Salvar como arquivo temporário
-    await FileSystem.FileSystem.writeAsStringAsync(tempUri, base64Data, {
-      encoding: FileSystem.FileSystem.EncodingType.Base64,
+    await FileSystem.writeAsStringAsync(tempUri, base64Data, {
+      encoding: FileSystem.EncodingType.Base64,
     });
     
     return tempUri;
@@ -1235,6 +1241,78 @@ export const syncFotosExtrasOffline = async (): Promise<{
     return { success: true, synced: syncedCount, errors };
   } catch (error) {
     console.error('❌ Erro ao processar fotos extras offline:', error);
-    return { success: false, synced: syncedCount, errors: [...errors, error.toString()] };
+    return { success: false, synced: syncedCount, errors: [...errors, error instanceof Error ? error.message : String(error)] };
+  }
+}; 
+
+/**
+ * Limpa dados órfãos de fotos iniciais que podem estar causando detecção incorreta
+ * USAR COM CUIDADO: Apenas para debug/correção de dados corrompidos
+ */
+export const debugClearOrphanedInitialPhotos = async (workOrderId: number): Promise<void> => {
+  try {
+    console.log(`🔍 DEBUG: Limpando dados órfãos de foto inicial da OS ${workOrderId}...`);
+
+    // 1. Limpar ações offline órfãs de foto inicial
+    const actions = await getOfflineActions();
+    const initialPhotoActions = actions.filter(action => 
+      action.type === 'PHOTO_INICIO' && 
+      action.workOrderId === workOrderId
+    );
+
+    console.log(`📱 DEBUG: Encontradas ${initialPhotoActions.length} ações de foto inicial para OS ${workOrderId}:`);
+    initialPhotoActions.forEach(action => {
+      console.log(`   - ID: ${action.id}, Synced: ${action.synced}, Tentativas: ${action.attempts}`);
+    });
+
+    if (initialPhotoActions.length > 0) {
+      // Remover ações órfãs
+      const cleanActions = actions.filter(action => 
+        !(action.type === 'PHOTO_INICIO' && action.workOrderId === workOrderId)
+      );
+      
+      await AsyncStorage.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(cleanActions));
+      console.log(`🗑️ DEBUG: Removidas ${initialPhotoActions.length} ações órfãs de foto inicial`);
+    }
+
+    // 2. Limpar fotos órfãs no hybridStorage
+    const photos = await hybridStorage.getPhotosByWorkOrder(workOrderId);
+    const initialPhotos = photos.filter(photo => photo.actionType === 'PHOTO_INICIO');
+    
+    console.log(`📸 DEBUG: Encontradas ${initialPhotos.length} fotos iniciais órfãs:`);
+    for (const photo of initialPhotos) {
+      console.log(`   - ID: ${photo.id}, Arquivo: ${photo.fileName}`);
+      // CORREÇÃO: Usar método disponível no hybridStorage
+      try {
+        await AsyncStorage.removeItem(`photo_${photo.id}`);
+        console.log(`🗑️ DEBUG: Metadados da foto órfã removidos: ${photo.id}`);
+      } catch (removeError) {
+        console.warn(`⚠️ DEBUG: Erro ao remover foto órfã ${photo.id}:`, removeError);
+      }
+    }
+
+    // 3. Limpar metadados órfãos
+    const allKeys = await AsyncStorage.getAllKeys();
+    const photoKeys = allKeys.filter(key => key.startsWith('photo_'));
+    
+    for (const key of photoKeys) {
+      try {
+        const metadataStr = await AsyncStorage.getItem(key);
+        if (metadataStr) {
+          const metadata = JSON.parse(metadataStr);
+          if (metadata.workOrderId === workOrderId && metadata.actionType === 'PHOTO_INICIO') {
+            await AsyncStorage.removeItem(key);
+            console.log(`🗑️ DEBUG: Metadados órfãos removidos: ${key}`);
+          }
+        }
+      } catch (parseError) {
+        console.warn(`⚠️ DEBUG: Erro ao processar ${key}:`, parseError);
+      }
+    }
+
+    console.log(`✅ DEBUG: Limpeza de dados órfãos concluída para OS ${workOrderId}`);
+
+  } catch (error) {
+    console.error(`❌ DEBUG: Erro ao limpar dados órfãos:`, error);
   }
 }; 
