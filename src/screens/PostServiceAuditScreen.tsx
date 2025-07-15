@@ -86,22 +86,17 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
         );
         
         if (hasAuditoriaFinal) {
-          console.log('✅ Auditoria final já existe - pulando para coleta de fotos');
+          console.log('✅ Auditoria final já existe - usuário pode continuar ou voltar');
           
-          // Se onSkipToPhotoCollection estiver disponível, usar ela
-          if (onSkipToPhotoCollection) {
-            onSkipToPhotoCollection();
-            return;
-          } else {
-            // Caso contrário, usar onFinishAudit sem skipPhotoCollection
-            onFinishAudit({ workCompleted: true, reason: '', additionalComments: '' });
-            return;
-          }
+          // CORREÇÃO: Não redirecionar automaticamente
+          // O usuário deve ter controle sobre a navegação
+          // Apenas continuar na tela normalmente
+          setIsCheckingPhoto(false);
+          return;
         }
       }
       
       console.log('📱 Foto final não existe - continuando na tela de auditoria');
-      // Sempre continuar na tela normalmente (sem bloquear por verificações online)
       setIsCheckingPhoto(false);
     } catch (error) {
       console.error('💥 Erro ao verificar foto final offline:', error);

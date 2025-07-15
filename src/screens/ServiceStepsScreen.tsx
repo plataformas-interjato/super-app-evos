@@ -107,100 +107,39 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
       const tipoOsId = workOrder.tipo_os_id || 1;
       console.log('📋 Usando tipo_os_id:', tipoOsId);
       
-      // Verificar conectividade
-      const NetInfo = require('@react-native-community/netinfo');
-      const netInfo = await NetInfo.fetch();
-      console.log(`📶 Status de conectividade: ${netInfo.isConnected ? 'ONLINE' : 'OFFLINE'}`);
+      // Usar a função corrigida getServiceStepsWithDataCached
+      const { data: stepsFromService, error: serviceError, fromCache } = await getServiceStepsWithDataCached(
+        tipoOsId, 
+        workOrder.id
+      );
       
-      // MODO OFFLINE - APENAS CACHE LOCAL
-      if (!netInfo.isConnected) {
-        console.log('📱 MODO OFFLINE: Buscando apenas do cache local...');
-        
-        try {
-          // Buscar APENAS do AsyncStorage direto
-          const stepsCache = await AsyncStorage.getItem('cached_service_steps');
-          const entriesCache = await AsyncStorage.getItem('cached_service_entries');
-          
-          if (stepsCache) {
-            const cache = JSON.parse(stepsCache);
-            const steps = cache[tipoOsId];
-            
-            if (steps && steps.length > 0) {
-              console.log(`📝 OFFLINE: ${steps.length} etapas encontradas no cache`);
-              
-              // Buscar entradas se existirem
-              let stepsWithData = steps;
-              if (entriesCache) {
-                const entriesData = JSON.parse(entriesCache);
-                stepsWithData = steps.map(step => ({
-                  ...step,
-                  entradas: entriesData[step.id] || []
-                }));
-              }
-              
-              console.log('✅ OFFLINE: Dados carregados diretamente do AsyncStorage');
-              setSteps(stepsWithData);
-              return;
-            }
-          }
-          
-          console.log('❌ OFFLINE: Nenhum dado no cache - use o app online primeiro');
-          setSteps([]);
-          return;
-          
-        } catch (cacheError) {
-          console.error('💥 Erro ao buscar cache offline:', cacheError);
-          console.log('❌ OFFLINE: Falha no cache - dados não disponíveis');
-          setSteps([]);
-          return;
-        }
+      if (serviceError) {
+        console.error('❌ Erro ao carregar etapas:', serviceError);
+        setError(serviceError);
+        setSteps([]);
+        return;
       }
       
-      // MODO ONLINE - Tentar servidor, fallback para cache
-      console.log('🌐 MODO ONLINE: Tentando servidor primeiro...');
-      try {
-        // Primeiro tentar cache mesmo online
-        const { getCachedServiceSteps, getCachedServiceEntries } = await import('../services/cacheService');
-        const stepsResult = await getCachedServiceSteps(tipoOsId);
-        
-        if (stepsResult.data && stepsResult.data.length > 0) {
-          const etapaIds = stepsResult.data.map(step => step.id);
-          const entriesResult = await getCachedServiceEntries(etapaIds);
-          
-          const stepsWithData = stepsResult.data.map(step => ({
-            ...step,
-            entradas: entriesResult.data?.[step.id] || []
-          }));
-          
-          console.log('✅ ONLINE: Dados carregados do cache');
-          setSteps(stepsWithData);
-          return;
-        }
-        
-        // Se não tem cache, tentar servidor
-        console.log('🌐 ONLINE: Cache vazio, tentando servidor...');
-        const { data: stepsFromServer, error, fromCache } = await getServiceStepsWithDataCached(
-          tipoOsId, 
-          workOrder.id
-        );
-        
-        if (stepsFromServer && stepsFromServer.length > 0) {
-          console.log('✅ ONLINE: Etapas carregadas do servidor');
-          setSteps(stepsFromServer);
-          return;
-        }
-        
-      } catch (serverError) {
-        console.error('💥 Erro online:', serverError);
+      if (stepsFromService && stepsFromService.length > 0) {
+        const totalEntries = stepsFromService.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
+        console.log(`✅ ${stepsFromService.length} etapas com ${totalEntries} entradas carregadas ${fromCache ? 'do cache' : 'do servidor'}`);
+        setSteps(stepsFromService);
+        return;
       }
       
-      // Se chegou até aqui, não encontrou nada
-      console.warn('⚠️ Nenhuma etapa encontrada após todas as tentativas');
-      setSteps([]);
+      // Se não encontrou nada, usar etapas offline como fallback
+      console.warn('⚠️ Nenhuma etapa encontrada, usando etapas offline como fallback');
+      const offlineSteps = createOfflineStepsForType(tipoOsId, workOrder);
+      setSteps(offlineSteps);
       
     } catch (error) {
       console.error('💥 Erro inesperado ao carregar etapas:', error);
-      setSteps([]);
+      setError('Erro ao carregar etapas do serviço');
+      
+      // Fallback para etapas offline
+      const tipoOsId = workOrder.tipo_os_id || 1;
+      const offlineSteps = createOfflineStepsForType(tipoOsId, workOrder);
+      setSteps(offlineSteps);
     } finally {
       setIsLoadingSteps(false);
       console.log('🔍 === FIM DO CARREGAMENTO DE ETAPAS ===');
@@ -656,7 +595,7 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
           disabled={isLoading}
         >
           <Text style={styles.finishButtonText}>
-            Encerrar ordem de serviço
+            Iniciar ordem de serviço
           </Text>
         </TouchableOpacity>
 

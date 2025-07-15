@@ -106,13 +106,31 @@ export const getServiceStepsByTypeId = async (
  * Busca dados salvos de etapas para etapas específicas e organiza por etapa
  */
 export const getServiceStepDataBySteps = async (
-  etapaIds: number[]
+  etapaIds: number[],
+  workOrderId?: number
 ): Promise<{ data: { [etapaId: number]: ServiceStepData[] } | null; error: string | null }> => {
   try {
     if (!etapaIds || etapaIds.length === 0) {
       return { data: {}, error: null };
     }
 
+    // Se temos workOrderId, priorizar dados locais
+    if (workOrderId) {
+      try {
+        const localDataService = (await import('./localDataService')).default;
+        const localData = await localDataService.getServiceStepDataCombined(workOrderId, etapaIds);
+        
+        // Se temos dados locais, usar eles
+        if (Object.keys(localData).length > 0) {
+          console.log(`📱 Usando dados locais para ${Object.keys(localData).length} etapas`);
+          return { data: localData, error: null };
+        }
+      } catch (localError) {
+        console.warn('⚠️ Erro ao buscar dados locais, tentando servidor:', localError);
+      }
+    }
+
+    // Fallback para servidor
     const { data, error } = await supabase
       .from('entrada_dados')
       .select('*')
@@ -155,10 +173,10 @@ export const getServiceStepsWithData = async (
       return { data: null, error: stepsError };
     }
 
-    // 2. Buscar dados das etapas usando os IDs das etapas
+    // 2. Buscar dados das etapas usando os IDs das etapas (passando workOrderId)
     const etapaIds = steps.map(step => step.id);
     
-    const { data: stepData, error: dataError } = await getServiceStepDataBySteps(etapaIds);
+    const { data: stepData, error: dataError } = await getServiceStepDataBySteps(etapaIds, ordemServicoId);
     if (dataError) {
       console.warn('⚠️ Erro ao buscar dados das etapas, continuando sem dados:', dataError);
     }
@@ -186,6 +204,37 @@ export const saveServiceStepData = async (
   fotoBase64?: string
 ): Promise<{ data: ServiceStepData | null; error: string | null }> => {
   try {
+    // Verificar conectividade
+    const NetInfo = require('@react-native-community/netinfo');
+    const netInfo = await NetInfo.fetch();
+    
+    // Se offline, salvar localmente
+    if (!netInfo.isConnected) {
+      console.log('📱 Offline: salvando dados de etapa localmente');
+      
+      try {
+        const localDataService = (await import('./localDataService')).default;
+        const result = await localDataService.saveServiceStepDataLocal(
+          ordemServicoId,
+          etapaId,
+          valor,
+          fotoBase64
+        );
+        
+        if (result.success) {
+          return { data: result.data, error: null };
+        } else {
+          return { data: null, error: result.error || 'Erro ao salvar dados localmente' };
+        }
+      } catch (localError) {
+        console.error('❌ Erro ao salvar dados localmente:', localError);
+        return { data: null, error: 'Erro ao salvar dados localmente' };
+      }
+    }
+
+    // Online: tentar salvar no servidor
+    console.log('🌐 Online: salvando dados de etapa no servidor');
+    
     // Buscar a próxima ordem_entrada para esta etapa
     const { data: existingEntries, error: countError } = await supabase
       .from('entrada_dados')
@@ -196,6 +245,25 @@ export const saveServiceStepData = async (
 
     if (countError) {
       console.error('❌ Erro ao buscar ordem_entrada:', countError);
+      
+      // Fallback para dados locais
+      console.log('📱 Falha no servidor: salvando dados localmente como fallback');
+      try {
+        const localDataService = (await import('./localDataService')).default;
+        const result = await localDataService.saveServiceStepDataLocal(
+          ordemServicoId,
+          etapaId,
+          valor,
+          fotoBase64
+        );
+        
+        if (result.success) {
+          return { data: result.data, error: null };
+        }
+      } catch (localError) {
+        console.error('❌ Erro no fallback local:', localError);
+      }
+      
       return { data: null, error: countError.message };
     }
 
@@ -217,13 +285,51 @@ export const saveServiceStepData = async (
       .single();
 
     if (error) {
-      console.error('❌ Erro ao salvar dados da etapa:', error);
+      console.error('❌ Erro ao salvar dados da etapa no servidor:', error);
+      
+      // Fallback para dados locais
+      console.log('📱 Falha no servidor: salvando dados localmente como fallback');
+      try {
+        const localDataService = (await import('./localDataService')).default;
+        const result = await localDataService.saveServiceStepDataLocal(
+          ordemServicoId,
+          etapaId,
+          valor,
+          fotoBase64
+        );
+        
+        if (result.success) {
+          return { data: result.data, error: null };
+        }
+      } catch (localError) {
+        console.error('❌ Erro no fallback local:', localError);
+      }
+      
       return { data: null, error: error.message };
     }
 
+    console.log('✅ Dados de etapa salvos no servidor com sucesso');
     return { data, error: null };
   } catch (error) {
     console.error('💥 Erro inesperado ao salvar dados da etapa:', error);
+    
+    // Último fallback para dados locais
+    try {
+      const localDataService = (await import('./localDataService')).default;
+      const result = await localDataService.saveServiceStepDataLocal(
+        ordemServicoId,
+        etapaId,
+        valor,
+        fotoBase64
+      );
+      
+      if (result.success) {
+        return { data: result.data, error: null };
+      }
+    } catch (localError) {
+      console.error('❌ Erro no fallback final:', localError);
+    }
+    
     return { data: null, error: 'Erro inesperado ao salvar dados da etapa' };
   }
 };
@@ -682,70 +788,123 @@ export const getServiceStepsWithDataCached = async (
     const netInfo = await NetInfo.fetch();
     console.log(`📶 Conectividade: ${netInfo.isConnected ? 'Online' : 'Offline'}`);
     
-    // PRIORIDADE 1: Tentar cache SEMPRE primeiro (online ou offline)
-    console.log('📱 Tentando buscar do cache...');
-    const cacheResult = await getCachedServiceStepsWithData(tipoOsId);
+    // PRIORIDADE 1: Buscar dados usando a abordagem combinada
+    console.log('📱 Buscando dados com abordagem combinada...');
     
-    if (cacheResult.fromCache && cacheResult.data && cacheResult.data.length > 0) {
-      console.log(`✅ ${cacheResult.data.length} etapas carregadas do cache`);
-      return cacheResult;
-    } else {
-      console.log(`❌ Cache: ${cacheResult.error || 'sem dados'}`);
+    try {
+      // Buscar etapas do cache primeiro
+      const { getCachedServiceSteps } = await import('./cacheService');
+      const stepsResult = await getCachedServiceSteps(tipoOsId);
+      
+      if (stepsResult.data && stepsResult.data.length > 0) {
+        console.log(`📝 ${stepsResult.data.length} etapas encontradas no cache`);
+        const etapaIds = stepsResult.data.map(step => step.id);
+        
+        // Buscar entradas com abordagem combinada
+        const { data: entriesData, error: entriesError } = await getServiceStepDataBySteps(etapaIds, ordemServicoId);
+        
+        if (entriesError) {
+          console.warn('⚠️ Erro ao buscar entradas, continuando apenas com etapas:', entriesError);
+        }
+        
+        // Combinar etapas com entradas
+        const stepsWithData = stepsResult.data.map(step => ({
+          ...step,
+          entradas: entriesData?.[step.id] || []
+        }));
+        
+        const totalEntries = stepsWithData.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
+        console.log(`✅ ${stepsWithData.length} etapas com ${totalEntries} entradas carregadas`);
+        
+        return { data: stepsWithData, error: null, fromCache: true };
+      }
+    } catch (cacheError) {
+      console.warn('⚠️ Erro ao buscar dados do cache, tentando outras abordagens:', cacheError);
     }
     
-    // Se está OFFLINE, parar aqui - NÃO tentar servidor
+    // Se está OFFLINE, tentar dados locais + cache de entradas iniciais
     if (!netInfo.isConnected) {
-      console.log('📱 OFFLINE: Tentando forçar uso do cache mesmo expirado...');
+      console.log('📱 OFFLINE: Tentando abordagem alternativa...');
       
-      // Tentar buscar cache mesmo expirado como último recurso
       try {
-        const { getCachedServiceSteps, getCachedServiceEntries } = await import('./cacheService');
+        // Buscar etapas do cache inicial
+        const { getCachedTableData } = await import('./initialDataService');
+        const cachedEtapas = await getCachedTableData('ETAPAS_OS') as any[];
         
-        // Buscar etapas diretamente (ignorando expiração)
-        const stepsResult = await getCachedServiceSteps(tipoOsId);
-        console.log(`📝 Etapas diretas do cache: ${stepsResult.data?.length || 0}`);
-        
-        if (stepsResult.data && stepsResult.data.length > 0) {
-          // Buscar entradas
-          const etapaIds = stepsResult.data.map(step => step.id);
-          const entriesResult = await getCachedServiceEntries(etapaIds);
+        if (cachedEtapas && cachedEtapas.length > 0) {
+          // Filtrar etapas do tipo específico
+          const etapasFiltradas = cachedEtapas.filter(etapa => 
+            etapa.tipo_os_id === tipoOsId && etapa.ativo === 1
+          );
           
-          // Combinar etapas com entradas (mesmo que entradas falhem)
-          const stepsWithData = stepsResult.data.map(step => ({
-            ...step,
-            entradas: entriesResult.data?.[step.id] || []
-          }));
-          
-          console.log(`✅ OFFLINE: ${stepsWithData.length} etapas recuperadas do cache forçado`);
-          return { data: stepsWithData, error: null, fromCache: true };
+          if (etapasFiltradas.length > 0) {
+            console.log(`📝 ${etapasFiltradas.length} etapas encontradas no cache inicial`);
+            
+            // Mapear para formato ServiceStep
+            const steps: ServiceStep[] = etapasFiltradas.map(etapa => ({
+              id: etapa.id,
+              titulo: etapa.titulo,
+              ordem_etapa: etapa.ordem_etapa || 0,
+              etapa_os_id: etapa.id,
+              entradas: []
+            }));
+            
+            // Buscar entradas do cache inicial
+            const cachedEntradas = await getCachedTableData('ENTRADAS_DADOS') as any[];
+            const etapaIds = steps.map(step => step.id);
+            
+            // Buscar dados locais primeiro
+            let entriesData: any = {};
+            try {
+              const localDataService = (await import('./localDataService')).default;
+              entriesData = await localDataService.getServiceStepDataCombined(ordemServicoId, etapaIds);
+            } catch (localError) {
+              console.warn('⚠️ Erro ao buscar dados locais:', localError);
+            }
+            
+            // Combinar com dados do cache inicial se não houver dados locais
+            etapaIds.forEach(etapaId => {
+              if (!entriesData[etapaId] || entriesData[etapaId].length === 0) {
+                const cacheData = cachedEntradas.filter(entrada => entrada.etapa_os_id === etapaId);
+                
+                if (cacheData.length > 0) {
+                  entriesData[etapaId] = cacheData.map(entrada => ({
+                    id: entrada.id,
+                    etapa_os_id: entrada.etapa_os_id,
+                    ordem_entrada: entrada.ordem_entrada || 1,
+                    titulo: entrada.titulo,
+                    valor: entrada.valor,
+                    foto_base64: entrada.foto_base64,
+                    foto_modelo: entrada.foto_modelo,
+                    completed: entrada.completed || false,
+                    created_at: entrada.created_at,
+                    local: false
+                  }));
+                }
+              }
+            });
+            
+            // Combinar etapas com entradas
+            const stepsWithData = steps.map(step => ({
+              ...step,
+              entradas: entriesData[step.id] || []
+            }));
+            
+            const totalEntries = stepsWithData.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
+            console.log(`✅ OFFLINE: ${stepsWithData.length} etapas com ${totalEntries} entradas recuperadas`);
+            
+            return { data: stepsWithData, error: null, fromCache: true };
+          }
         }
-      } catch (forceError) {
-        console.error('💥 Erro ao forçar cache offline:', forceError);
+      } catch (fallbackError) {
+        console.error('💥 Erro na abordagem alternativa offline:', fallbackError);
       }
       
-      console.log('❌ OFFLINE: Nenhum dado encontrado no cache');
-      return { data: null, error: 'Sem dados offline disponíveis - verifique se fez pré-carregamento', fromCache: false };
+      console.log('❌ OFFLINE: Nenhum dado encontrado');
+      return { data: null, error: 'Sem dados offline disponíveis - faça login online primeiro', fromCache: false };
     }
 
     // APENAS SE ESTIVER ONLINE - buscar do servidor
-    console.log('🌐 ONLINE: Verificando se OS está em andamento...');
-    
-    // Verificar se a OS está em andamento (dados locais têm prioridade)
-    try {
-      const { getLocalWorkOrderStatus } = await import('./localStatusService');
-      const localStatus = await getLocalWorkOrderStatus(ordemServicoId);
-      const isWorkOrderInProgress = localStatus?.status === 'em_progresso';
-      console.log(`🚧 OS em andamento: ${isWorkOrderInProgress ? 'Sim' : 'Não'}`);
-      
-      if (isWorkOrderInProgress) {
-        console.log('⚠️ OS em andamento: priorizando dados locais, não buscando servidor');
-        return { data: null, error: 'OS em andamento - dados locais prioritários', fromCache: false };
-      }
-    } catch (statusError) {
-      console.warn('⚠️ Erro ao verificar status local:', statusError);
-    }
-
-    // PRIORIDADE 3: Online - buscar do servidor (COM PROTEÇÃO CONTRA ERRO)
     console.log('🌐 ONLINE: Buscando etapas do servidor...');
     try {
       const serverResult = await getServiceStepsWithData(tipoOsId, ordemServicoId);
@@ -758,20 +917,71 @@ export const getServiceStepsWithDataCached = async (
           console.warn('⚠️ Erro ao fazer cache dos dados do servidor:', cacheError);
         }
         
-        return { data: serverResult.data, error: null, fromCache: false };
+        const totalEntries = serverResult.data.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
+        console.log(`✅ ONLINE: ${serverResult.data.length} etapas com ${totalEntries} entradas do servidor`);
+        
+        return { ...serverResult, fromCache: false };
       } else {
         console.error('❌ Erro do servidor:', serverResult.error);
-        return serverResult;
+        return { ...serverResult, fromCache: false };
       }
     } catch (serverError) {
       console.error('💥 Erro de conexão com servidor:', serverError);
-      // Se há erro de conexão, tentar usar dados do cache mesmo expirados
-      console.log('🔄 Tentando usar cache como fallback após erro de servidor...');
+      // Se há erro de conexão, tentar usar dados do cache inicial como fallback
+      console.log('🔄 Tentando usar cache inicial como fallback após erro de servidor...');
       
-      const fallbackCache = await getCachedServiceStepsWithData(tipoOsId);
-      if (fallbackCache.data && fallbackCache.data.length > 0) {
-        console.log('✅ FALLBACK: Usando dados do cache após erro de servidor');
-        return { ...fallbackCache, fromCache: true };
+      try {
+        const { getCachedTableData } = await import('./initialDataService');
+        const cachedEtapas = await getCachedTableData('ETAPAS_OS') as any[];
+        
+        if (cachedEtapas && cachedEtapas.length > 0) {
+          const etapasFiltradas = cachedEtapas.filter(etapa => 
+            etapa.tipo_os_id === tipoOsId && etapa.ativo === 1
+          );
+          
+          if (etapasFiltradas.length > 0) {
+            const steps: ServiceStep[] = etapasFiltradas.map(etapa => ({
+              id: etapa.id,
+              titulo: etapa.titulo,
+              ordem_etapa: etapa.ordem_etapa || 0,
+              etapa_os_id: etapa.id,
+              entradas: []
+            }));
+            
+            const cachedEntradas = await getCachedTableData('ENTRADAS_DADOS') as any[];
+            const etapaIds = steps.map(step => step.id);
+            
+            const entriesData: any = {};
+            etapaIds.forEach(etapaId => {
+              const cacheData = cachedEntradas.filter(entrada => entrada.etapa_os_id === etapaId);
+              
+              if (cacheData.length > 0) {
+                entriesData[etapaId] = cacheData.map(entrada => ({
+                  id: entrada.id,
+                  etapa_os_id: entrada.etapa_os_id,
+                  ordem_entrada: entrada.ordem_entrada || 1,
+                  titulo: entrada.titulo,
+                  valor: entrada.valor,
+                  foto_base64: entrada.foto_base64,
+                  foto_modelo: entrada.foto_modelo,
+                  completed: entrada.completed || false,
+                  created_at: entrada.created_at,
+                  local: false
+                }));
+              }
+            });
+            
+            const stepsWithData = steps.map(step => ({
+              ...step,
+              entradas: entriesData[step.id] || []
+            }));
+            
+            console.log('✅ FALLBACK: Usando cache inicial após erro de servidor');
+            return { data: stepsWithData, error: null, fromCache: true };
+          }
+        }
+      } catch (fallbackError) {
+        console.error('💥 Erro no fallback:', fallbackError);
       }
       
       return { data: null, error: `Erro de conexão: ${serverError}`, fromCache: false };
@@ -1113,3 +1323,11 @@ export const getFotosSalvasUsuario = async (
     return { data: null, error: 'Erro inesperado ao buscar fotos salvas do usuário' };
   }
 }; 
+
+/**
+ * Salva foto extra de uma etapa - REMOVIDA
+ * Fotos extras são salvas apenas offline no AsyncStorage
+ * pois não têm entrada correspondente na tabela entrada_dados
+ */
+// Função removida para evitar erro de foreign key constraint
+// Fotos extras são gerenciadas apenas offline via AsyncStorage 

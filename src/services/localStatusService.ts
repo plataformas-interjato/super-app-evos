@@ -129,7 +129,7 @@ export const markLocalStatusAsSynced = async (workOrderId: number): Promise<void
 
 /**
  * Limpa TODOS os dados locais de uma OS específica quando finalizada online
- * Remove: status local, etapas completadas, fotos, cache específico, etc.
+ * Remove: status local, etapas completadas, fotos, cache específico, dados locais, etc.
  */
 export const clearAllLocalDataForWorkOrder = async (workOrderId: number): Promise<void> => {
   try {
@@ -153,6 +153,8 @@ export const clearAllLocalDataForWorkOrder = async (workOrderId: number): Promis
         key.startsWith(`os_cache_${workOrderId}`) ||
         // Dados temporários da OS
         key.startsWith(`temp_data_${workOrderId}`) ||
+        // Dados locais de etapas da OS
+        key.startsWith(`local_step_data_`) && key.includes(`_${workOrderId}_`) ||
         // Qualquer outro dado que contenha o ID da OS
         key.includes(`_${workOrderId}_`) || key.endsWith(`_${workOrderId}`)
       );
@@ -167,15 +169,16 @@ export const clearAllLocalDataForWorkOrder = async (workOrderId: number): Promis
       console.log(`ℹ️ Nenhum dado local encontrado para OS ${workOrderId}`);
     }
     
-    // Também limpar do cache de work orders se necessário
+    // Limpar dados locais usando o novo serviço
     try {
-      const { updateWorkOrderInCache } = require('./workOrderCacheService');
-      // Não precisamos atualizar o cache aqui pois a OS já foi finalizada no servidor
-      console.log(`✅ Limpeza completa da OS ${workOrderId} concluída`);
-    } catch (cacheError) {
-      console.log(`⚠️ Cache de work orders não disponível durante limpeza da OS ${workOrderId}`);
+      const localDataService = (await import('./localDataService')).default;
+      await localDataService.clearLocalDataForWorkOrder(workOrderId);
+      console.log(`✅ Dados locais de etapas limpos para OS ${workOrderId}`);
+    } catch (localError) {
+      console.warn('⚠️ Erro ao limpar dados locais de etapas:', localError);
     }
     
+    console.log(`🧹 Limpeza completa finalizada para OS ${workOrderId}`);
   } catch (error) {
     console.error(`❌ Erro ao limpar dados locais da OS ${workOrderId}:`, error);
   }
