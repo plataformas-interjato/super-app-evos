@@ -33,7 +33,7 @@ export interface DadosRecord {
   ativo: number; // 1 para ativo, 0 para inativo
   valor: string; // foto em base64
   ordem_servico_id: number;
-  entrada_dados_id: number;
+  entrada_dados_id: number | null; // null para fotos extras
   created_at?: string;
   dt_edicao?: string;
 }
@@ -774,7 +774,7 @@ export const getAllStepsForDebug = async (): Promise<void> => {
 };
 
 /**
- * Busca etapas com cache - prioriza dados locais se OS estiver em andamento
+ * Busca etapas com cache - USANDO ASYNCSTORAGE DIRETO
  */
 export const getServiceStepsWithDataCached = async (
   tipoOsId: number,
@@ -788,52 +788,72 @@ export const getServiceStepsWithDataCached = async (
     const netInfo = await NetInfo.fetch();
     console.log(`📶 Conectividade: ${netInfo.isConnected ? 'Online' : 'Offline'}`);
     
-    // PRIORIDADE 1: Buscar dados usando a abordagem combinada
-    console.log('📱 Buscando dados com abordagem combinada...');
+    // PRIORIDADE 1: Buscar dados direto do AsyncStorage (SEM cache híbrido)
+    console.log('📱 Buscando dados direto do AsyncStorage...');
     
     try {
-      // Buscar etapas do cache primeiro
-      const { getCachedServiceSteps } = await import('./cacheService');
-      const stepsResult = await getCachedServiceSteps(tipoOsId);
+      // Buscar etapas direto do AsyncStorage
+      const stepsKey = `service_steps_${tipoOsId}`;
+      const stepsData = await AsyncStorage.getItem(stepsKey);
       
-      if (stepsResult.data && stepsResult.data.length > 0) {
-        console.log(`📝 ${stepsResult.data.length} etapas encontradas no cache`);
-        const etapaIds = stepsResult.data.map(step => step.id);
+      if (stepsData) {
+        const steps: ServiceStep[] = JSON.parse(stepsData);
+        console.log(`📝 ${steps.length} etapas encontradas no AsyncStorage`);
         
-        // Buscar entradas com abordagem combinada
-        const { data: entriesData, error: entriesError } = await getServiceStepDataBySteps(etapaIds, ordemServicoId);
+        // Buscar entradas direto do AsyncStorage
+        const entriesKey = `service_entries_${tipoOsId}`;
+        const entriesData = await AsyncStorage.getItem(entriesKey);
         
-        if (entriesError) {
-          console.warn('⚠️ Erro ao buscar entradas, continuando apenas com etapas:', entriesError);
+        let entriesByStep: any = {};
+        if (entriesData) {
+          entriesByStep = JSON.parse(entriesData);
+        }
+        
+        // Buscar também dados locais se disponível
+        try {
+          const localDataService = (await import('./localDataService')).default;
+          const etapaIds = steps.map(step => step.id);
+          const localData = await localDataService.getServiceStepDataCombined(ordemServicoId, etapaIds);
+          
+          // Combinar dados locais com dados do AsyncStorage
+          Object.keys(localData).forEach(etapaId => {
+            const etapaIdNum = parseInt(etapaId);
+            if (!entriesByStep[etapaIdNum] || entriesByStep[etapaIdNum].length === 0) {
+              entriesByStep[etapaIdNum] = localData[etapaIdNum];
+            }
+          });
+        } catch (localError) {
+          console.warn('⚠️ Erro ao buscar dados locais:', localError);
         }
         
         // Combinar etapas com entradas
-        const stepsWithData = stepsResult.data.map(step => ({
+        const stepsWithData = steps.map(step => ({
           ...step,
-          entradas: entriesData?.[step.id] || []
+          entradas: entriesByStep[step.id] || []
         }));
         
         const totalEntries = stepsWithData.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
-        console.log(`✅ ${stepsWithData.length} etapas com ${totalEntries} entradas carregadas`);
+        console.log(`✅ ${stepsWithData.length} etapas com ${totalEntries} entradas carregadas do AsyncStorage`);
         
         return { data: stepsWithData, error: null, fromCache: true };
       }
-    } catch (cacheError) {
-      console.warn('⚠️ Erro ao buscar dados do cache, tentando outras abordagens:', cacheError);
+    } catch (asyncStorageError) {
+      console.warn('⚠️ Erro ao buscar dados do AsyncStorage direto:', asyncStorageError);
     }
     
-    // Se está OFFLINE, tentar dados locais + cache de entradas iniciais
+    // Se está OFFLINE e não tem dados no AsyncStorage, tentar dados de inicialização
     if (!netInfo.isConnected) {
-      console.log('📱 OFFLINE: Tentando abordagem alternativa...');
+      console.log('📱 OFFLINE: Tentando dados de inicialização...');
       
       try {
-        // Buscar etapas do cache inicial
-        const { getCachedTableData } = await import('./initialDataService');
-        const cachedEtapas = await getCachedTableData('ETAPAS_OS') as any[];
+        // Buscar etapas do cache inicial (SEM usar sistema híbrido)
+        const initialEtapasData = await AsyncStorage.getItem('initial_cache_etapas_os');
         
-        if (cachedEtapas && cachedEtapas.length > 0) {
+        if (initialEtapasData) {
+          const cachedEtapas = JSON.parse(initialEtapasData);
+          
           // Filtrar etapas do tipo específico
-          const etapasFiltradas = cachedEtapas.filter(etapa => 
+          const etapasFiltradas = cachedEtapas.filter((etapa: any) => 
             etapa.tipo_os_id === tipoOsId && etapa.ativo === 1
           );
           
@@ -841,7 +861,7 @@ export const getServiceStepsWithDataCached = async (
             console.log(`📝 ${etapasFiltradas.length} etapas encontradas no cache inicial`);
             
             // Mapear para formato ServiceStep
-            const steps: ServiceStep[] = etapasFiltradas.map(etapa => ({
+            const steps: ServiceStep[] = etapasFiltradas.map((etapa: any) => ({
               id: etapa.id,
               titulo: etapa.titulo,
               ordem_etapa: etapa.ordem_etapa || 0,
@@ -850,7 +870,7 @@ export const getServiceStepsWithDataCached = async (
             }));
             
             // Buscar entradas do cache inicial
-            const cachedEntradas = await getCachedTableData('ENTRADAS_DADOS') as any[];
+            const initialEntradasData = await AsyncStorage.getItem('initial_cache_entradas_dados');
             const etapaIds = steps.map(step => step.id);
             
             // Buscar dados locais primeiro
@@ -863,26 +883,29 @@ export const getServiceStepsWithDataCached = async (
             }
             
             // Combinar com dados do cache inicial se não houver dados locais
-            etapaIds.forEach(etapaId => {
-              if (!entriesData[etapaId] || entriesData[etapaId].length === 0) {
-                const cacheData = cachedEntradas.filter(entrada => entrada.etapa_os_id === etapaId);
-                
-                if (cacheData.length > 0) {
-                  entriesData[etapaId] = cacheData.map(entrada => ({
-                    id: entrada.id,
-                    etapa_os_id: entrada.etapa_os_id,
-                    ordem_entrada: entrada.ordem_entrada || 1,
-                    titulo: entrada.titulo,
-                    valor: entrada.valor,
-                    foto_base64: entrada.foto_base64,
-                    foto_modelo: entrada.foto_modelo,
-                    completed: entrada.completed || false,
-                    created_at: entrada.created_at,
-                    local: false
-                  }));
+            if (initialEntradasData) {
+              const cachedEntradas = JSON.parse(initialEntradasData);
+              etapaIds.forEach(etapaId => {
+                if (!entriesData[etapaId] || entriesData[etapaId].length === 0) {
+                  const cacheData = cachedEntradas.filter((entrada: any) => entrada.etapa_os_id === etapaId);
+                  
+                  if (cacheData.length > 0) {
+                    entriesData[etapaId] = cacheData.map((entrada: any) => ({
+                      id: entrada.id,
+                      etapa_os_id: entrada.etapa_os_id,
+                      ordem_entrada: entrada.ordem_entrada || 1,
+                      titulo: entrada.titulo,
+                      valor: entrada.valor,
+                      foto_base64: entrada.foto_base64,
+                      foto_modelo: entrada.foto_modelo,
+                      completed: entrada.completed || false,
+                      created_at: entrada.created_at,
+                      local: false
+                    }));
+                  }
                 }
-              }
-            });
+              });
+            }
             
             // Combinar etapas com entradas
             const stepsWithData = steps.map(step => ({
@@ -910,7 +933,7 @@ export const getServiceStepsWithDataCached = async (
       const serverResult = await getServiceStepsWithData(tipoOsId, ordemServicoId);
       
       if (serverResult.data && !serverResult.error) {
-        // Fazer cache dos dados do servidor
+        // Fazer cache dos dados do servidor (DIRETO NO ASYNCSTORAGE)
         try {
           await cacheServerData(tipoOsId, serverResult.data);
         } catch (cacheError) {
@@ -931,16 +954,16 @@ export const getServiceStepsWithDataCached = async (
       console.log('🔄 Tentando usar cache inicial como fallback após erro de servidor...');
       
       try {
-        const { getCachedTableData } = await import('./initialDataService');
-        const cachedEtapas = await getCachedTableData('ETAPAS_OS') as any[];
+        const initialEtapasData = await AsyncStorage.getItem('initial_cache_etapas_os');
         
-        if (cachedEtapas && cachedEtapas.length > 0) {
-          const etapasFiltradas = cachedEtapas.filter(etapa => 
+        if (initialEtapasData) {
+          const cachedEtapas = JSON.parse(initialEtapasData);
+          const etapasFiltradas = cachedEtapas.filter((etapa: any) => 
             etapa.tipo_os_id === tipoOsId && etapa.ativo === 1
           );
           
           if (etapasFiltradas.length > 0) {
-            const steps: ServiceStep[] = etapasFiltradas.map(etapa => ({
+            const steps: ServiceStep[] = etapasFiltradas.map((etapa: any) => ({
               id: etapa.id,
               titulo: etapa.titulo,
               ordem_etapa: etapa.ordem_etapa || 0,
@@ -948,28 +971,31 @@ export const getServiceStepsWithDataCached = async (
               entradas: []
             }));
             
-            const cachedEntradas = await getCachedTableData('ENTRADAS_DADOS') as any[];
+            const initialEntradasData = await AsyncStorage.getItem('initial_cache_entradas_dados');
             const etapaIds = steps.map(step => step.id);
             
             const entriesData: any = {};
-            etapaIds.forEach(etapaId => {
-              const cacheData = cachedEntradas.filter(entrada => entrada.etapa_os_id === etapaId);
-              
-              if (cacheData.length > 0) {
-                entriesData[etapaId] = cacheData.map(entrada => ({
-                  id: entrada.id,
-                  etapa_os_id: entrada.etapa_os_id,
-                  ordem_entrada: entrada.ordem_entrada || 1,
-                  titulo: entrada.titulo,
-                  valor: entrada.valor,
-                  foto_base64: entrada.foto_base64,
-                  foto_modelo: entrada.foto_modelo,
-                  completed: entrada.completed || false,
-                  created_at: entrada.created_at,
-                  local: false
-                }));
-              }
-            });
+            if (initialEntradasData) {
+              const cachedEntradas = JSON.parse(initialEntradasData);
+              etapaIds.forEach(etapaId => {
+                const cacheData = cachedEntradas.filter((entrada: any) => entrada.etapa_os_id === etapaId);
+                
+                if (cacheData.length > 0) {
+                  entriesData[etapaId] = cacheData.map((entrada: any) => ({
+                    id: entrada.id,
+                    etapa_os_id: entrada.etapa_os_id,
+                    ordem_entrada: entrada.ordem_entrada || 1,
+                    titulo: entrada.titulo,
+                    valor: entrada.valor,
+                    foto_base64: entrada.foto_base64,
+                    foto_modelo: entrada.foto_modelo,
+                    completed: entrada.completed || false,
+                    created_at: entrada.created_at,
+                    local: false
+                  }));
+                }
+              });
+            }
             
             const stepsWithData = steps.map(step => ({
               ...step,
@@ -993,10 +1019,12 @@ export const getServiceStepsWithDataCached = async (
 };
 
 /**
- * Faz cache dos dados do servidor
+ * Faz cache dos dados do servidor USANDO ASYNCSTORAGE DIRETO
  */
 const cacheServerData = async (tipoOsId: number, stepsWithData: ServiceStep[]): Promise<void> => {
   try {
+    console.log('💾 Salvando dados no AsyncStorage direto (sem cache híbrido)...');
+    
     // 1. Separar etapas das entradas
     const stepsOnly = stepsWithData.map(step => ({
       ...step,
@@ -1004,28 +1032,39 @@ const cacheServerData = async (tipoOsId: number, stepsWithData: ServiceStep[]): 
     }));
 
     // 2. Organizar entradas por etapa
-    const entriesByStep: CachedServiceEntries = {};
+    const entriesByStep: any = {};
     stepsWithData.forEach(step => {
       if (step.entradas && step.entradas.length > 0) {
         entriesByStep[step.id] = step.entradas;
       }
     });
 
-    // 3. Fazer cache das etapas
-    const stepsResult = await cacheServiceSteps(tipoOsId, stepsOnly);
-    if (!stepsResult.success) {
-      console.warn('⚠️ Erro ao fazer cache das etapas:', stepsResult.error);
+    // 3. Salvar etapas direto no AsyncStorage (SEM usar storageAdapter/cache)
+    try {
+      const stepsKey = `service_steps_${tipoOsId}`;
+      await AsyncStorage.setItem(stepsKey, JSON.stringify(stepsOnly));
+      console.log(`✅ ${stepsOnly.length} etapas salvas direto no AsyncStorage`);
+    } catch (stepsError) {
+      console.warn('⚠️ Erro ao salvar etapas no AsyncStorage:', stepsError);
     }
 
-    // 4. Fazer cache das entradas
+    // 4. Salvar entradas direto no AsyncStorage (SEM usar storageAdapter/cache)
     if (Object.keys(entriesByStep).length > 0) {
-      const entriesResult = await cacheServiceEntries(entriesByStep);
-      if (!entriesResult.success) {
-        console.warn('⚠️ Erro ao fazer cache das entradas:', entriesResult.error);
+      try {
+        const entriesKey = `service_entries_${tipoOsId}`;
+        await AsyncStorage.setItem(entriesKey, JSON.stringify(entriesByStep));
+        
+        const totalEntries = Object.values(entriesByStep).reduce((sum: number, entries: any) => sum + entries.length, 0);
+        console.log(`✅ ${totalEntries} entradas salvas direto no AsyncStorage`);
+      } catch (entriesError) {
+        console.warn('⚠️ Erro ao salvar entradas no AsyncStorage:', entriesError);
       }
     }
+    
+    console.log('✅ Cache direto no AsyncStorage concluído (sem sistema híbrido)');
   } catch (error) {
-    console.error('💥 Erro ao fazer cache dos dados do servidor:', error);
+    console.error('💥 Erro ao fazer cache direto no AsyncStorage:', error);
+    // Não fazer fallback para evitar o erro de database full
   }
 };
 
@@ -1125,37 +1164,57 @@ const convertPhotoToBase64 = async (photoUri: string): Promise<{ base64: string 
 
 /**
  * Salva dados de foto na tabela 'dados'
+ * Suporta fotos normais (entrada_dados_id > 0) e fotos extras (entrada_dados_id = -1)
  */
 export const saveDadosRecord = async (
   ordemServicoId: number,
-  entradaDadosId: number,
-  photoUri: string
+  entradaDadosId: number | null,
+  photoValue: string
 ): Promise<{ data: DadosRecord | null; error: string | null }> => {
   try {
+    const isExtraPhoto = entradaDadosId === null;
+    
     console.log('💾 Salvando dados na tabela dados...', {
       ordemServicoId,
-      entradaDadosId,
-      photoUri: photoUri.substring(0, 50) + '...'
+      entradaDadosId: isExtraPhoto ? 'FOTO_EXTRA (null)' : entradaDadosId,
+      photoValue: photoValue.substring(0, 50) + '...'
     });
 
-    // Converter foto para base64
-    const { base64, error: conversionError } = await convertPhotoToBase64(photoUri);
-    if (conversionError || !base64) {
-      console.error('❌ Erro na conversão para base64:', conversionError);
-      return { data: null, error: `Erro na conversão da foto: ${conversionError}` };
+    let base64ToSave: string;
+
+    // Verificar se já é base64 ou se precisa converter
+    if (photoValue.startsWith('data:image/')) {
+      // Já é base64 com prefixo, extrair apenas o base64
+      base64ToSave = photoValue.replace(/^data:image\/[a-z]+;base64,/, '');
+      console.log('📸 Usando base64 fornecido diretamente');
+    } else if (photoValue.startsWith('file://')) {
+      // É um URI, precisa converter
+      console.log('📸 Convertendo URI para base64...');
+      const { base64, error: conversionError } = await convertPhotoToBase64(photoValue);
+      if (conversionError || !base64) {
+        console.error('❌ Erro na conversão para base64:', conversionError);
+        return { data: null, error: `Erro na conversão da foto: ${conversionError}` };
+      }
+      base64ToSave = base64;
+    } else {
+      // Assumir que é base64 puro (sem prefixo)
+      base64ToSave = photoValue;
+      console.log('📸 Usando valor como base64 puro');
     }
 
     // Salvar na tabela dados
+    const insertData = {
+      ativo: 1,
+      valor: base64ToSave,
+      ordem_servico_id: ordemServicoId,
+      entrada_dados_id: entradaDadosId, // null para fotos extras, number para fotos normais
+      created_at: new Date().toISOString(),
+      dt_edicao: new Date().toISOString(),
+    };
+
     const { data, error } = await supabase
       .from('dados')
-      .insert({
-        ativo: 1,
-        valor: base64,
-        ordem_servico_id: ordemServicoId,
-        entrada_dados_id: entradaDadosId,
-        created_at: new Date().toISOString(),
-        dt_edicao: new Date().toISOString(),
-      })
+      .insert(insertData)
       .select('*')
       .single();
 
@@ -1164,7 +1223,12 @@ export const saveDadosRecord = async (
       return { data: null, error: error.message };
     }
 
-    console.log('✅ Dados salvos com sucesso na tabela dados:', data?.id);
+    if (isExtraPhoto) {
+      console.log('✅ Foto extra salva com sucesso na tabela dados:', data?.id);
+    } else {
+      console.log('✅ Dados salvos com sucesso na tabela dados:', data?.id);
+    }
+    
     return { data, error: null };
 
   } catch (error) {

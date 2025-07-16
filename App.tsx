@@ -16,19 +16,24 @@ import AuditSavingScreen from './src/screens/AuditSavingScreen';
 import AuditSuccessScreen from './src/screens/AuditSuccessScreen';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import { WorkOrder } from './src/types/workOrder';
-import { startAutoSync, syncAllPendingActions } from './src/services/offlineService';
+import { startAutoSync, syncAllPendingActions, cleanOrphanedOfflineData } from './src/services/offlineService';
 import { updateLocalWorkOrderStatus } from './src/services/localStatusService';
 import { updateWorkOrderStatus } from './src/services/workOrderService';
 import { saveEvaluation } from './src/services/evaluationService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import storageAdapter from './src/services/storageAdapter';
-import hybridStorage from './src/services/hybridStorageService';
+// REMOVIDO: importações do sistema híbrido que causam erro database full
+// import storageAdapter from './src/services/storageAdapter';
+// import hybridStorage from './src/services/hybridStorageService';
 
 // Importar debug function
 import { debugEntradasDados } from './src/services/debugEntradasDados';
+import { debugSyncStatusForWorkOrder, forceSyncPhotosForWorkOrder } from './src/services/offlineService';
 
 // Disponibilizar debug no console global
 (global as any).debugEntradasDados = debugEntradasDados;
+(global as any).debugSyncStatus = debugSyncStatusForWorkOrder;
+(global as any).forceSyncPhotos = syncAllPendingActions;
+(global as any).forceSyncForOS = forceSyncPhotosForWorkOrder;
 
 type CurrentScreen = 'main' | 'profile' | 'workOrderDetail' | 'orderEvaluation' | 'startService' | 'steps' | 'audit' | 'photoCollection' | 'auditSaving' | 'auditSuccess';
 
@@ -52,6 +57,9 @@ function AppContent() {
         }
       });
     }, 5000); // 5 segundos após inicialização
+
+    // Limpar dados órfãos
+    cleanOrphanedOfflineData();
 
     // Cleanup na desmontagem
     return () => {
@@ -316,10 +324,118 @@ function AppContent() {
         const netInfo = await NetInfo.fetch();
         
         if (netInfo.isConnected) {
-          // ONLINE: Finalizar no servidor e limpar dados locais
-          console.log('🌐 Online - finalizando OS no servidor...');
+          // ONLINE: Sincronizar TODAS as fotos da OS ANTES de finalizar
+          console.log('🌐 Online - sincronizando TODAS as fotos da OS antes de finalizar...');
           
           try {
+            // NOVA ESTRATÉGIA: Forçar sincronização de TODAS as fotos, não apenas pendentes
+            console.log('📸 Forçando sincronização completa de todas as fotos da OS...');
+            
+            // 1. Buscar e sincronizar fotos de offline_dados_records
+            const offlineData = await AsyncStorage.getItem('offline_dados_records');
+            let photosSynced = 0;
+            let photosErrors: string[] = [];
+            
+            if (offlineData) {
+              const records = JSON.parse(offlineData);
+              const workOrderRecords = Object.entries(records).filter(([_, record]: [string, any]) => 
+                record.ordem_servico_id === selectedWorkOrder.id
+              );
+              
+              console.log(`📸 Encontradas ${workOrderRecords.length} fotos principais para sincronização forçada`);
+              
+              // Importar função de sincronização
+              const { saveDadosRecord } = await import('./src/services/serviceStepsService');
+              
+              for (const [recordKey, record] of workOrderRecords) {
+                try {
+                  const recordData = record as any;
+                  console.log(`🔄 Sincronizando foto principal: ${recordKey}`);
+                  
+                  const { data, error } = await saveDadosRecord(
+                    recordData.ordem_servico_id,
+                    recordData.entrada_dados_id,
+                    recordData.valor
+                  );
+                  
+                  if (!error && data) {
+                    console.log(`✅ Foto principal sincronizada: ${recordKey} -> Supabase ID: ${data.id}`);
+                    
+                    // Marcar como sincronizada
+                    records[recordKey].synced = true;
+                    records[recordKey].synced_at = new Date().toISOString();
+                    records[recordKey].supabase_id = data.id;
+                    photosSynced++;
+                  } else {
+                    console.error(`❌ Erro ao sincronizar foto principal ${recordKey}:`, error);
+                    photosErrors.push(`${recordKey}: ${error}`);
+                  }
+                } catch (syncError) {
+                  console.error(`💥 Erro crítico ao sincronizar ${recordKey}:`, syncError);
+                  photosErrors.push(`${recordKey}: ${syncError}`);
+                }
+              }
+              
+              // Salvar estado atualizado
+              if (photosSynced > 0) {
+                await AsyncStorage.setItem('offline_dados_records', JSON.stringify(records));
+              }
+            }
+            
+            // 2. Buscar e sincronizar fotos extras
+            const offlineExtrasData = await AsyncStorage.getItem('offline_fotos_extras');
+            if (offlineExtrasData) {
+              const extrasRecords = JSON.parse(offlineExtrasData);
+              const workOrderExtras = Object.entries(extrasRecords).filter(([_, record]: [string, any]) => 
+                record.ordem_servico_id === selectedWorkOrder.id
+              );
+              
+              console.log(`📸 Encontradas ${workOrderExtras.length} fotos extras para sincronização forçada`);
+              
+              // Importar função de sincronização
+              const { saveDadosRecord } = await import('./src/services/serviceStepsService');
+              
+              for (const [recordKey, record] of workOrderExtras) {
+                try {
+                  const recordData = record as any;
+                  console.log(`🔄 Sincronizando foto extra: ${recordKey}`);
+                  
+                  const { data, error } = await saveDadosRecord(
+                    recordData.ordem_servico_id,
+                    null, // entrada_dados_id null para fotos extras
+                    recordData.valor
+                  );
+                  
+                  if (!error && data) {
+                    console.log(`✅ Foto extra sincronizada: ${recordKey} -> Supabase ID: ${data.id}`);
+                    
+                    // Marcar como sincronizada
+                    extrasRecords[recordKey].synced = true;
+                    extrasRecords[recordKey].synced_at = new Date().toISOString();
+                    extrasRecords[recordKey].supabase_id = data.id;
+                    photosSynced++;
+                  } else {
+                    console.error(`❌ Erro ao sincronizar foto extra ${recordKey}:`, error);
+                    photosErrors.push(`${recordKey}: ${error}`);
+                  }
+                } catch (syncError) {
+                  console.error(`💥 Erro crítico ao sincronizar foto extra ${recordKey}:`, syncError);
+                  photosErrors.push(`${recordKey}: ${syncError}`);
+                }
+              }
+              
+              // Salvar estado atualizado
+              if (workOrderExtras.length > 0) {
+                await AsyncStorage.setItem('offline_fotos_extras', JSON.stringify(extrasRecords));
+              }
+            }
+            
+            console.log(`📊 Sincronização forçada concluída: ${photosSynced} fotos sincronizadas, ${photosErrors.length} erros`);
+            
+            // Aguardar um pouco para garantir que todas as sincronizações sejam processadas
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Agora finalizar a OS no servidor
             const { updateWorkOrderStatus } = await import('./src/services/workOrderService');
             const { clearAllLocalDataForWorkOrder } = await import('./src/services/localStatusService');
             const { clearOfflineActionsForWorkOrder } = await import('./src/services/offlineService');
@@ -347,14 +463,14 @@ function AppContent() {
               // 2. Limpar TODOS os dados locais da OS para remover ícone de sincronização
               await clearAllLocalDataForWorkOrder(selectedWorkOrder.id);
               
-              // 3. Limpar especificamente ações offline desta OS
+              // 3. Limpar especificamente ações offline desta OS (agora que já foram sincronizadas)
               await clearOfflineActionsForWorkOrder(selectedWorkOrder.id);
               
               // 4. Notificar callbacks de OS finalizada para atualizar a UI
               const { notifyOSFinalizadaCallbacks } = await import('./src/services/offlineService');
               notifyOSFinalizadaCallbacks(selectedWorkOrder.id);
               
-              console.log('🧹 Dados locais e ações offline limpas - ícone de sincronização removido');
+              console.log('🧹 Dados locais e ações offline limpas após sincronização - ícone de sincronização removido');
             }
             
           } catch (onlineError) {
@@ -371,8 +487,8 @@ function AppContent() {
           }
           
         } else {
-          // OFFLINE: Salvar apenas localmente
-          console.log('📱 Offline - salvando status local...');
+          // OFFLINE: Salvar apenas localmente e manter fotos para sincronização posterior
+          console.log('📱 Offline - salvando status local e mantendo fotos para sincronização...');
           await AsyncStorage.setItem(
             `local_work_order_status_${selectedWorkOrder.id}`,
             JSON.stringify({
@@ -381,6 +497,8 @@ function AppContent() {
               updatedAt: new Date().toISOString(),
             })
           );
+          
+          console.log('📸 Fotos mantidas para sincronização quando houver conexão');
         }
         
       } catch (error) {
@@ -593,28 +711,15 @@ export default function App() {
     try {
       console.log('🚀 Inicializando aplicativo...');
       
-      // Inicializar armazenamento híbrido
-      await hybridStorage.initialize();
-      console.log('✅ Armazenamento híbrido inicializado');
+      // REMOVIDO: Inicialização do armazenamento híbrido que causa erro database full
+      // await hybridStorage.initialize();
+      // console.log('✅ Armazenamento híbrido inicializado');
       
-      // Inicializar adaptador de armazenamento
-      await storageAdapter.initialize();
-      console.log('✅ Adaptador de armazenamento inicializado');
+      // REMOVIDO: Inicialização do adaptador de armazenamento
+      // await storageAdapter.initialize();
+      // console.log('✅ Adaptador de armazenamento inicializado');
       
-      // Obter estatísticas iniciais
-      try {
-        const storageStats = await storageAdapter.getStorageStats();
-        console.log('📊 Estatísticas iniciais do armazenamento:', {
-          asyncStorageKeys: storageStats.asyncStorageSize, // Agora é apenas contagem
-          hybridStorageSize: `${(storageStats.hybridStorageStats.totalSize / 1024 / 1024).toFixed(2)} MB`,
-          totalItems: storageStats.hybridStorageStats.totalItems,
-          totalPhotos: storageStats.hybridStorageStats.totalPhotos,
-          migrationCompleted: storageStats.migrationStatus.completed
-        });
-      } catch (error) {
-        console.warn('⚠️ Erro ao obter estatísticas iniciais:', error);
-        // Continuar inicialização mesmo com erro nas estatísticas
-      }
+      console.log('✅ App inicializado usando AsyncStorage direto (sem sistema híbrido)');
       
       setAppReady(true);
     } catch (error) {
