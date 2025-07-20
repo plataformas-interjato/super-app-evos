@@ -695,9 +695,21 @@ const syncLocalWorkOrderStatuses = async (): Promise<{ synced: number; failed: n
           await markLocalStatusAsSynced(parseInt(workOrderId));
           synced++;
           
-          // Se foi finalizada, notificar callbacks
+          // Se foi finalizada, limpar TODOS os dados locais e notificar callbacks
           if (appStatus === 'finalizada') {
+            console.log(`🧹 OS ${workOrderId} finalizada via sincronização - limpando dados locais`);
+            
+            // Limpar todos os dados locais da OS finalizada
+            const { clearAllLocalDataForWorkOrder } = await import('./localStatusService');
+            await clearAllLocalDataForWorkOrder(parseInt(workOrderId));
+            
+            // Limpar ações offline específicas desta OS
+            await clearOfflineActionsForWorkOrder(parseInt(workOrderId));
+            
+            // Notificar callbacks
             notifyOSFinalizadaCallbacks(parseInt(workOrderId));
+            
+            console.log(`✅ Dados locais da OS ${workOrderId} limpos após sincronização de status`);
           }
         }
         

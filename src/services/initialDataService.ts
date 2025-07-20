@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import NetInfo from '@react-native-community/netinfo';
-import storageAdapter from './storageAdapter';
+// REMOVIDO: import storageAdapter from './storageAdapter'; - usando AsyncStorage direto
 
 // Chaves do cache para cada tabela
 export const INITIAL_CACHE_KEYS = {
@@ -49,7 +49,7 @@ export interface InitialLoadStats {
 export const isInitialSyncCompleted = async (userId: string): Promise<boolean> => {
   try {
     const key = `${INITIAL_CACHE_KEYS.USER_INITIAL_SYNC}_${userId}`;
-    const completed = await storageAdapter.getItem(key);
+    const completed = await AsyncStorage.getItem(key);
     return completed === 'true';
   } catch (error) {
     console.error('❌ Erro ao verificar sync inicial:', error);
@@ -63,10 +63,10 @@ export const isInitialSyncCompleted = async (userId: string): Promise<boolean> =
 const markInitialSyncCompleted = async (userId: string): Promise<void> => {
   try {
     const key = `${INITIAL_CACHE_KEYS.USER_INITIAL_SYNC}_${userId}`;
-    await storageAdapter.setItem(key, 'true');
+    await AsyncStorage.setItem(key, 'true');
     
     // Também salvar timestamp da conclusão
-    await storageAdapter.setItem(INITIAL_CACHE_KEYS.LAST_INITIAL_SYNC, new Date().toISOString());
+    await AsyncStorage.setItem(INITIAL_CACHE_KEYS.LAST_INITIAL_SYNC, new Date().toISOString());
     
     console.log('✅ Carga inicial marcada como concluída para o usuário:', userId);
   } catch (error) {
@@ -94,7 +94,7 @@ export const performInitialDataLoad = async (
     }
 
     console.log('🚀 Iniciando carga inicial completa das tabelas do Supabase...');
-    console.log('📦 Usando armazenamento híbrido para grandes volumes de dados');
+    console.log('💾 Usando AsyncStorage direto (sem cache híbrido para evitar SQLite)');
     
     const totalTables = 9;
     let currentTable = 0;
@@ -123,9 +123,9 @@ export const performInitialDataLoad = async (
       
       if (usuariosError) throw usuariosError;
       
-      await storageAdapter.setItem(INITIAL_CACHE_KEYS.USUARIOS, JSON.stringify(usuarios || []));
+      await AsyncStorage.setItem(INITIAL_CACHE_KEYS.USUARIOS, JSON.stringify(usuarios || []));
       stats.usuarios = usuarios?.length || 0;
-      console.log(`✅ ${stats.usuarios} usuários carregados (armazenamento híbrido)`);
+      console.log(`✅ ${stats.usuarios} usuários carregados (AsyncStorage direto)`);
     } catch (error) {
       console.error('❌ Erro ao carregar usuários:', error);
       stats.usuarios = 0;
@@ -141,9 +141,9 @@ export const performInitialDataLoad = async (
       
       if (clientesError) throw clientesError;
       
-      await storageAdapter.setItem(INITIAL_CACHE_KEYS.CLIENTES, JSON.stringify(clientes || []));
+      await AsyncStorage.setItem(INITIAL_CACHE_KEYS.CLIENTES, JSON.stringify(clientes || []));
       stats.clientes = clientes?.length || 0;
-      console.log(`✅ ${stats.clientes} clientes carregados (armazenamento híbrido)`);
+      console.log(`✅ ${stats.clientes} clientes carregados (AsyncStorage direto)`);
     } catch (error) {
       console.error('❌ Erro ao carregar clientes:', error);
       stats.clientes = 0;
@@ -159,9 +159,9 @@ export const performInitialDataLoad = async (
       
       if (tiposError) throw tiposError;
       
-      await storageAdapter.setItem(INITIAL_CACHE_KEYS.TIPOS_OS, JSON.stringify(tiposOs || []));
+      await AsyncStorage.setItem(INITIAL_CACHE_KEYS.TIPOS_OS, JSON.stringify(tiposOs || []));
       stats.tiposOs = tiposOs?.length || 0;
-      console.log(`✅ ${stats.tiposOs} tipos de OS carregados (armazenamento híbrido)`);
+      console.log(`✅ ${stats.tiposOs} tipos de OS carregados (AsyncStorage direto)`);
     } catch (error) {
       console.error('❌ Erro ao carregar tipos de OS:', error);
       stats.tiposOs = 0;
@@ -178,9 +178,9 @@ export const performInitialDataLoad = async (
       
       if (etapasError) throw etapasError;
       
-      await storageAdapter.setItem(INITIAL_CACHE_KEYS.ETAPAS_OS, JSON.stringify(etapasOs || []));
+      await AsyncStorage.setItem(INITIAL_CACHE_KEYS.ETAPAS_OS, JSON.stringify(etapasOs || []));
       stats.etapasOs = etapasOs?.length || 0;
-      console.log(`✅ ${stats.etapasOs} etapas de OS carregadas (armazenamento híbrido)`);
+      console.log(`✅ ${stats.etapasOs} etapas de OS carregadas (AsyncStorage direto)`);
     } catch (error) {
       console.error('❌ Erro ao carregar etapas de OS:', error);
       stats.etapasOs = 0;
@@ -196,9 +196,10 @@ export const performInitialDataLoad = async (
       
       if (entradasError) throw entradasError;
       
-      await storageAdapter.setItem(INITIAL_CACHE_KEYS.ENTRADAS_DADOS, JSON.stringify(entradasDados || []));
+      // NOVO: Usar AsyncStorage direto (sem storageAdapter/hybridStorage para evitar SQLite)
+      await AsyncStorage.setItem(INITIAL_CACHE_KEYS.ENTRADAS_DADOS, JSON.stringify(entradasDados || []));
       stats.entradasDados = entradasDados?.length || 0;
-      console.log(`✅ ${stats.entradasDados} entradas de dados carregadas (armazenamento híbrido)`);
+      console.log(`✅ ${stats.entradasDados} entradas de dados carregadas (AsyncStorage direto)`);
     } catch (error) {
       console.error('❌ Erro ao carregar entradas de dados:', error);
       stats.entradasDados = 0;
@@ -226,12 +227,12 @@ export const performInitialDataLoad = async (
         
         if (dadosError) throw dadosError;
         
-        await storageAdapter.setItem(INITIAL_CACHE_KEYS.DADOS, JSON.stringify(dados || []));
+        await AsyncStorage.setItem(INITIAL_CACHE_KEYS.DADOS, JSON.stringify(dados || []));
         stats.dados = dados?.length || 0;
       } else {
         stats.dados = 0;
       }
-      console.log(`✅ ${stats.dados} registros de dados carregados (armazenamento híbrido)`);
+      console.log(`✅ ${stats.dados} registros de dados carregados (AsyncStorage direto)`);
     } catch (error) {
       console.error('❌ Erro ao carregar dados:', error);
       stats.dados = 0;
@@ -244,38 +245,38 @@ export const performInitialDataLoad = async (
       const { data: auditoriasTecnico, error: auditoriasError } = await supabase
         .from('auditoria_tecnico')
         .select('*')
-        .eq('auditor_id', parseInt(userId))
+        .eq('tecnico_id', parseInt(userId))
         .eq('ativo', 1);
       
       if (auditoriasError) throw auditoriasError;
       
-      await storageAdapter.setItem(INITIAL_CACHE_KEYS.AUDITORIAS_TECNICO, JSON.stringify(auditoriasTecnico || []));
+      await AsyncStorage.setItem(INITIAL_CACHE_KEYS.AUDITORIAS_TECNICO, JSON.stringify(auditoriasTecnico || []));
       stats.auditoriasTecnico = auditoriasTecnico?.length || 0;
-      console.log(`✅ ${stats.auditoriasTecnico} auditorias do técnico carregadas (armazenamento híbrido)`);
+      console.log(`✅ ${stats.auditoriasTecnico} auditorias do técnico carregadas (AsyncStorage direto)`);
     } catch (error) {
       console.error('❌ Erro ao carregar auditorias do técnico:', error);
       stats.auditoriasTecnico = 0;
     }
 
-    // 8. AUDITORIAS (tabela geral) - REMOVIDO: Tabela não existe, apenas auditoria_tecnico
-    updateProgress('Auditorias gerais (pulando - tabela não existe)...');
+    // 8. AUDITORIAS (tabela não existe no Supabase, apenas para manter compatibilidade)
+    updateProgress('Carregando auditorias gerais...');
     currentTable++;
     try {
-      // Não existe tabela 'auditoria', apenas 'auditoria_tecnico'
+      // Tabela 'auditoria' não existe no Supabase
       // Definir como 0 para evitar erro
       stats.auditorias = 0;
-      await storageAdapter.setItem(INITIAL_CACHE_KEYS.AUDITORIAS, JSON.stringify([]));
+      await AsyncStorage.setItem(INITIAL_CACHE_KEYS.AUDITORIAS, JSON.stringify([]));
       console.log(`✅ Auditorias gerais puladas (tabela não existe)`);
     } catch (error) {
-      console.error('❌ Erro ao processar auditorias gerais:', error);
+      console.error('❌ Erro ao carregar auditorias gerais:', error);
       stats.auditorias = 0;
     }
 
     // 9. COMENTARIOS_ETAPA (apenas do usuário)
-    updateProgress('Carregando comentários...');
+    updateProgress('Carregando comentários de etapas...');
     currentTable++;
     try {
-      // Buscar apenas comentários relacionados às OSs do usuário
+      // Buscar comentários relacionados às OSs do usuário
       const { data: ordemServicos } = await supabase
         .from('ordem_servico')
         .select('id')
@@ -288,18 +289,19 @@ export const performInitialDataLoad = async (
         const { data: comentarios, error: comentariosError } = await supabase
           .from('comentario_etapa')
           .select('*')
-          .in('ordem_servico_id', osIds);
+          .in('ordem_servico_id', osIds)
+          .eq('ativo', 1);
         
         if (comentariosError) throw comentariosError;
         
-        await storageAdapter.setItem(INITIAL_CACHE_KEYS.COMENTARIOS_ETAPA, JSON.stringify(comentarios || []));
+        await AsyncStorage.setItem(INITIAL_CACHE_KEYS.COMENTARIOS_ETAPA, JSON.stringify(comentarios || []));
         stats.comentariosEtapa = comentarios?.length || 0;
       } else {
         stats.comentariosEtapa = 0;
       }
-      console.log(`✅ ${stats.comentariosEtapa} comentários carregados (armazenamento híbrido)`);
+      console.log(`✅ ${stats.comentariosEtapa} comentários de etapas carregados (AsyncStorage direto)`);
     } catch (error) {
-      console.error('❌ Erro ao carregar comentários:', error);
+      console.error('❌ Erro ao carregar comentários de etapas:', error);
       stats.comentariosEtapa = 0;
     }
 
@@ -333,12 +335,11 @@ export const performInitialDataLoad = async (
     
     // Obter estatísticas do armazenamento para log
     try {
-      const storageStats = await storageAdapter.getStorageStats();
-      console.log('📊 Estatísticas do armazenamento após carga inicial:', {
-        hybridStorageSize: storageStats.hybridStorageStats.totalSize,
-        totalItems: storageStats.hybridStorageStats.totalItems,
-        totalPhotos: storageStats.hybridStorageStats.totalPhotos,
-        migrationCompleted: storageStats.migrationStatus.completed
+      // REMOVIDO: Obter estatísticas do storageAdapter
+      console.log('📊 Estatísticas do armazenamento após carga inicial (AsyncStorage):', {
+        totalItems: await AsyncStorage.getAllKeys().then(keys => keys.length),
+        totalPhotos: 0, // Não há fotos no AsyncStorage
+        migrationCompleted: 'N/A' // Não há migração no AsyncStorage
       });
     } catch (error) {
       console.warn('⚠️ Erro ao obter estatísticas do armazenamento:', error);
@@ -362,7 +363,7 @@ export const performInitialDataLoad = async (
 export const getCachedTableData = async <T = any>(tableName: keyof typeof INITIAL_CACHE_KEYS): Promise<T[]> => {
   try {
     const cacheKey = INITIAL_CACHE_KEYS[tableName];
-    const cachedData = await storageAdapter.getItem(cacheKey);
+    const cachedData = await AsyncStorage.getItem(cacheKey);
     
     if (!cachedData) {
       return [];
@@ -410,8 +411,8 @@ export const clearInitialCache = async (userId?: string): Promise<void> => {
       keysToRemove.push(`${INITIAL_CACHE_KEYS.USER_INITIAL_SYNC}_${userId}`);
     }
     
-    await storageAdapter.multiRemove(keysToRemove);
-    console.log('🗑️ Cache da carga inicial limpo (armazenamento híbrido)');
+    await AsyncStorage.multiRemove(keysToRemove);
+    console.log('🗑️ Cache da carga inicial limpo (AsyncStorage)');
   } catch (error) {
     console.error('❌ Erro ao limpar cache inicial:', error);
   }
@@ -426,7 +427,7 @@ export const forceInitialDataLoad = async (
 ): Promise<{ success: boolean; stats?: InitialLoadStats; error?: string }> => {
   // Limpar flag de conclusão
   const key = `${INITIAL_CACHE_KEYS.USER_INITIAL_SYNC}_${userId}`;
-  await storageAdapter.removeItem(key);
+  await AsyncStorage.removeItem(key);
   
   // Executar carga inicial
   return performInitialDataLoad(userId, onProgress);

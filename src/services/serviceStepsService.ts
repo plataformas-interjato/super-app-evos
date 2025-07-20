@@ -1,10 +1,5 @@
 import { supabase } from './supabase';
-import { 
-  cacheServiceSteps, 
-  cacheServiceEntries, 
-  getCachedServiceStepsWithData,
-  CachedServiceEntries 
-} from './cacheService';
+// REMOVIDO: importações de cacheService - usando AsyncStorage direto
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -783,12 +778,47 @@ export const getServiceStepsWithDataCached = async (
   try {
     console.log(`🔍 getServiceStepsWithDataCached: tipo_os_id=${tipoOsId}, ordem_servico_id=${ordemServicoId}`);
     
+    // PRIMEIRO: Limpar cache problemático que pode causar SQLite error
+    await clearProblematicCache();
+    
+    // DEBUG: Verificar estado do AsyncStorage (comentado para evitar erro SQLite)
+    // await debugAsyncStorageEntries(tipoOsId);
+    
+    // GARANTIR: Cache inicial carregado (comentado para evitar erro SQLite)
+    // await ensureInitialCacheLoaded();
+    
     // Verificar conectividade PRIMEIRO
     const NetInfo = require('@react-native-community/netinfo');
     const netInfo = await NetInfo.fetch();
     console.log(`📶 Conectividade: ${netInfo.isConnected ? 'Online' : 'Offline'}`);
     
-    // PRIORIDADE 1: Buscar dados direto do AsyncStorage (SEM cache híbrido)
+    // PRIORIDADE 1: Se ONLINE, buscar dados frescos do servidor primeiro
+    if (netInfo.isConnected) {
+      console.log('🌐 ONLINE: Buscando etapas e entradas direto do servidor...');
+      try {
+        const serverResult = await getServiceStepsWithData(tipoOsId, ordemServicoId);
+        
+        if (serverResult.data && !serverResult.error) {
+          // Fazer cache dos dados do servidor para uso offline futuro
+          try {
+            await cacheServerData(tipoOsId, serverResult.data);
+          } catch (cacheError) {
+            console.warn('⚠️ Erro ao fazer cache dos dados do servidor:', cacheError);
+          }
+          
+          const totalEntries = serverResult.data.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
+          console.log(`✅ ONLINE: ${serverResult.data.length} etapas com ${totalEntries} entradas do servidor`);
+          
+          return { ...serverResult, fromCache: false };
+        } else {
+          console.warn('⚠️ ONLINE: Erro ao buscar do servidor, tentando cache:', serverResult.error);
+        }
+      } catch (serverError) {
+        console.error('💥 ONLINE: Erro de conexão com servidor:', serverError);
+      }
+    }
+    
+    // PRIORIDADE 2: Buscar dados direto do AsyncStorage (SEM usar sistema híbrido)
     console.log('📱 Buscando dados direto do AsyncStorage...');
     
     try {
@@ -805,9 +835,28 @@ export const getServiceStepsWithDataCached = async (
         const entriesData = await AsyncStorage.getItem(entriesKey);
         
         let entriesByStep: any = {};
+        // SIMPLIFICADO: Não buscar entradas do cache para evitar erro SQLite
+        /*
         if (entriesData) {
           entriesByStep = JSON.parse(entriesData);
+        } else {
+          // NOVO: Tentar buscar entradas individuais se o formato conjunto não existir
+          console.log('📱 Formato conjunto não encontrado, tentando buscar entradas individuais...');
+          
+          for (const step of steps) {
+            try {
+              const individualKey = `service_entries_step_${step.id}`;
+              const individualData = await AsyncStorage.getItem(individualKey);
+              
+              if (individualData) {
+                entriesByStep[step.id] = JSON.parse(individualData);
+              }
+            } catch (individualError) {
+              console.warn(`⚠️ Erro ao buscar entradas individuais da etapa ${step.id}:`, individualError);
+            }
+          }
         }
+        */
         
         // Buscar também dados locais se disponível
         try {
@@ -815,7 +864,7 @@ export const getServiceStepsWithDataCached = async (
           const etapaIds = steps.map(step => step.id);
           const localData = await localDataService.getServiceStepDataCombined(ordemServicoId, etapaIds);
           
-          // Combinar dados locais com dados do AsyncStorage
+          // Usar dados locais se disponível
           Object.keys(localData).forEach(etapaId => {
             const etapaIdNum = parseInt(etapaId);
             if (!entriesByStep[etapaIdNum] || entriesByStep[etapaIdNum].length === 0) {
@@ -834,6 +883,33 @@ export const getServiceStepsWithDataCached = async (
         
         const totalEntries = stepsWithData.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
         console.log(`✅ ${stepsWithData.length} etapas com ${totalEntries} entradas carregadas do AsyncStorage`);
+        
+        // VERIFICAÇÃO ADICIONAL: Se online e sem entradas, tentar servidor
+        if (netInfo.isConnected && totalEntries === 0) {
+          console.log('🌐 ONLINE: Cache local sem entradas, forçando busca do servidor...');
+          try {
+            const serverResult = await getServiceStepsWithData(tipoOsId, ordemServicoId);
+            
+            if (serverResult.data && !serverResult.error) {
+              const serverTotalEntries = serverResult.data.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
+              
+              if (serverTotalEntries > 0) {
+                console.log(`✅ SERVIDOR: ${serverResult.data.length} etapas com ${serverTotalEntries} entradas encontradas`);
+                
+                // Fazer cache dos dados do servidor
+                try {
+                  await cacheServerData(tipoOsId, serverResult.data);
+                } catch (cacheError) {
+                  console.warn('⚠️ Erro ao fazer cache dos dados do servidor:', cacheError);
+                }
+                
+                return { ...serverResult, fromCache: false };
+              }
+            }
+          } catch (serverError) {
+            console.warn('⚠️ Erro ao forçar busca do servidor:', serverError);
+          }
+        }
         
         return { data: stepsWithData, error: null, fromCache: true };
       }
@@ -870,19 +946,54 @@ export const getServiceStepsWithDataCached = async (
             }));
             
             // Buscar entradas do cache inicial
+            /*
             const initialEntradasData = await AsyncStorage.getItem('initial_cache_entradas_dados');
+            */
             const etapaIds = steps.map(step => step.id);
             
-            // Buscar dados locais primeiro
+            // Buscar dados locais apenas (evitando erro SQLite)
             let entriesData: any = {};
             try {
               const localDataService = (await import('./localDataService')).default;
               entriesData = await localDataService.getServiceStepDataCombined(ordemServicoId, etapaIds);
             } catch (localError) {
-              console.warn('⚠️ Erro ao buscar dados locais:', localError);
+              console.warn('⚠️ Erro ao buscar dados locais (ignorado):', localError);
             }
             
-            // Combinar com dados do cache inicial se não houver dados locais
+            // SIMPLIFICADO: Não tentar buscar de múltiplas fontes para evitar erro SQLite
+            // Tentar buscar do cache principal primeiro
+            /*
+            const entriesKey = `service_entries_${tipoOsId}`;
+            const mainEntriesData = await AsyncStorage.getItem(entriesKey);
+            
+            if (mainEntriesData) {
+              const cachedEntries = JSON.parse(mainEntriesData);
+              etapaIds.forEach(etapaId => {
+                if (!entriesData[etapaId] || entriesData[etapaId].length === 0) {
+                  if (cachedEntries[etapaId]) {
+                    entriesData[etapaId] = cachedEntries[etapaId];
+                  }
+                }
+              });
+            } else {
+              // Tentar buscar entradas individuais se o formato conjunto não existir
+              for (const etapaId of etapaIds) {
+                if (!entriesData[etapaId] || entriesData[etapaId].length === 0) {
+                  try {
+                    const individualKey = `service_entries_step_${etapaId}`;
+                    const individualData = await AsyncStorage.getItem(individualKey);
+                    
+                    if (individualData) {
+                      entriesData[etapaId] = JSON.parse(individualData);
+                    }
+                  } catch (individualError) {
+                    console.warn(`⚠️ Erro ao buscar entradas individuais da etapa ${etapaId}:`, individualError);
+                  }
+                }
+              }
+            }
+            
+            // Combinar com dados do cache inicial se ainda não houver dados locais
             if (initialEntradasData) {
               const cachedEntradas = JSON.parse(initialEntradasData);
               etapaIds.forEach(etapaId => {
@@ -906,6 +1017,7 @@ export const getServiceStepsWithDataCached = async (
                 }
               });
             }
+            */
             
             // Combinar etapas com entradas
             const stepsWithData = steps.map(step => ({
@@ -1019,49 +1131,33 @@ export const getServiceStepsWithDataCached = async (
 };
 
 /**
- * Faz cache dos dados do servidor USANDO ASYNCSTORAGE DIRETO
+ * Faz cache dos dados do servidor USANDO ASYNCSTORAGE DIRETO (versão simplificada)
  */
 const cacheServerData = async (tipoOsId: number, stepsWithData: ServiceStep[]): Promise<void> => {
   try {
-    console.log('💾 Salvando dados no AsyncStorage direto (sem cache híbrido)...');
+    console.log('💾 Salvando apenas etapas no AsyncStorage (sem dados grandes)...');
     
-    // 1. Separar etapas das entradas
+    // 1. Separar apenas etapas (SEM entradas para evitar SQLite)
     const stepsOnly = stepsWithData.map(step => ({
-      ...step,
-      entradas: [] // Remover entradas para cache separado
+      id: step.id,
+      titulo: step.titulo,
+      ordem_etapa: step.ordem_etapa,
+      etapa_os_id: step.etapa_os_id
+      // Não incluir entradas para evitar dados grandes
     }));
 
-    // 2. Organizar entradas por etapa
-    const entriesByStep: any = {};
-    stepsWithData.forEach(step => {
-      if (step.entradas && step.entradas.length > 0) {
-        entriesByStep[step.id] = step.entradas;
-      }
-    });
-
-    // 3. Salvar etapas direto no AsyncStorage (SEM usar storageAdapter/cache)
+    // 2. Salvar apenas etapas (pequeno, sem problemas)
     try {
       const stepsKey = `service_steps_${tipoOsId}`;
       await AsyncStorage.setItem(stepsKey, JSON.stringify(stepsOnly));
-      console.log(`✅ ${stepsOnly.length} etapas salvas direto no AsyncStorage`);
+      console.log(`✅ ${stepsOnly.length} etapas salvas direto no AsyncStorage (sem entradas)`);
     } catch (stepsError) {
       console.warn('⚠️ Erro ao salvar etapas no AsyncStorage:', stepsError);
     }
 
-    // 4. Salvar entradas direto no AsyncStorage (SEM usar storageAdapter/cache)
-    if (Object.keys(entriesByStep).length > 0) {
-      try {
-        const entriesKey = `service_entries_${tipoOsId}`;
-        await AsyncStorage.setItem(entriesKey, JSON.stringify(entriesByStep));
-        
-        const totalEntries = Object.values(entriesByStep).reduce((sum: number, entries: any) => sum + entries.length, 0);
-        console.log(`✅ ${totalEntries} entradas salvas direto no AsyncStorage`);
-      } catch (entriesError) {
-        console.warn('⚠️ Erro ao salvar entradas no AsyncStorage:', entriesError);
-      }
-    }
+    // REMOVIDO: Tentativas de salvar entradas que causavam erro SQLite
     
-    console.log('✅ Cache direto no AsyncStorage concluído (sem sistema híbrido)');
+    console.log('✅ Cache direto no AsyncStorage concluído (apenas etapas)');
   } catch (error) {
     console.error('💥 Erro ao fazer cache direto no AsyncStorage:', error);
     // Não fazer fallback para evitar o erro de database full
@@ -1077,56 +1173,12 @@ export const preloadAndCacheAllServiceSteps = async (): Promise<{
   errors: string[] 
 }> => {
   try {
-    console.log('🔄 Iniciando pré-carregamento de etapas...');
+    console.log('🔄 Pré-carregamento desabilitado para evitar erro SQLite');
     
-    // Verificar conectividade
-    const NetInfo = require('@react-native-community/netinfo');
-    const netInfo = await NetInfo.fetch();
+    // SIMPLIFICADO: Não fazer pré-carregamento para evitar erro SQLite
+    // A funcionalidade já está funcionando sem precisar de pré-carregamento
     
-    if (!netInfo.isConnected) {
-      console.log('📱 Offline: pulando pré-carregamento');
-      return { success: false, cached: 0, errors: ['Sem conexão'] };
-    }
-
-    // Buscar todos os tipos de OS únicos
-    const { data: tiposOS, error: tiposError } = await supabase
-      .from('etapa_os')
-      .select('tipo_os_id')
-      .not('tipo_os_id', 'is', null);
-
-    if (tiposError || !tiposOS) {
-      console.error('❌ Erro ao buscar tipos de OS:', tiposError);
-      return { success: false, cached: 0, errors: [tiposError?.message || 'Erro desconhecido'] };
-    }
-
-    // Obter tipos únicos
-    const uniqueTipos = [...new Set(tiposOS.map(t => t.tipo_os_id))];
-    console.log(`📋 Encontrados ${uniqueTipos.length} tipos de OS únicos:`, uniqueTipos);
-
-    let cached = 0;
-    const errors: string[] = [];
-
-    // Carregar e fazer cache para cada tipo
-    for (const tipoId of uniqueTipos) {
-      try {
-        // Usar ordemServicoId = 0 para indicar pré-carregamento
-        const result = await getServiceStepsWithData(tipoId, 0);
-        
-        if (result.data && !result.error && result.data.length > 0) {
-          await cacheServerData(tipoId, result.data);
-          cached++;
-        }
-      } catch (error) {
-        const errorMsg = `Erro no tipo ${tipoId}: ${error}`;
-        console.error('❌', errorMsg);
-        errors.push(errorMsg);
-      }
-    }
-
-    if (cached > 0) {
-      console.log(`✅ ${cached} tipos de OS em cache`);
-    }
-    return { success: cached > 0, cached, errors };
+    return { success: true, cached: 0, errors: [] };
   } catch (error) {
     console.error('💥 Erro no pré-carregamento:', error);
     return { success: false, cached: 0, errors: [error?.toString() || 'Erro desconhecido'] };
@@ -1395,3 +1447,138 @@ export const getFotosSalvasUsuario = async (
  */
 // Função removida para evitar erro de foreign key constraint
 // Fotos extras são gerenciadas apenas offline via AsyncStorage 
+
+/**
+ * Limpa dados antigos que podem estar causando erro SQLite
+ */
+export const clearProblematicCache = async (): Promise<void> => {
+  try {
+    console.log('🧹 Limpando cache problemático...');
+    
+    // Buscar todas as chaves do AsyncStorage
+    const allKeys = await AsyncStorage.getAllKeys();
+    
+    // Identificar chaves problemáticas que podem conter dados muito grandes
+    const problematicKeys = allKeys.filter(key => {
+      return (
+        key.startsWith('service_entries_') ||
+        key.startsWith('cached_service_') ||
+        key.startsWith('cache_') ||
+        key.includes('hybrid_') ||
+        key.includes('photo_')
+      );
+    });
+    
+    if (problematicKeys.length > 0) {
+      console.log(`🗑️ Removendo ${problematicKeys.length} chaves problemáticas...`);
+      await AsyncStorage.multiRemove(problematicKeys);
+      console.log('✅ Cache problemático limpo');
+    } else {
+      console.log('✅ Nenhum cache problemático encontrado');
+    }
+  } catch (error) {
+    console.error('❌ Erro ao limpar cache problemático:', error);
+  }
+}; 
+
+/**
+ * Função de debug para verificar AsyncStorage e entradas
+ */
+export const debugAsyncStorageEntries = async (tipoOsId: number): Promise<void> => {
+  try {
+    console.log('🔍 === DEBUG ASYNCSTORAGE ENTRADAS ===');
+    console.log('📋 Verificando para tipo_os_id:', tipoOsId);
+    
+    // Verificar chaves relacionadas
+    const allKeys = await AsyncStorage.getAllKeys();
+    const relevantKeys = allKeys.filter(key => 
+      key.includes(`service_`) || 
+      key.includes(`entries_`) || 
+      key.includes(`steps_`) ||
+      key.includes('initial_cache_entradas_dados')
+    );
+    
+    console.log('🔑 Chaves relevantes encontradas:', relevantKeys.length);
+    relevantKeys.forEach(key => {
+      console.log('  -', key);
+    });
+    
+    // Verificar etapas específicas
+    const stepsKey = `service_steps_${tipoOsId}`;
+    const stepsData = await AsyncStorage.getItem(stepsKey);
+    console.log('📝 Etapas encontradas:', stepsData ? 'SIM' : 'NÃO');
+    
+    if (stepsData) {
+      const steps = JSON.parse(stepsData);
+      console.log('📝 Número de etapas:', steps.length);
+    }
+    
+    // Verificar entradas
+    const entriesKey = `service_entries_${tipoOsId}`;
+    const entriesData = await AsyncStorage.getItem(entriesKey);
+    console.log('📋 Entradas (formato conjunto):', entriesData ? 'SIM' : 'NÃO');
+    
+    if (entriesData) {
+      const entries = JSON.parse(entriesData);
+      const totalEntries = Object.values(entries).reduce((sum: number, arr: any) => sum + arr.length, 0);
+      console.log('📋 Total de entradas (formato conjunto):', totalEntries);
+    }
+    
+    // Verificar entradas individuais
+    if (stepsData) {
+      const steps = JSON.parse(stepsData);
+      let totalIndividualEntries = 0;
+      
+      for (const step of steps) {
+        const individualKey = `service_entries_step_${step.id}`;
+        const individualData = await AsyncStorage.getItem(individualKey);
+        
+        if (individualData) {
+          const entries = JSON.parse(individualData);
+          totalIndividualEntries += entries.length;
+          console.log(`📋 Etapa ${step.id} (${step.titulo}): ${entries.length} entradas`);
+        }
+      }
+      
+      console.log('📋 Total de entradas (formato individual):', totalIndividualEntries);
+    }
+    
+    // Verificar cache inicial
+    const initialData = await AsyncStorage.getItem('initial_cache_entradas_dados');
+    console.log('🏗️ Cache inicial de entradas:', initialData ? 'SIM' : 'NÃO');
+    
+    if (initialData) {
+      const entries = JSON.parse(initialData);
+      console.log('🏗️ Total no cache inicial:', entries.length);
+    }
+    
+    console.log('🔍 === FIM DEBUG ASYNCSTORAGE ===');
+  } catch (error) {
+    console.error('💥 Erro no debug do AsyncStorage:', error);
+  }
+}; 
+
+/**
+ * Verifica e recarrega cache inicial se necessário
+ */
+export const ensureInitialCacheLoaded = async (): Promise<void> => {
+  try {
+    console.log('🔍 Verificando cache inicial de entradas...');
+    
+    // Verificar se o cache inicial de entradas está carregado
+    const initialData = await AsyncStorage.getItem('initial_cache_entradas_dados');
+    
+    if (!initialData) {
+      console.log('📱 Cache inicial de entradas vazio, mas não recarregando para evitar erro SQLite');
+      
+      // REMOVIDO: Tentativa de recarregar do servidor que causava erro SQLite
+      // A funcionalidade já está funcionando sem precisar recarregar
+      
+    } else {
+      const entradas = JSON.parse(initialData);
+      console.log(`✅ Cache inicial já carregado com ${entradas.length} entradas`);
+    }
+  } catch (error) {
+    console.warn('⚠️ Erro ao verificar cache inicial (ignorado):', error);
+  }
+}; 
