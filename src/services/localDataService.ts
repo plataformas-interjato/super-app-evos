@@ -254,12 +254,30 @@ class LocalDataService {
       const cachedEntradas = await getCachedTableData('ENTRADAS_DADOS') as any[];
       console.log(`📋 Cache inicial: ${cachedEntradas.length} entradas encontradas`);
       
+      // DEBUG: Mostrar alguns exemplos de entradas do cache
+      if (cachedEntradas.length > 0) {
+        console.log('📋 DEBUG: Primeiras 3 entradas do cache:');
+        cachedEntradas.slice(0, 3).forEach((entrada, index) => {
+          console.log(`  ${index + 1}. ID: ${entrada.id}, etapa_os_id: ${entrada.etapa_os_id}, titulo: ${entrada.titulo}`);
+        });
+        
+        // DEBUG: Mostrar etapas únicas no cache
+        const etapasUnicas = [...new Set(cachedEntradas.map(e => e.etapa_os_id))].sort((a, b) => a - b);
+        console.log(`📋 DEBUG: Etapas únicas no cache (${etapasUnicas.length}):`, etapasUnicas.slice(0, 10));
+      }
+      
+      // DEBUG: Mostrar as etapas que estamos procurando
+      console.log(`🔍 DEBUG: Procurando entradas para etapas:`, etapaIds);
+      
       const dataByStep: { [etapaId: number]: ServiceStepData[] } = { ...localData };
       
       // Combinar com dados do cache se não houver dados locais
       etapaIds.forEach(etapaId => {
         if (!dataByStep[etapaId] || dataByStep[etapaId].length === 0) {
           const cacheData = cachedEntradas.filter(entrada => entrada.etapa_os_id === etapaId);
+          
+          // DEBUG: Mostrar resultado da busca para cada etapa
+          console.log(`🔍 DEBUG: Etapa ${etapaId} - encontradas ${cacheData.length} entradas no cache`);
           
           if (cacheData.length > 0) {
             console.log(`📝 Adicionando ${cacheData.length} entradas do cache para etapa ${etapaId}`);

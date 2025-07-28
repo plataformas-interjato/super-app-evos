@@ -30,7 +30,8 @@ import { getLocalWorkOrderStatuses, cleanSyncedLocalStatuses } from '../services
 import { preloadAndCacheAllServiceSteps } from '../services/serviceStepsService';
 import { getWorkOrdersWithCache, getWorkOrdersCacheStats, updateCacheAfterOSFinalizada } from '../services/workOrderCacheService';
 import { registerSyncCallback, registerOSFinalizadaCallback } from '../services/offlineService';
-import { preloadAllWorkOrdersData, shouldPreload, getCachedWorkOrders, getPreloadStatus } from '../services/cacheService';
+// TEMPORARIAMENTE REMOVIDO: importações de cacheService para evitar erro SQLite
+// import { preloadAllWorkOrdersData, shouldPreload, getCachedWorkOrders, getPreloadStatus } from '../services/cacheService';
 
 interface MainScreenProps {
   user: User;
@@ -615,11 +616,11 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
   const preloadWorkOrdersData = async (workOrders: WorkOrder[], wasFromCache: boolean = false) => {
     try {
       // Verificar se o pré-carregamento é necessário
-      const needsPreload = await shouldPreload(workOrders);
+      // const needsPreload = await shouldPreload(workOrders); // TEMPORARIAMENTE REMOVIDO
       
-      if (!needsPreload && !wasFromCache) {
-        return;
-      }
+      // if (!needsPreload && !wasFromCache) { // TEMPORARIAMENTE REMOVIDO
+      //   return; // TEMPORARIAMENTE REMOVIDO
+      // } // TEMPORARIAMENTE REMOVIDO
       
       // Verificar conexão
       const netInfo = await NetInfo.fetch();
@@ -630,13 +631,13 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
       // Executar pré-carregamento em background (não bloquear UI)
       setTimeout(async () => {
         try {
-          const { success, cached, errors } = await preloadAllWorkOrdersData(workOrders);
+          // const { success, cached, errors } = await preloadAllWorkOrdersData(workOrders); // TEMPORARIAMENTE REMOVIDO
           
-          if (success) {
-            console.log(`✅ ${cached} tipos de OS preparados para uso offline`);
-          } else {
-            console.log(`⚠️ ${cached} de ${cached + errors.length} tipos preparados`);
-          }
+          // if (success) { // TEMPORARIAMENTE REMOVIDO
+          //   console.log(`✅ ${cached} tipos de OS preparados para uso offline`); // TEMPORARIAMENTE REMOVIDO
+          // } else { // TEMPORARIAMENTE REMOVIDO
+          //   console.log(`⚠️ ${cached} de ${cached + errors.length} tipos preparados`); // TEMPORARIAMENTE REMOVIDO
+          // } // TEMPORARIAMENTE REMOVIDO
         } catch (preloadError) {
           console.error('💥 Erro no pré-carregamento em background:', preloadError);
         }

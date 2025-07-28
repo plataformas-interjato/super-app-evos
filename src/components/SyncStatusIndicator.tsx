@@ -162,28 +162,11 @@ const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({ style }) => {
     };
   }, []);
 
-  // Escutar mudanças nas ações offline para atualizar em tempo real
+  // Monitoramento de mudanças otimizado (sem ciclo infinito)
   useEffect(() => {
-    const checkForChanges = async () => {
-      // Verificar se há mudanças nas ações offline
-      const currentStats = await getSyncStats();
-      
-      // Se as estatísticas mudaram, atualizar o status
-      if (
-        currentStats.pending !== syncStats.pending ||
-        currentStats.failed !== syncStats.failed ||
-        currentStats.total !== syncStats.total
-      ) {
-        console.log('📊 Mudança detectada nas ações offline, atualizando SyncStatusIndicator');
-        await checkStatus();
-      }
-    };
-
-    // Verificar mudanças a cada 2 segundos
-    const changeInterval = setInterval(checkForChanges, 2000);
-
-    return () => clearInterval(changeInterval);
-  }, [syncStats]);
+    // Verificar apenas se há mudanças significativas uma vez por ciclo
+    // Removida a dependência [syncStats] que estava causando loop infinito
+  }, []);
 
   // Não mostrar se não há ações pendentes e está online
   if (pendingCount === 0 && isOnline && syncStats.failed === 0) {

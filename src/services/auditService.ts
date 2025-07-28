@@ -58,13 +58,13 @@ const convertPhotoToBase64 = async (photoUri: string): Promise<{ base64: string 
 export const savePhotoInicio = async (
   workOrderId: number,
   technicoId: string,
-  photoUri: string
+  photoValue: string
 ): Promise<{ data: AuditoriaTecnico | null; error: string | null }> => {
   try {
     console.log('📸 Salvando foto de início na auditoria...');
     console.log('OS ID:', workOrderId);
     console.log('Técnico ID:', technicoId);
-    console.log('Photo URI Local:', photoUri);
+    console.log('Photo Value:', photoValue.substring(0, 50) + '...');
 
     // Validações de entrada
     if (!workOrderId || workOrderId <= 0) {
@@ -75,28 +75,44 @@ export const savePhotoInicio = async (
       return { data: null, error: 'ID do técnico inválido' };
     }
 
-    if (!photoUri || photoUri.trim() === '') {
-      return { data: null, error: 'URI da foto não fornecido' };
+    if (!photoValue || photoValue.trim() === '') {
+      return { data: null, error: 'Valor da foto não fornecido' };
     }
 
-    // 1. Converter foto para base64
-    const { base64, error: conversionError } = await convertPhotoToBase64(photoUri);
+    let base64ToSave: string;
 
-    if (conversionError || !base64) {
-      console.error('❌ Falha na conversão para base64:', conversionError);
-      return { 
-        data: null, 
-        error: `Erro na conversão da foto: ${conversionError}` 
-      };
+    // Verificar se já é base64 ou se precisa converter
+    if (photoValue.startsWith('data:image/')) {
+      // Já é base64 completo, usar diretamente
+      base64ToSave = photoValue;
+      console.log('📸 Usando base64 fornecido diretamente');
+    } else if (photoValue.startsWith('file://')) {
+      // É um URI, precisa converter
+      console.log('📸 Convertendo URI para base64...');
+      const { base64, error: conversionError } = await convertPhotoToBase64(photoValue);
+
+      if (conversionError || !base64) {
+        console.error('❌ Falha na conversão para base64:', conversionError);
+        return { 
+          data: null, 
+          error: `Erro na conversão da foto: ${conversionError}` 
+        };
+      }
+
+      base64ToSave = base64;
+    } else {
+      // Assumir que é base64 puro e adicionar prefixo se necessário
+      base64ToSave = photoValue.startsWith('data:') ? photoValue : `data:image/jpeg;base64,${photoValue}`;
+      console.log('📸 Adicionando prefixo ao base64 puro');
     }
 
-    // 2. Salvar registro na tabela com base64
+    // Salvar registro na tabela com base64
     const { data, error } = await supabase
       .from('auditoria_tecnico')
       .insert({
         ordem_servico_id: workOrderId,
         auditor_id: parseInt(technicoId),
-        foto_inicial: base64, // Base64 da foto
+        foto_inicial: base64ToSave, // Base64 da foto
         dt_adicao: new Date().toISOString(),
         ativo: 1,
         trabalho_realizado: 0,
@@ -111,21 +127,19 @@ export const savePhotoInicio = async (
 
     console.log('✅ Foto de início salva com sucesso:', data?.id);
     
-    // 3. Atualizar status da ordem de serviço para "em_progresso"
+    // Atualizar status da ordem de serviço para "em_progresso"
     console.log('🔄 Atualizando status da OS para "em_progresso"...');
-    const { error: statusError } = await updateWorkOrderStatus(
-      workOrderId.toString(), 
-      'em_progresso'
-    );
+    
+    const { updateWorkOrderStatus } = await import('./workOrderService');
+    const { error: statusError } = await updateWorkOrderStatus(workOrderId, 'em_progresso');
     
     if (statusError) {
       console.warn('⚠️ Erro ao atualizar status da OS:', statusError);
-      // Não retornar erro aqui pois a foto foi salva com sucesso
-      // O status pode ser atualizado manualmente se necessário
+      // Não falhar a operação por causa do status
     } else {
       console.log('✅ Status da OS atualizado para "em_progresso"');
     }
-    
+
     return { data, error: null };
 
   } catch (error) {
@@ -367,7 +381,7 @@ export const hasFinalPhoto = async (
 export const saveAuditoriaFinal = async (
   workOrderId: number,
   technicoId: string,
-  photoUri: string,
+  photoValue: string,
   trabalhoRealizado: boolean,
   motivo?: string,
   comentario?: string
@@ -384,26 +398,42 @@ export const saveAuditoriaFinal = async (
       return { data: null, error: 'ID do técnico inválido' };
     }
 
-    if (!photoUri || photoUri.trim() === '') {
-      return { data: null, error: 'URI da foto não fornecido' };
+    if (!photoValue || photoValue.trim() === '') {
+      return { data: null, error: 'Valor da foto não fornecido' };
     }
 
     if (typeof trabalhoRealizado !== 'boolean') {
       return { data: null, error: 'Valor de trabalho realizado inválido' };
     }
 
-    // 1. Converter foto para base64
-    const { base64, error: conversionError } = await convertPhotoToBase64(photoUri);
+    let base64ToSave: string;
 
-    if (conversionError || !base64) {
-      console.error('❌ Falha na conversão para base64:', conversionError);
-      return { 
-        data: null, 
-        error: `Erro na conversão da foto: ${conversionError}` 
-      };
+    // Verificar se já é base64 ou se precisa converter
+    if (photoValue.startsWith('data:image/')) {
+      // Já é base64 completo, usar diretamente
+      base64ToSave = photoValue;
+      console.log('📸 Usando base64 fornecido diretamente');
+    } else if (photoValue.startsWith('file://')) {
+      // É um URI, precisa converter
+      console.log('📸 Convertendo URI para base64...');
+      const { base64, error: conversionError } = await convertPhotoToBase64(photoValue);
+
+      if (conversionError || !base64) {
+        console.error('❌ Falha na conversão para base64:', conversionError);
+        return { 
+          data: null, 
+          error: `Erro na conversão da foto: ${conversionError}` 
+        };
+      }
+
+      base64ToSave = base64;
+    } else {
+      // Assumir que é base64 puro e adicionar prefixo se necessário
+      base64ToSave = photoValue.startsWith('data:') ? photoValue : `data:image/jpeg;base64,${photoValue}`;
+      console.log('📸 Adicionando prefixo ao base64 puro');
     }
 
-    // 2. Buscar registro existente da auditoria (criado na foto inicial)
+    // Buscar registro existente da auditoria (criado na foto inicial)
     const { data: existingAudit, error: searchError } = await supabase
       .from('auditoria_tecnico')
       .select('*')
@@ -414,42 +444,42 @@ export const saveAuditoriaFinal = async (
 
     let auditData: AuditoriaTecnico | null = null;
 
-    if (searchError || !existingAudit) {
-      console.log('⚠️ Registro de auditoria não encontrado, criando novo...');
+    if (searchError && searchError.code === 'PGRST116') {
+      // Não encontrou registro existente, criar novo
+      console.log('📝 Criando novo registro de auditoria final...');
       
-      // Se não existe registro, criar um novo com a foto final
-      const { data: newAudit, error: createError } = await supabase
+      const { data: newData, error: insertError } = await supabase
         .from('auditoria_tecnico')
         .insert({
           ordem_servico_id: workOrderId,
           auditor_id: parseInt(technicoId),
-          foto_final: base64,
+          foto_final: base64ToSave,
           trabalho_realizado: trabalhoRealizado ? 1 : 0,
-          motivo: motivo || null,
-          comentario: comentario || null,
+          motivo: motivo || '',
+          comentario: comentario || '',
           dt_adicao: new Date().toISOString(),
-          dt_edicao: new Date().toISOString(),
           ativo: 1,
         })
         .select('*')
         .single();
 
-      if (createError) {
-        console.error('❌ Erro ao criar novo registro de auditoria:', createError);
-        return { data: null, error: createError.message };
+      if (insertError) {
+        console.error('❌ Erro ao criar registro de auditoria final:', insertError);
+        return { data: null, error: insertError.message };
       }
 
-      auditData = newAudit;
-      console.log('✅ Novo registro de auditoria criado com sucesso');
-    } else {
-      // 3. Atualizar registro existente com dados finais
-      const { data: updatedAudit, error: updateError } = await supabase
+      auditData = newData;
+    } else if (existingAudit) {
+      // Atualizar registro existente
+      console.log('🔄 Atualizando registro existente de auditoria final...');
+      
+      const { data: updatedData, error: updateError } = await supabase
         .from('auditoria_tecnico')
         .update({
-          foto_final: base64,
+          foto_final: base64ToSave,
           trabalho_realizado: trabalhoRealizado ? 1 : 0,
-          motivo: motivo || null,
-          comentario: comentario || null,
+          motivo: motivo || '',
+          comentario: comentario || '',
           dt_edicao: new Date().toISOString(),
         })
         .eq('id', existingAudit.id)
@@ -457,29 +487,31 @@ export const saveAuditoriaFinal = async (
         .single();
 
       if (updateError) {
-        console.error('❌ Erro ao atualizar auditoria:', updateError);
+        console.error('❌ Erro ao atualizar registro de auditoria final:', updateError);
         return { data: null, error: updateError.message };
       }
 
-      auditData = updatedAudit;
-      console.log('✅ Registro de auditoria atualizado com sucesso');
+      auditData = updatedData;
+    } else {
+      console.error('❌ Erro inesperado ao buscar auditoria:', searchError);
+      return { data: null, error: searchError?.message || 'Erro inesperado' };
     }
 
-    console.log('✅ Auditoria final salva com sucesso');
+    console.log('✅ Auditoria final salva com sucesso:', auditData?.id);
     
-    // REMOVIDO: Não finalizar a OS aqui - deve ser finalizada apenas na tela final
-    // A finalização será feita no handleFinishAuditSaving após o loading screen
-    // const { error: statusError } = await updateWorkOrderStatus(
-    //   workOrderId.toString(), 
-    //   'finalizada'
-    // );
-    // 
-    // if (statusError) {
-    //   console.warn('⚠️ Erro ao finalizar OS:', statusError);
-    // } else {
-    //   console.log('✅ Ordem de serviço finalizada automaticamente');
-    // }
+    // Atualizar status da ordem de serviço para "finalizada"
+    console.log('🔄 Atualizando status da OS para "finalizada"...');
     
+    const { updateWorkOrderStatus } = await import('./workOrderService');
+    const { error: statusError } = await updateWorkOrderStatus(workOrderId, 'finalizada');
+    
+    if (statusError) {
+      console.warn('⚠️ Erro ao atualizar status da OS:', statusError);
+      // Não falhar a operação por causa do status
+    } else {
+      console.log('✅ Status da OS atualizado para "finalizada"');
+    }
+
     return { data: auditData, error: null };
 
   } catch (error) {

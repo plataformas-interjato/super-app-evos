@@ -4,8 +4,7 @@ import * as FileSystem from 'expo-file-system';
 import { AuditoriaTecnico, savePhotoInicio, saveAuditoriaFinal } from './auditService';
 import { markLocalStatusAsSynced, clearAllLocalDataForWorkOrder } from './localStatusService';
 import { saveDadosRecord, saveComentarioEtapa } from './serviceStepsService';
-import storageAdapter from './storageAdapter';
-import hybridStorage from './hybridStorageService';
+import { supabase } from './supabase';
 
 // Tipos para dados offline
 export interface OfflineAction {
@@ -98,49 +97,40 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
 };
 
 /**
- * Salva ação offline no armazenamento híbrido
+ * Salva ação offline USANDO ASYNCSTORAGE DIRETO
  */
 const saveOfflineAction = async (action: OfflineAction): Promise<void> => {
   try {
     const existingActions = await getOfflineActions();
     const updatedActions = [...existingActions, action];
     
-    // Usar armazenamento híbrido para ações offline
-    await storageAdapter.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(updatedActions));
+    // Usar AsyncStorage direto para ações offline (SEM armazenamento híbrido)
+    await AsyncStorage.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(updatedActions));
     
-    console.log('💾 Ação offline salva no armazenamento híbrido:', action.type);
+    console.log('💾 Ação offline salva no AsyncStorage direto:', action.type);
   } catch (error) {
-    console.error('❌ Erro ao salvar ação offline:', error);
-    
-    // Fallback para AsyncStorage em caso de erro
-    try {
-      const existingActions = await getOfflineActions();
-      const updatedActions = [...existingActions, action];
-      await AsyncStorage.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(updatedActions));
-    } catch (fallbackError) {
-      console.error('❌ Erro no fallback para AsyncStorage:', fallbackError);
-    }
+    console.error('❌ Erro ao salvar ação offline no AsyncStorage:', error);
+    throw error;
   }
 };
 
 /**
- * Recupera todas as ações offline
+ * Recupera todas as ações offline USANDO ASYNCSTORAGE DIRETO
  */
 export const getOfflineActions = async (): Promise<OfflineAction[]> => {
   try {
-    const actionsJson = await storageAdapter.getItem(OFFLINE_ACTIONS_KEY);
-    return actionsJson ? JSON.parse(actionsJson) : [];
-  } catch (error) {
-    console.error('❌ Erro ao recuperar ações offline do armazenamento híbrido:', error);
+    // Usar AsyncStorage direto (SEM armazenamento híbrido)
+    const actionsJson = await AsyncStorage.getItem(OFFLINE_ACTIONS_KEY);
     
-    // Fallback para AsyncStorage
-    try {
-      const actionsJson = await AsyncStorage.getItem(OFFLINE_ACTIONS_KEY);
-      return actionsJson ? JSON.parse(actionsJson) : [];
-    } catch (fallbackError) {
-      console.error('❌ Erro no fallback para AsyncStorage:', fallbackError);
+    if (!actionsJson) {
       return [];
     }
+
+    const actions: OfflineAction[] = JSON.parse(actionsJson);
+    return actions;
+  } catch (error) {
+    console.error('❌ Erro ao carregar ações offline do AsyncStorage:', error);
+    return [];
   }
 };
 
@@ -204,7 +194,7 @@ const incrementSyncAttempts = async (actionId: string): Promise<void> => {
 };
 
 /**
- * Salva foto de início com suporte offline usando armazenamento híbrido
+ * Salva foto de início USANDO ASYNCSTORAGE DIRETO (SEM HYBRIDSTORAGE)
  */
 export const savePhotoInicioOffline = async (
   workOrderId: number,
@@ -214,21 +204,12 @@ export const savePhotoInicioOffline = async (
   const actionId = `photo_inicio_${workOrderId}_${technicoId}_${Date.now()}`;
   
   try {
-    // 1. Salvar foto no armazenamento híbrido
-    const photoSaveResult = await hybridStorage.savePhoto(
-      photoUri,
-      'PHOTO_INICIO',
-      workOrderId,
-      actionId
-    );
+    console.log('💾 Salvando foto de início diretamente no AsyncStorage (apenas URI)...');
     
-    if (!photoSaveResult.success) {
-      return { success: false, error: photoSaveResult.error };
-    }
+    // 1. NOVO: Salvar apenas URI (sem conversão base64 para evitar SQLite)
+    // A conversão para base64 será feita apenas durante a sincronização
     
-    console.log('📸 Foto de início salva no armazenamento híbrido:', photoSaveResult.id);
-
-    // 2. Salvar ação offline
+    // 2. Salvar ação offline DIRETO NO ASYNCSTORAGE
     const offlineAction: OfflinePhotoAction = {
       id: actionId,
       type: 'PHOTO_INICIO',
@@ -236,8 +217,7 @@ export const savePhotoInicioOffline = async (
       workOrderId,
       technicoId,
       data: {
-        photoUri,
-        photoId: photoSaveResult.id,
+        photoUri: photoUri, // Salvar URI diretamente (sem conversão)
       },
       synced: false,
       attempts: 0
@@ -249,31 +229,47 @@ export const savePhotoInicioOffline = async (
     const isOnline = await checkNetworkConnection();
     
     if (isOnline) {
-      // Converter foto para base64 para upload
-      const { base64 } = await hybridStorage.getPhotoAsBase64(photoSaveResult.id);
-      
-      if (base64) {
-        // Criar arquivo temporário para upload
-        const tempUri = await createTempFileFromBase64(base64);
+      console.log('🌐 Tentando salvar foto de início online...');
+      try {
+        // Durante upload online, fazer conversão apenas se necessário
+        let photoValueForUpload = photoUri;
         
-        if (tempUri) {
-          const { data, error } = await savePhotoInicio(workOrderId, technicoId, tempUri);
-          
-          if (!error && data) {
-            // Sucesso online - marcar como sincronizado
-            await markActionAsSynced(actionId);
-            await markLocalStatusAsSynced(workOrderId);
+        // Se for URI, converter para base64 temporariamente para upload
+        if (photoUri.startsWith('file://')) {
+          try {
+            const FileSystem = await import('expo-file-system');
+            const fileInfo = await FileSystem.getInfoAsync(photoUri);
             
-            return { success: true };
-          } else {
-            // Falha online - manter offline para sincronização posterior
-            return { success: true, savedOffline: true, error: `Salvo offline: ${error}` };
+            if (fileInfo.exists) {
+              const base64 = await FileSystem.readAsStringAsync(photoUri, {
+                encoding: FileSystem.EncodingType.Base64,
+              });
+              photoValueForUpload = `data:image/jpeg;base64,${base64}`;
+            }
+          } catch (conversionError) {
+            console.warn('⚠️ Erro na conversão para upload, mantendo offline:', conversionError);
+            return { success: true, savedOffline: true, error: 'Foto salva offline' };
           }
         }
+        
+        const { data, error } = await savePhotoInicio(workOrderId, technicoId, photoValueForUpload);
+        
+        if (!error && data) {
+          // Sucesso online - marcar como sincronizado
+          await markActionAsSynced(actionId);
+          await markLocalStatusAsSynced(workOrderId);
+          console.log('✅ Foto de início salva online com sucesso');
+          return { success: true };
+        } else {
+          console.warn('⚠️ Erro ao salvar online, mantendo offline:', error);
+        }
+      } catch (onlineError) {
+        console.warn('⚠️ Erro ao tentar upload online:', onlineError);
       }
     }
     
-    return { success: true, savedOffline: true, error: 'Sem conexão - salvo offline' };
+    console.log('📱 Foto de início salva offline (URI) para sincronização posterior');
+    return { success: true, savedOffline: true, error: 'Foto salva offline' };
 
   } catch (error) {
     console.error('❌ Erro ao salvar foto de início offline:', error);
@@ -282,7 +278,7 @@ export const savePhotoInicioOffline = async (
 };
 
 /**
- * Salva foto final com suporte offline usando armazenamento híbrido
+ * Salva foto final USANDO ASYNCSTORAGE DIRETO (SEM HYBRIDSTORAGE)
  */
 export const savePhotoFinalOffline = async (
   workOrderId: number,
@@ -292,19 +288,10 @@ export const savePhotoFinalOffline = async (
   const actionId = `photo_final_${workOrderId}_${technicoId}_${Date.now()}`;
   
   try {
-    // 1. Salvar foto no armazenamento híbrido
-    const photoSaveResult = await hybridStorage.savePhoto(
-      photoUri,
-      'PHOTO_FINAL',
-      workOrderId,
-      actionId
-    );
+    console.log('💾 Salvando foto final diretamente no AsyncStorage (apenas URI)...');
     
-    if (!photoSaveResult.success) {
-      return { success: false, error: photoSaveResult.error };
-    }
-    
-    console.log('📸 Foto final salva no armazenamento híbrido:', photoSaveResult.id);
+    // 1. NOVO: Salvar apenas URI (sem conversão base64 para evitar SQLite)
+    // A conversão para base64 será feita apenas durante a sincronização
 
     // 2. Verificar conexão primeiro
     const isOnline = await checkNetworkConnection();
@@ -313,37 +300,48 @@ export const savePhotoFinalOffline = async (
       console.log('🌐 Conexão disponível, tentando salvar foto final online...');
       
       try {
-        // Converter foto para base64 para upload
-        const { base64 } = await hybridStorage.getPhotoAsBase64(photoSaveResult.id);
+        // Durante upload online, fazer conversão apenas se necessário
+        let photoValueForUpload = photoUri;
         
-        if (base64) {
-          // Criar arquivo temporário para upload
-          const tempUri = await createTempFileFromBase64(base64);
-          
-          if (tempUri) {
-            const { data: auditData, error: auditError } = await saveAuditoriaFinal(
-              workOrderId,
-              technicoId,
-              tempUri,
-              true, // trabalhoRealizado
-              '', // motivo
-              '' // comentario
-            );
+        // Se for URI, converter para base64 temporariamente para upload
+        if (photoUri.startsWith('file://')) {
+          try {
+            const FileSystem = await import('expo-file-system');
+            const fileInfo = await FileSystem.getInfoAsync(photoUri);
             
-            if (!auditError && auditData) {
-              console.log('✅ Foto final salva online com sucesso:', auditData.id);
-              return { success: true, savedOffline: false };
-            } else {
-              console.warn('⚠️ Falha ao salvar online, salvando offline...', auditError);
+            if (fileInfo.exists) {
+              const base64 = await FileSystem.readAsStringAsync(photoUri, {
+                encoding: FileSystem.EncodingType.Base64,
+              });
+              photoValueForUpload = `data:image/jpeg;base64,${base64}`;
             }
+          } catch (conversionError) {
+            console.warn('⚠️ Erro na conversão para upload, salvando offline:', conversionError);
+            // Continuar para salvar offline
           }
+        }
+        
+        const { data: auditData, error: auditError } = await saveAuditoriaFinal(
+          workOrderId,
+          technicoId,
+          photoValueForUpload,
+          true, // trabalhoRealizado
+          '', // motivo
+          '' // comentario
+        );
+        
+        if (!auditError && auditData) {
+          console.log('✅ Foto final salva online com sucesso:', auditData.id);
+          return { success: true, savedOffline: false };
+        } else {
+          console.warn('⚠️ Falha ao salvar online, salvando offline...', auditError);
         }
       } catch (onlineError) {
         console.warn('⚠️ Erro ao tentar salvar online, salvando offline...', onlineError);
       }
     }
 
-    // 3. Salvar ação offline
+    // 3. Salvar ação offline DIRETO NO ASYNCSTORAGE
     const offlineAction: OfflinePhotoAction = {
       id: actionId,
       type: 'PHOTO_FINAL',
@@ -351,15 +349,14 @@ export const savePhotoFinalOffline = async (
       workOrderId,
       technicoId,
       data: {
-        photoUri,
-        photoId: photoSaveResult.id,
+        photoUri: photoUri, // Salvar URI diretamente (sem conversão)
       },
       synced: false,
       attempts: 0
     };
 
     await saveOfflineAction(offlineAction);
-    console.log('📱 Foto final salva offline para sincronização posterior');
+    console.log('📱 Foto final salva offline (URI) para sincronização posterior');
 
     return { success: true, savedOffline: true, error: 'Foto salva offline' };
 
@@ -379,10 +376,34 @@ const syncAction = async (action: OfflineAction): Promise<boolean> => {
     switch (action.type) {
       case 'PHOTO_INICIO':
         try {
+          // Converter URI para base64 apenas durante sincronização
+          let photoValueToSync = action.data.photoUri;
+          
+          if (photoValueToSync && photoValueToSync.startsWith('file://')) {
+            try {
+              const FileSystem = await import('expo-file-system');
+              const fileInfo = await FileSystem.getInfoAsync(photoValueToSync);
+              
+              if (fileInfo.exists) {
+                const base64 = await FileSystem.readAsStringAsync(photoValueToSync, {
+                  encoding: FileSystem.EncodingType.Base64,
+                });
+                photoValueToSync = `data:image/jpeg;base64,${base64}`;
+                console.log('📸 URI convertido para base64 durante sincronização (PHOTO_INICIO)');
+              } else {
+                console.error('❌ Arquivo de foto inicial não encontrado:', photoValueToSync);
+                return false;
+              }
+            } catch (conversionError) {
+              console.error('❌ Erro na conversão de foto inicial:', conversionError);
+              return false;
+            }
+          }
+          
           const photoPromise = savePhotoInicio(
             action.workOrderId,
             action.technicoId,
-            action.data.photoUri
+            photoValueToSync
           );
           
           const { data: photoData, error: photoError } = await withTimeout(photoPromise, SYNC_TIMEOUT);
@@ -401,13 +422,37 @@ const syncAction = async (action: OfflineAction): Promise<boolean> => {
 
       case 'PHOTO_FINAL':
         try {
+          // Converter URI para base64 apenas durante sincronização
+          let photoValueToSync = action.data.photoUri;
+          
+          if (photoValueToSync && photoValueToSync.startsWith('file://')) {
+            try {
+              const FileSystem = await import('expo-file-system');
+              const fileInfo = await FileSystem.getInfoAsync(photoValueToSync);
+              
+              if (fileInfo.exists) {
+                const base64 = await FileSystem.readAsStringAsync(photoValueToSync, {
+                  encoding: FileSystem.EncodingType.Base64,
+                });
+                photoValueToSync = `data:image/jpeg;base64,${base64}`;
+                console.log('📸 URI convertido para base64 durante sincronização (PHOTO_FINAL)');
+              } else {
+                console.error('❌ Arquivo de foto final não encontrado:', photoValueToSync);
+                return false;
+              }
+            } catch (conversionError) {
+              console.error('❌ Erro na conversão de foto final:', conversionError);
+              return false;
+            }
+          }
+          
           // Para foto final, precisamos atualizar o registro existente de auditoria
           const { saveAuditoriaFinal } = await import('./auditService');
           
           const finalAuditPromise = saveAuditoriaFinal(
             action.workOrderId,
             action.technicoId,
-            action.data.photoUri,
+            photoValueToSync,
             true, // trabalhoRealizado
             '', // motivo
             '' // comentario
@@ -429,10 +474,34 @@ const syncAction = async (action: OfflineAction): Promise<boolean> => {
 
       case 'AUDITORIA_FINAL':
         try {
+          // Converter URI para base64 apenas durante sincronização  
+          let photoValueToSync = action.data.photoUri;
+          
+          if (photoValueToSync && photoValueToSync.startsWith('file://')) {
+            try {
+              const FileSystem = await import('expo-file-system');
+              const fileInfo = await FileSystem.getInfoAsync(photoValueToSync);
+              
+              if (fileInfo.exists) {
+                const base64 = await FileSystem.readAsStringAsync(photoValueToSync, {
+                  encoding: FileSystem.EncodingType.Base64,
+                });
+                photoValueToSync = `data:image/jpeg;base64,${base64}`;
+                console.log('📸 URI convertido para base64 durante sincronização (AUDITORIA_FINAL)');
+              } else {
+                console.error('❌ Arquivo de auditoria final não encontrado:', photoValueToSync);
+                return false;
+              }
+            } catch (conversionError) {
+              console.error('❌ Erro na conversão de auditoria final:', conversionError);
+              return false;
+            }
+          }
+          
           const auditPromise = saveAuditoriaFinal(
             action.workOrderId,
             action.technicoId,
-            action.data.photoUri,
+            photoValueToSync,
             action.data.trabalhoRealizado,
             action.data.motivo,
             action.data.comentario
@@ -454,23 +523,69 @@ const syncAction = async (action: OfflineAction): Promise<boolean> => {
 
       case 'DADOS_RECORD':
         try {
+          // Verificar se é foto extra (entrada_dados_id = null) ou foto normal
+          const isExtraPhoto = action.data.entradaDadosId === null;
+          
+          if (isExtraPhoto) {
+            console.log('📸 Sincronizando foto extra via ação offline...');
+          } else {
+            console.log('📸 Sincronizando dados normais da coleta...');
+          }
+          
+          // Converter URI para base64 apenas durante sincronização
+          let photoValueToSync = action.data.photoUri;
+          
+          if (photoValueToSync && photoValueToSync.startsWith('file://')) {
+            try {
+              const FileSystem = await import('expo-file-system');
+              const fileInfo = await FileSystem.getInfoAsync(photoValueToSync);
+              
+              if (fileInfo.exists) {
+                const base64 = await FileSystem.readAsStringAsync(photoValueToSync, {
+                  encoding: FileSystem.EncodingType.Base64,
+                });
+                photoValueToSync = `data:image/jpeg;base64,${base64}`;
+                console.log(`📸 URI convertido para base64 durante sincronização (${isExtraPhoto ? 'FOTO_EXTRA' : 'DADOS_RECORD'})`);
+              } else {
+                console.error('❌ Arquivo de dados não encontrado:', photoValueToSync);
+                return false;
+              }
+            } catch (conversionError) {
+              console.error('❌ Erro na conversão de dados:', conversionError);
+              return false;
+            }
+          }
+          
           const dadosPromise = saveDadosRecord(
             action.workOrderId,
-            action.data.entradaDadosId,
-            action.data.photoUri
+            action.data.entradaDadosId, // Pode ser null para fotos extras ou ID normal
+            photoValueToSync
           );
           
           const { data: dadosData, error: dadosError } = await withTimeout(dadosPromise, SYNC_TIMEOUT);
           
           if (dadosError) {
+            if (isExtraPhoto) {
+              console.error('❌ Erro ao sincronizar foto extra da coleta:', dadosError);
+            } else {
             console.error('❌ Erro ao sincronizar dados da coleta:', dadosError);
+            }
             return false;
           }
           
+          if (isExtraPhoto) {
+            console.log('✅ Foto extra da coleta sincronizada:', dadosData?.id);
+          } else {
           console.log('✅ Dados da coleta sincronizados:', dadosData?.id);
+          }
           return true;
         } catch (dadosSyncError) {
+          const isExtraPhoto = action.data.entradaDadosId === null;
+          if (isExtraPhoto) {
+            console.error('💥 Erro inesperado ao sincronizar foto extra da coleta:', dadosSyncError);
+          } else {
           console.error('💥 Erro inesperado ao sincronizar dados da coleta:', dadosSyncError);
+          }
           return false;
         }
 
@@ -580,9 +695,21 @@ const syncLocalWorkOrderStatuses = async (): Promise<{ synced: number; failed: n
           await markLocalStatusAsSynced(parseInt(workOrderId));
           synced++;
           
-          // Se foi finalizada, notificar callbacks
+          // Se foi finalizada, limpar TODOS os dados locais e notificar callbacks
           if (appStatus === 'finalizada') {
+            console.log(`🧹 OS ${workOrderId} finalizada via sincronização - limpando dados locais`);
+            
+            // Limpar todos os dados locais da OS finalizada
+            const { clearAllLocalDataForWorkOrder } = await import('./localStatusService');
+            await clearAllLocalDataForWorkOrder(parseInt(workOrderId));
+            
+            // Limpar ações offline específicas desta OS
+            await clearOfflineActionsForWorkOrder(parseInt(workOrderId));
+            
+            // Notificar callbacks
             notifyOSFinalizadaCallbacks(parseInt(workOrderId));
+            
+            console.log(`✅ Dados locais da OS ${workOrderId} limpos após sincronização de status`);
           }
         }
         
@@ -598,6 +725,136 @@ const syncLocalWorkOrderStatuses = async (): Promise<{ synced: number; failed: n
   } catch (error) {
     console.error('💥 Erro na sincronização de status locais:', error);
     return { synced: 0, failed: 0 };
+  }
+};
+
+/**
+ * Sincroniza fotos de dados coletados que estão em offline_dados_records
+ * mas ainda não foram sincronizadas com a tabela dados do Supabase
+ */
+export const syncOfflineDadosRecords = async (): Promise<{
+  success: boolean;
+  synced: number;
+  errors: string[];
+}> => {
+  const errors: string[] = [];
+  let syncedCount = 0;
+
+  try {
+    console.log('📸 Verificando fotos de dados coletados offline...');
+
+    const offlineData = await AsyncStorage.getItem('offline_dados_records');
+    if (!offlineData) {
+      return { success: true, synced: 0, errors: [] };
+    }
+
+    const records = JSON.parse(offlineData);
+    const recordsToSync = Object.entries(records).filter(([_, record]: [string, any]) => !record.synced);
+
+    if (recordsToSync.length === 0) {
+      return { success: true, synced: 0, errors: [] };
+    }
+
+    console.log(`📸 ${recordsToSync.length} fotos de dados encontradas para sincronizar`);
+
+    // Verificar se está online
+    const isOnline = await checkNetworkConnection();
+    if (!isOnline) {
+      console.log('📱 Sem conexão - pulando sincronização de dados coletados');
+      return { success: true, synced: 0, errors: [] };
+    }
+
+    // Sincronizar cada registro
+    for (const [recordKey, record] of recordsToSync) {
+      try {
+        const recordData = record as any;
+        
+        console.log(`🔄 Sincronizando foto de dados: ${recordKey}`);
+        
+        // Verificar se o valor já está em base64 ou é um URI
+        let photoValueToSync = recordData.valor;
+        
+        if (photoValueToSync && typeof photoValueToSync === 'string') {
+          // Se já é base64, usar diretamente
+          if (photoValueToSync.startsWith('data:image/')) {
+            console.log('📸 Foto já está em base64, usando diretamente');
+          } 
+          // Se é um URI de arquivo, tentar converter para base64
+          else if (photoValueToSync.startsWith('file://')) {
+            console.log('📸 Tentando converter URI para base64...');
+            try {
+              const FileSystem = await import('expo-file-system');
+              const fileInfo = await FileSystem.getInfoAsync(photoValueToSync);
+              
+              if (fileInfo.exists) {
+                const base64 = await FileSystem.readAsStringAsync(photoValueToSync, {
+                  encoding: FileSystem.EncodingType.Base64,
+                });
+                photoValueToSync = `data:image/jpeg;base64,${base64}`;
+                console.log('✅ Conversão URI -> base64 bem-sucedida');
+              } else {
+                // Arquivo não existe mais - remover registro órfão
+                console.warn(`⚠️ Arquivo não encontrado, removendo registro órfão: ${recordKey}`);
+                delete records[recordKey];
+                continue;
+              }
+            } catch (conversionError) {
+              console.error(`❌ Erro ao converter URI para base64 (${recordKey}):`, conversionError);
+              // Remover registro órfão que não pode ser convertido
+              delete records[recordKey];
+              errors.push(`Registro órfão removido: ${recordKey}`);
+              continue;
+            }
+          } 
+          // Formato desconhecido
+          else {
+            console.warn(`⚠️ Formato de foto desconhecido em ${recordKey}, removendo`);
+            delete records[recordKey];
+            errors.push(`Formato inválido removido: ${recordKey}`);
+            continue;
+          }
+        } else {
+          console.warn(`⚠️ Valor de foto inválido em ${recordKey}, removendo`);
+          delete records[recordKey];
+          errors.push(`Valor inválido removido: ${recordKey}`);
+          continue;
+        }
+        
+        // Sincronizar com o Supabase usando o valor em base64
+        const { data, error } = await saveDadosRecord(
+          recordData.ordem_servico_id,
+          recordData.entrada_dados_id,
+          photoValueToSync
+        );
+        
+        if (!error && data) {
+          // Sucesso - marcar como sincronizado
+          records[recordKey].synced = true;
+          records[recordKey].synced_at = new Date().toISOString();
+          records[recordKey].supabase_id = data.id;
+          syncedCount++;
+          
+          console.log(`✅ Foto de dados sincronizada: ${recordKey} -> Supabase ID: ${data.id}`);
+        } else {
+          errors.push(`Erro ao sincronizar ${recordKey}: ${error}`);
+          console.error(`❌ Erro ao sincronizar foto de dados ${recordKey}:`, error);
+        }
+      } catch (syncError) {
+        errors.push(`Erro inesperado ao sincronizar ${recordKey}: ${syncError}`);
+        console.error(`💥 Erro inesperado ao sincronizar ${recordKey}:`, syncError);
+      }
+    }
+
+    // Salvar estado atualizado (incluindo remoção de registros órfãos)
+    await AsyncStorage.setItem('offline_dados_records', JSON.stringify(records));
+
+    console.log(`✅ ${syncedCount} fotos de dados sincronizadas com Supabase`);
+    
+    return { success: true, synced: syncedCount, errors };
+
+  } catch (error) {
+    console.error('💥 Erro ao sincronizar fotos de dados offline:', error);
+    return { success: false, synced: syncedCount, errors: [error instanceof Error ? error.message : String(error)] };
   }
 };
 
@@ -653,6 +910,15 @@ export const syncAllPendingActions = async (): Promise<{
       }
     }
 
+    // NOVO: Sincronizar fotos de dados coletados offline
+    try {
+      const { synced: dadosSynced, errors: dadosErrors } = await syncOfflineDadosRecords();
+      synced += dadosSynced;
+      errors.push(...dadosErrors);
+    } catch (dadosError) {
+      errors.push(`Erro ao sincronizar dados coletados: ${dadosError instanceof Error ? dadosError.message : String(dadosError)}`);
+    }
+
     // NOVA FUNCIONALIDADE: Sincronizar fotos extras
     try {
       const { synced: extrasSynced, errors: extrasErrors } = await syncFotosExtrasOffline();
@@ -662,19 +928,18 @@ export const syncAllPendingActions = async (): Promise<{
       errors.push(`Erro ao sincronizar fotos extras: ${extrasError instanceof Error ? extrasError.message : String(extrasError)}`);
     }
 
-    console.log(`✅ Sincronização concluída: ${synced}/${pendingActions.length} ações sincronizadas`);
+    console.log(`🔄 Sincronização concluída: ${synced} itens sincronizados`);
     
-    return { 
-      total: pendingActions.length, 
-      synced, 
-      errors 
-    };
+    if (errors.length > 0) {
+      console.warn(`⚠️ ${errors.length} erros durante sincronização:`, errors.slice(0, 3));
+    }
 
+    return { total: pendingActions.length, synced, errors };
   } catch (error) {
-    console.error('❌ Erro na sincronização:', error);
+    console.error('💥 Erro na sincronização:', error);
     return { total: 0, synced: 0, errors: [error instanceof Error ? error.message : String(error)] };
   } finally {
-    // Liberar lock
+    // Remover lock
     isSyncing = false;
   }
 };
@@ -980,7 +1245,7 @@ const notifySyncCallbacks = (result: { total: number; synced: number; failed: nu
 };
 
 /**
- * Salva dados da coleta (fotos) com suporte offline usando armazenamento híbrido
+ * Salva dados da coleta (fotos) USANDO ASYNCSTORAGE DIRETO (SEM HYBRIDSTORAGE)
  */
 export const saveDadosRecordOffline = async (
   workOrderId: number,
@@ -991,21 +1256,12 @@ export const saveDadosRecordOffline = async (
   const actionId = `dados_record_${workOrderId}_${entradaDadosId}_${Date.now()}`;
   
   try {
-    // 1. Salvar foto no armazenamento híbrido
-    const photoSaveResult = await hybridStorage.savePhoto(
-      photoUri,
-      'DADOS_RECORD',
-      workOrderId,
-      actionId
-    );
+    console.log('💾 Salvando dados da coleta diretamente no AsyncStorage (apenas URI)...');
     
-    if (!photoSaveResult.success) {
-      return { success: false, error: photoSaveResult.error };
-    }
-    
-    console.log('📸 Foto de dados salva no armazenamento híbrido:', photoSaveResult.id);
+    // 1. NOVO: Salvar apenas URI (sem conversão base64 para evitar SQLite)
+    // A conversão para base64 será feita apenas durante a sincronização
 
-    // 2. Salvar ação offline
+    // 2. Salvar ação offline DIRETO NO ASYNCSTORAGE
     const offlineAction: OfflineAction = {
       id: actionId,
       type: 'DADOS_RECORD',
@@ -1014,8 +1270,7 @@ export const saveDadosRecordOffline = async (
       technicoId,
       data: {
         entradaDadosId,
-        photoUri,
-        photoId: photoSaveResult.id,
+        photoUri: photoUri, // Salvar URI diretamente (sem conversão)
       },
       synced: false,
       attempts: 0
@@ -1029,29 +1284,45 @@ export const saveDadosRecordOffline = async (
     if (isOnline) {
       console.log('🌐 Conexão disponível, tentando salvar dados da coleta online...');
       
-      // Converter foto para base64 para upload
-      const { base64 } = await hybridStorage.getPhotoAsBase64(photoSaveResult.id);
-      
-      if (base64) {
-        // Criar arquivo temporário para upload
-        const tempUri = await createTempFileFromBase64(base64);
+      try {
+        // Durante upload online, fazer conversão apenas se necessário
+        let photoValueForUpload = photoUri;
         
-        if (tempUri) {
-          const { data, error } = await saveDadosRecord(workOrderId, entradaDadosId, tempUri);
-          
-          if (!error && data) {
-            // Sucesso online - marcar como sincronizado
-            await markActionAsSynced(actionId);
-            return { success: true };
-          } else {
-            // Falha online - manter offline para sincronização posterior
-            return { success: true, savedOffline: true, error: `Salvo offline: ${error}` };
+        // Se for URI, converter para base64 temporariamente para upload
+        if (photoUri.startsWith('file://')) {
+          try {
+            const FileSystem = await import('expo-file-system');
+            const fileInfo = await FileSystem.getInfoAsync(photoUri);
+            
+            if (fileInfo.exists) {
+              const base64 = await FileSystem.readAsStringAsync(photoUri, {
+                encoding: FileSystem.EncodingType.Base64,
+              });
+              photoValueForUpload = `data:image/jpeg;base64,${base64}`;
+            }
+          } catch (conversionError) {
+            console.warn('⚠️ Erro na conversão para upload, mantendo offline:', conversionError);
+            return { success: true, savedOffline: true, error: 'Dados salvos offline' };
           }
         }
+        
+        const { data, error } = await saveDadosRecord(workOrderId, entradaDadosId, photoValueForUpload);
+        
+        if (!error && data) {
+          // Sucesso online - marcar como sincronizado
+          await markActionAsSynced(actionId);
+          console.log('✅ Dados da coleta salvos online com sucesso');
+          return { success: true };
+        } else {
+          console.warn('⚠️ Erro ao salvar online, mantendo offline:', error);
+        }
+      } catch (onlineError) {
+        console.warn('⚠️ Erro ao tentar upload online:', onlineError);
       }
     }
     
-    return { success: true, savedOffline: true, error: 'Sem conexão - salvo offline' };
+    console.log('📱 Dados da coleta salvos offline (URI) para sincronização posterior');
+    return { success: true, savedOffline: true, error: 'Dados salvos offline' };
 
   } catch (error) {
     console.error('❌ Erro ao salvar dados da coleta offline:', error);
@@ -1187,8 +1458,7 @@ export const saveChecklistEtapaOffline = async (
 
 /**
  * Sincroniza fotos extras offline
- * NOTA: Fotos extras não são sincronizadas com o servidor
- * pois não há entrada correspondente na tabela entrada_dados
+ * NOVO: Agora sincroniza fotos extras com o servidor usando entrada_dados_id = null
  */
 export const syncFotosExtrasOffline = async (): Promise<{
   success: boolean;
@@ -1199,7 +1469,7 @@ export const syncFotosExtrasOffline = async (): Promise<{
   let syncedCount = 0;
 
   try {
-    console.log('📸 Verificando fotos extras offline...');
+    console.log('📸 Verificando fotos extras offline para sincronização...');
 
     const offlineExtrasData = await AsyncStorage.getItem('offline_fotos_extras');
     if (!offlineExtrasData) {
@@ -1213,35 +1483,314 @@ export const syncFotosExtrasOffline = async (): Promise<{
       return { success: true, synced: 0, errors: [] };
     }
 
-    console.log(`📸 ${recordsToSync.length} fotos extras encontradas (mantidas offline)`);
+    console.log(`📸 ${recordsToSync.length} fotos extras encontradas para sincronização`);
 
-    // FOTOS EXTRAS PERMANECEM OFFLINE
-    // Não há como sincronizar fotos extras com o servidor pois não têm entrada_dados_id válida
-    // Marcar todas como "sincronizadas" para não tentar novamente
+    // Verificar se está online
+    const isOnline = await checkNetworkConnection();
+    if (!isOnline) {
+      console.log('📱 Sem conexão - pulando sincronização de fotos extras');
+      return { success: true, synced: 0, errors: [] };
+    }
+
+    // NOVO: Sincronizar cada foto extra com o servidor
     for (const [recordKey, record] of recordsToSync) {
       try {
         const recordData = record as any;
         
-        // Marcar como sincronizada (mas mantém offline)
-        extrasRecords[recordKey].synced = true;
-        extrasRecords[recordKey].synced_at = new Date().toISOString();
-        extrasRecords[recordKey].sync_note = 'Mantida offline - não sincronizada com servidor';
-        syncedCount++;
-
-        console.log(`📸 Foto extra marcada como processada: ${recordKey}`);
+        console.log(`🔄 Sincronizando foto extra: ${recordKey}`);
+        
+        // Verificar se o valor já está em base64 ou é um URI
+        let photoValueToSync = recordData.valor;
+        
+        if (photoValueToSync && typeof photoValueToSync === 'string') {
+          // Se já é base64, usar diretamente
+          if (photoValueToSync.startsWith('data:image/')) {
+            console.log('📸 Foto extra já está em base64, usando diretamente');
+          } 
+          // Se é um URI de arquivo, tentar converter para base64
+          else if (photoValueToSync.startsWith('file://')) {
+            console.log('📸 Tentando converter URI de foto extra para base64...');
+            try {
+              const FileSystem = await import('expo-file-system');
+              const fileInfo = await FileSystem.getInfoAsync(photoValueToSync);
+              
+              if (fileInfo.exists) {
+                const base64 = await FileSystem.readAsStringAsync(photoValueToSync, {
+                  encoding: FileSystem.EncodingType.Base64,
+                });
+                photoValueToSync = `data:image/jpeg;base64,${base64}`;
+                console.log('✅ Conversão URI -> base64 bem-sucedida para foto extra');
+              } else {
+                // Arquivo não existe mais - remover registro órfão
+                console.warn(`⚠️ Arquivo de foto extra não encontrado, removendo registro órfão: ${recordKey}`);
+                delete extrasRecords[recordKey];
+                continue;
+              }
+            } catch (conversionError) {
+              console.error(`❌ Erro ao converter URI de foto extra para base64 (${recordKey}):`, conversionError);
+              // Remover registro órfão que não pode ser convertido
+              delete extrasRecords[recordKey];
+              errors.push(`Registro de foto extra órfão removido: ${recordKey}`);
+              continue;
+            }
+          } 
+          // Formato desconhecido
+          else {
+            console.warn(`⚠️ Formato de foto extra desconhecido em ${recordKey}, removendo`);
+            delete extrasRecords[recordKey];
+            errors.push(`Formato de foto extra inválido removido: ${recordKey}`);
+            continue;
+          }
+        } else {
+          console.warn(`⚠️ Valor de foto extra inválido em ${recordKey}, removendo`);
+          delete extrasRecords[recordKey];
+          errors.push(`Valor de foto extra inválido removido: ${recordKey}`);
+          continue;
+        }
+        
+        // NOVO: Sincronizar com o Supabase usando entrada_dados_id = null para fotos extras
+        const { data, error } = await saveDadosRecord(
+          recordData.ordem_servico_id,
+          null, // entrada_dados_id especial para fotos extras
+          photoValueToSync
+        );
+        
+        if (!error && data) {
+          // Sucesso - marcar como sincronizado
+          extrasRecords[recordKey].synced = true;
+          extrasRecords[recordKey].synced_at = new Date().toISOString();
+          extrasRecords[recordKey].supabase_id = data.id;
+          syncedCount++;
+          
+          console.log(`✅ Foto extra sincronizada: ${recordKey} -> Supabase ID: ${data.id}`);
+        } else {
+          errors.push(`Erro ao sincronizar foto extra ${recordKey}: ${error}`);
+          console.error(`❌ Erro ao sincronizar foto extra ${recordKey}:`, error);
+        }
       } catch (syncError) {
-        errors.push(`Erro ao processar foto extra ${recordKey}: ${syncError}`);
+        errors.push(`Erro inesperado ao sincronizar foto extra ${recordKey}: ${syncError}`);
+        console.error(`💥 Erro inesperado ao sincronizar foto extra ${recordKey}:`, syncError);
       }
     }
 
-    // Salvar estado atualizado
+    // Salvar estado atualizado (incluindo remoção de registros órfãos)
     await AsyncStorage.setItem('offline_fotos_extras', JSON.stringify(extrasRecords));
 
-    console.log(`✅ ${syncedCount} fotos extras processadas (mantidas offline)`);
+    console.log(`✅ ${syncedCount} fotos extras sincronizadas com Supabase`);
     return { success: true, synced: syncedCount, errors };
   } catch (error) {
-    console.error('❌ Erro ao processar fotos extras offline:', error);
+    console.error('❌ Erro ao sincronizar fotos extras offline:', error);
     return { success: false, synced: syncedCount, errors: [...errors, error instanceof Error ? error.message : String(error)] };
+  }
+}; 
+
+/**
+ * Limpa dados órfãos ao inicializar o app
+ * Remove registros offline que apontam para arquivos que não existem mais
+ */
+export const cleanOrphanedOfflineData = async (): Promise<{
+  success: boolean;
+  cleaned: {
+    dados_records: number;
+    fotos_extras: number;
+    actions: number;
+  };
+  errors: string[];
+}> => {
+  const errors: string[] = [];
+  const cleaned = {
+    dados_records: 0,
+    fotos_extras: 0,
+    actions: 0
+  };
+
+  try {
+    console.log('🧹 Iniciando limpeza de dados órfãos...');
+
+    // 1. Limpar offline_dados_records órfãos
+    try {
+      const offlineDataStr = await AsyncStorage.getItem('offline_dados_records');
+      if (offlineDataStr) {
+        const records = JSON.parse(offlineDataStr);
+        const validRecords: any = {};
+        
+        for (const [recordKey, record] of Object.entries(records)) {
+          const recordData = record as any;
+          
+          if (recordData.valor && typeof recordData.valor === 'string') {
+            // Se já é base64, manter
+            if (recordData.valor.startsWith('data:image/')) {
+              validRecords[recordKey] = record;
+            }
+            // Se é URI, verificar se arquivo existe
+            else if (recordData.valor.startsWith('file://')) {
+              try {
+                const FileSystem = await import('expo-file-system');
+                const fileInfo = await FileSystem.getInfoAsync(recordData.valor);
+                
+                if (fileInfo.exists) {
+                  validRecords[recordKey] = record;
+                } else {
+                  cleaned.dados_records++;
+                  console.log(`🗑️ Removido registro órfão: ${recordKey}`);
+                }
+              } catch (checkError) {
+                cleaned.dados_records++;
+                console.log(`🗑️ Removido registro com erro: ${recordKey}`);
+              }
+            }
+            // Formato desconhecido, remover
+            else {
+              cleaned.dados_records++;
+              console.log(`🗑️ Removido registro formato inválido: ${recordKey}`);
+            }
+          } else {
+            cleaned.dados_records++;
+            console.log(`🗑️ Removido registro valor inválido: ${recordKey}`);
+          }
+        }
+        
+        if (cleaned.dados_records > 0) {
+          await AsyncStorage.setItem('offline_dados_records', JSON.stringify(validRecords));
+          console.log(`✅ ${cleaned.dados_records} registros órfãos removidos de offline_dados_records`);
+        }
+      }
+    } catch (error) {
+      errors.push(`Erro ao limpar offline_dados_records: ${error}`);
+    }
+
+    // 2. Limpar offline_fotos_extras órfãs
+    try {
+      const offlineExtrasStr = await AsyncStorage.getItem('offline_fotos_extras');
+      if (offlineExtrasStr) {
+        const extrasRecords = JSON.parse(offlineExtrasStr);
+        const validExtras: any = {};
+        
+        for (const [recordKey, record] of Object.entries(extrasRecords)) {
+          const recordData = record as any;
+          
+          if (recordData.valor && typeof recordData.valor === 'string') {
+            // Se já é base64, manter
+            if (recordData.valor.startsWith('data:image/')) {
+              validExtras[recordKey] = record;
+            }
+            // Se é URI, verificar se arquivo existe
+            else if (recordData.valor.startsWith('file://')) {
+              try {
+                const FileSystem = await import('expo-file-system');
+                const fileInfo = await FileSystem.getInfoAsync(recordData.valor);
+                
+                if (fileInfo.exists) {
+                  validExtras[recordKey] = record;
+                } else {
+                  cleaned.fotos_extras++;
+                  console.log(`🗑️ Removida foto extra órfã: ${recordKey}`);
+                }
+              } catch (checkError) {
+                cleaned.fotos_extras++;
+                console.log(`🗑️ Removida foto extra com erro: ${recordKey}`);
+              }
+            }
+            // Formato desconhecido, remover
+            else {
+              cleaned.fotos_extras++;
+              console.log(`🗑️ Removida foto extra formato inválido: ${recordKey}`);
+            }
+          } else {
+            cleaned.fotos_extras++;
+            console.log(`🗑️ Removida foto extra valor inválido: ${recordKey}`);
+          }
+        }
+        
+        if (cleaned.fotos_extras > 0) {
+          await AsyncStorage.setItem('offline_fotos_extras', JSON.stringify(validExtras));
+          console.log(`✅ ${cleaned.fotos_extras} fotos extras órfãs removidas`);
+        }
+      }
+    } catch (error) {
+      errors.push(`Erro ao limpar offline_fotos_extras: ${error}`);
+    }
+
+    // 3. Limpar ações offline órfãs
+    try {
+      const actions = await getOfflineActions();
+      const validActions: OfflineAction[] = [];
+      
+      for (const action of actions) {
+        // Se a ação tem dados de foto
+        if ((action.type === 'DADOS_RECORD' || action.type === 'PHOTO_INICIO' || action.type === 'PHOTO_FINAL') && action.data.photoUri) {
+          const photoUri = action.data.photoUri;
+          const isExtraPhoto = action.type === 'DADOS_RECORD' && action.data.entradaDadosId === null;
+          
+          // Se já é base64, manter
+          if (photoUri.startsWith('data:image/')) {
+            validActions.push(action);
+          }
+          // Se é URI, verificar se arquivo existe
+          else if (photoUri.startsWith('file://')) {
+            try {
+              const FileSystem = await import('expo-file-system');
+              const fileInfo = await FileSystem.getInfoAsync(photoUri);
+              
+              if (fileInfo.exists) {
+                validActions.push(action);
+              } else {
+                cleaned.actions++;
+                if (isExtraPhoto) {
+                  console.log(`🗑️ Removida ação de foto extra órfã: ${action.id}`);
+                } else {
+                  console.log(`🗑️ Removida ação órfã: ${action.id}`);
+                }
+              }
+            } catch (checkError) {
+              cleaned.actions++;
+              if (isExtraPhoto) {
+                console.log(`🗑️ Removida ação de foto extra com erro: ${action.id}`);
+              } else {
+                console.log(`🗑️ Removida ação com erro: ${action.id}`);
+              }
+            }
+          }
+          // Formato desconhecido, remover
+          else {
+            cleaned.actions++;
+            if (isExtraPhoto) {
+              console.log(`🗑️ Removida ação de foto extra formato inválido: ${action.id}`);
+            } else {
+              console.log(`🗑️ Removida ação formato inválido: ${action.id}`);
+            }
+          }
+        } else {
+          // Ações que não são de foto, manter
+          validActions.push(action);
+        }
+      }
+      
+      if (cleaned.actions > 0) {
+        await AsyncStorage.setItem(OFFLINE_ACTIONS_KEY, JSON.stringify(validActions));
+        console.log(`✅ ${cleaned.actions} ações órfãs removidas (incluindo fotos extras)`);
+      }
+    } catch (error) {
+      errors.push(`Erro ao limpar ações offline: ${error}`);
+    }
+
+    const totalCleaned = cleaned.dados_records + cleaned.fotos_extras + cleaned.actions;
+    
+    if (totalCleaned > 0) {
+      console.log(`🧹 Limpeza concluída: ${totalCleaned} itens órfãos removidos`);
+    } else {
+      console.log('✅ Nenhum dado órfão encontrado');
+    }
+
+    return { success: true, cleaned, errors };
+
+  } catch (error) {
+    console.error('💥 Erro na limpeza de dados órfãos:', error);
+    return { 
+      success: false, 
+      cleaned, 
+      errors: [...errors, error instanceof Error ? error.message : String(error)] 
+    };
   }
 }; 
 
@@ -1275,44 +1824,739 @@ export const debugClearOrphanedInitialPhotos = async (workOrderId: number): Prom
       console.log(`🗑️ DEBUG: Removidas ${initialPhotoActions.length} ações órfãs de foto inicial`);
     }
 
-    // 2. Limpar fotos órfãs no hybridStorage
-    const photos = await hybridStorage.getPhotosByWorkOrder(workOrderId);
-    const initialPhotos = photos.filter(photo => photo.actionType === 'PHOTO_INICIO');
+    // 2. REMOVIDO: Limpeza no hybridStorage (não usado mais para evitar database full)
+    // const photos = await hybridStorage.getPhotosByWorkOrder(workOrderId);
+    // const initialPhotos = photos.filter(photo => photo.actionType === 'PHOTO_INICIO');
     
-    console.log(`📸 DEBUG: Encontradas ${initialPhotos.length} fotos iniciais órfãs:`);
-    for (const photo of initialPhotos) {
-      console.log(`   - ID: ${photo.id}, Arquivo: ${photo.fileName}`);
-      // CORREÇÃO: Usar método disponível no hybridStorage
-      try {
-        await AsyncStorage.removeItem(`photo_${photo.id}`);
-        console.log(`🗑️ DEBUG: Metadados da foto órfã removidos: ${photo.id}`);
-      } catch (removeError) {
-        console.warn(`⚠️ DEBUG: Erro ao remover foto órfã ${photo.id}:`, removeError);
-      }
-    }
-
-    // 3. Limpar metadados órfãos
-    const allKeys = await AsyncStorage.getAllKeys();
-    const photoKeys = allKeys.filter(key => key.startsWith('photo_'));
+    console.log(`📸 DEBUG: Limpeza de fotos órfãs do hybridStorage DESABILITADA (usando AsyncStorage direto)`);
     
-    for (const key of photoKeys) {
-      try {
-        const metadataStr = await AsyncStorage.getItem(key);
-        if (metadataStr) {
-          const metadata = JSON.parse(metadataStr);
-          if (metadata.workOrderId === workOrderId && metadata.actionType === 'PHOTO_INICIO') {
-            await AsyncStorage.removeItem(key);
-            console.log(`🗑️ DEBUG: Metadados órfãos removidos: ${key}`);
-          }
-        }
-      } catch (parseError) {
-        console.warn(`⚠️ DEBUG: Erro ao processar ${key}:`, parseError);
+    // Nova lógica: Limpar dados órfãos apenas do AsyncStorage
+    try {
+      // Limpar dados de fotos órfãs que podem estar em chaves específicas
+      const allKeys = await AsyncStorage.getAllKeys();
+      const orphanedKeys = allKeys.filter(key => 
+        key.includes(`_${workOrderId}_`) && 
+        (key.startsWith('photo_') || key.startsWith('temp_'))
+      );
+      
+      if (orphanedKeys.length > 0) {
+        await AsyncStorage.multiRemove(orphanedKeys);
+        console.log(`🗑️ DEBUG: Removidas ${orphanedKeys.length} chaves órfãs relacionadas à OS ${workOrderId}`);
       }
+    } catch (cleanupError) {
+      console.warn(`⚠️ DEBUG: Erro na limpeza de dados órfãos:`, cleanupError);
     }
-
-    console.log(`✅ DEBUG: Limpeza de dados órfãos concluída para OS ${workOrderId}`);
 
   } catch (error) {
     console.error(`❌ DEBUG: Erro ao limpar dados órfãos:`, error);
   }
 }; 
+
+/**
+ * Debug: Analisa status de sincronização de todas as fotos de uma OS
+ * USAR PARA DEBUG: Mostra detalhes de sincronização de fotos
+ */
+export const debugSyncStatusForWorkOrder = async (workOrderId: number): Promise<void> => {
+  try {
+    console.log(`🔍 ===== DEBUG SYNC STATUS - OS ${workOrderId} =====`);
+    
+    let totalFotos = 0;
+    let fotosSincronizadas = 0;
+    let fotosNaoSincronizadas = 0;
+    
+    // 1. Verificar offline_dados_records (fotos principais)
+    console.log('📸 1. VERIFICANDO OFFLINE_DADOS_RECORDS (Fotos Principais):');
+    try {
+      const offlineData = await AsyncStorage.getItem('offline_dados_records');
+      if (offlineData) {
+        const records = JSON.parse(offlineData);
+        const workOrderRecords = Object.entries(records).filter(([_, record]: [string, any]) => 
+          record.ordem_servico_id === workOrderId
+        );
+        
+        console.log(`📱 Total de registros para OS ${workOrderId}: ${workOrderRecords.length}`);
+        
+        workOrderRecords.forEach(([recordKey, record], index) => {
+          const recordData = record as any;
+          totalFotos++;
+          
+          if (recordData.synced) {
+            fotosSincronizadas++;
+            console.log(`   ✅ ${index + 1}. ${recordKey}: SINCRONIZADA`);
+            console.log(`      - Entrada ID: ${recordData.entrada_dados_id}`);
+            console.log(`      - Supabase ID: ${recordData.supabase_id || 'N/A'}`);
+            console.log(`      - Sync Date: ${recordData.synced_at || 'N/A'}`);
+          } else {
+            fotosNaoSincronizadas++;
+            console.log(`   ❌ ${index + 1}. ${recordKey}: NÃO SINCRONIZADA`);
+            console.log(`      - Entrada ID: ${recordData.entrada_dados_id}`);
+            console.log(`      - Valor: ${recordData.valor ? recordData.valor.substring(0, 30) + '...' : 'VAZIO'}`);
+            console.log(`      - Ativo: ${recordData.ativo}`);
+          }
+        });
+      } else {
+        console.log('📱 Nenhum offline_dados_records encontrado');
+      }
+    } catch (error) {
+      console.error('❌ Erro ao verificar offline_dados_records:', error);
+    }
+    
+    // 2. Verificar offline_fotos_extras (fotos extras)
+    console.log('\n📸 2. VERIFICANDO OFFLINE_FOTOS_EXTRAS (Fotos Extras):');
+    try {
+      const offlineExtrasData = await AsyncStorage.getItem('offline_fotos_extras');
+      if (offlineExtrasData) {
+        const extrasRecords = JSON.parse(offlineExtrasData);
+        const workOrderExtras = Object.entries(extrasRecords).filter(([_, record]: [string, any]) => 
+          record.ordem_servico_id === workOrderId
+        );
+        
+        console.log(`📱 Total de fotos extras para OS ${workOrderId}: ${workOrderExtras.length}`);
+        
+        workOrderExtras.forEach(([recordKey, record], index) => {
+          const recordData = record as any;
+          totalFotos++;
+          
+          if (recordData.synced) {
+            fotosSincronizadas++;
+            console.log(`   ✅ ${index + 1}. ${recordKey}: SINCRONIZADA`);
+            console.log(`      - Etapa ID: ${recordData.etapa_id}`);
+            console.log(`      - Título: ${recordData.titulo}`);
+            console.log(`      - Supabase ID: ${recordData.supabase_id || 'N/A'}`);
+          } else {
+            fotosNaoSincronizadas++;
+            console.log(`   ❌ ${index + 1}. ${recordKey}: NÃO SINCRONIZADA`);
+            console.log(`      - Etapa ID: ${recordData.etapa_id}`);
+            console.log(`      - Título: ${recordData.titulo}`);
+            console.log(`      - Valor: ${recordData.valor ? recordData.valor.substring(0, 30) + '...' : 'VAZIO'}`);
+          }
+        });
+      } else {
+        console.log('📱 Nenhuma offline_fotos_extras encontrada');
+      }
+    } catch (error) {
+      console.error('❌ Erro ao verificar offline_fotos_extras:', error);
+    }
+    
+    // 3. Verificar offline_actions (ações pendentes)
+    console.log('\n📸 3. VERIFICANDO OFFLINE_ACTIONS (Ações Pendentes):');
+    try {
+      const actions = await getOfflineActions();
+      const workOrderActions = actions.filter(action => action.workOrderId === workOrderId);
+      
+      console.log(`📱 Total de ações para OS ${workOrderId}: ${workOrderActions.length}`);
+      
+      const photoActions = workOrderActions.filter(action => 
+        action.type === 'DADOS_RECORD' || action.type === 'PHOTO_INICIO' || action.type === 'PHOTO_FINAL'
+      );
+      
+      console.log(`📸 Ações relacionadas a fotos: ${photoActions.length}`);
+      
+      photoActions.forEach((action, index) => {
+        if (action.synced) {
+          console.log(`   ✅ ${index + 1}. ${action.id}: SINCRONIZADA`);
+          console.log(`      - Tipo: ${action.type}`);
+          console.log(`      - Tentativas: ${action.attempts}`);
+        } else {
+          console.log(`   ❌ ${index + 1}. ${action.id}: NÃO SINCRONIZADA`);
+          console.log(`      - Tipo: ${action.type}`);
+          console.log(`      - Tentativas: ${action.attempts}/${MAX_SYNC_ATTEMPTS}`);
+          if (action.type === 'DADOS_RECORD') {
+            console.log(`      - Entrada ID: ${action.data.entradaDadosId}`);
+            const isExtra = action.data.entradaDadosId === null;
+            console.log(`      - É foto extra: ${isExtra ? 'SIM' : 'NÃO'}`);
+          }
+        }
+      });
+    } catch (error) {
+      console.error('❌ Erro ao verificar offline_actions:', error);
+    }
+    
+    // 4. Resumo final
+    console.log('\n📊 ===== RESUMO FINAL =====');
+    console.log(`📸 Total de fotos encontradas: ${totalFotos}`);
+    console.log(`✅ Fotos sincronizadas: ${fotosSincronizadas}`);
+    console.log(`❌ Fotos não sincronizadas: ${fotosNaoSincronizadas}`);
+    console.log(`📈 Taxa de sincronização: ${totalFotos > 0 ? Math.round((fotosSincronizadas / totalFotos) * 100) : 0}%`);
+    
+    if (fotosNaoSincronizadas > 0) {
+      console.log('\n🔧 SUGESTÕES PARA CORRIGIR:');
+      console.log('1. Verifique se está online');
+      console.log('2. Execute syncAllPendingActions() manualmente');
+      console.log('3. Verifique se há erros na tabela dados do Supabase');
+    }
+    
+    console.log('🔍 ===== FIM DEBUG SYNC STATUS =====\n');
+    
+  } catch (error) {
+    console.error('💥 Erro no debug de status de sincronização:', error);
+  }
+}; 
+
+/**
+ * Força sincronização imediata de todas as fotos pendentes de uma OS específica
+ * USAR PARA DEBUG: Força sincronização quando há problemas
+ */
+export const forceSyncPhotosForWorkOrder = async (workOrderId: number): Promise<{
+  success: boolean;
+  results: {
+    dados_records: { synced: number; errors: string[] };
+    fotos_extras: { synced: number; errors: string[] };
+    actions: { synced: number; errors: string[] };
+  };
+}> => {
+  try {
+    console.log(`🔄 ===== FORÇANDO SINCRONIZAÇÃO DE FOTOS - OS ${workOrderId} =====`);
+    
+    const results = {
+      dados_records: { synced: 0, errors: [] as string[] },
+      fotos_extras: { synced: 0, errors: [] as string[] },
+      actions: { synced: 0, errors: [] as string[] }
+    };
+    
+    // Verificar se está online
+    const isOnline = await checkNetworkConnection();
+    if (!isOnline) {
+      console.log('❌ Sem conexão com a internet');
+      return { success: false, results };
+    }
+    
+    console.log('✅ Online - iniciando sincronização forçada...');
+    
+    // 1. Sincronizar offline_dados_records
+    console.log('\n📸 1. SINCRONIZANDO DADOS_RECORDS...');
+    try {
+      const offlineData = await AsyncStorage.getItem('offline_dados_records');
+      if (offlineData) {
+        const records = JSON.parse(offlineData);
+        const workOrderRecords = Object.entries(records).filter(([_, record]: [string, any]) => 
+          record.ordem_servico_id === workOrderId && !record.synced
+        );
+        
+        console.log(`📱 Encontrados ${workOrderRecords.length} dados_records não sincronizados`);
+        
+        for (const [recordKey, record] of workOrderRecords) {
+          try {
+            const recordData = record as any;
+            
+            const { data, error } = await saveDadosRecord(
+              recordData.ordem_servico_id,
+              recordData.entrada_dados_id,
+              recordData.valor
+            );
+            
+            if (!error && data) {
+              // Marcar como sincronizado
+              records[recordKey].synced = true;
+              records[recordKey].synced_at = new Date().toISOString();
+              records[recordKey].supabase_id = data.id;
+              results.dados_records.synced++;
+              
+              console.log(`   ✅ ${recordKey} -> Supabase ID: ${data.id}`);
+            } else {
+              results.dados_records.errors.push(`${recordKey}: ${error}`);
+              console.log(`   ❌ ${recordKey}: ${error}`);
+            }
+          } catch (recordError) {
+            results.dados_records.errors.push(`${recordKey}: ${recordError}`);
+            console.log(`   💥 ${recordKey}: ${recordError}`);
+          }
+        }
+        
+        // Salvar estado atualizado
+        await AsyncStorage.setItem('offline_dados_records', JSON.stringify(records));
+      }
+    } catch (error) {
+      results.dados_records.errors.push(`Erro geral: ${error}`);
+    }
+    
+    // 2. Sincronizar offline_fotos_extras
+    console.log('\n📸 2. SINCRONIZANDO FOTOS_EXTRAS...');
+    try {
+      const offlineExtrasData = await AsyncStorage.getItem('offline_fotos_extras');
+      if (offlineExtrasData) {
+        const extrasRecords = JSON.parse(offlineExtrasData);
+        const workOrderExtras = Object.entries(extrasRecords).filter(([_, record]: [string, any]) => 
+          record.ordem_servico_id === workOrderId && !record.synced
+        );
+        
+        console.log(`📱 Encontradas ${workOrderExtras.length} fotos_extras não sincronizadas`);
+        
+        for (const [recordKey, record] of workOrderExtras) {
+          try {
+            const recordData = record as any;
+            
+            const { data, error } = await saveDadosRecord(
+              recordData.ordem_servico_id,
+              null, // entrada_dados_id especial para fotos extras
+              recordData.valor
+            );
+            
+            if (!error && data) {
+              // Marcar como sincronizado
+              extrasRecords[recordKey].synced = true;
+              extrasRecords[recordKey].synced_at = new Date().toISOString();
+              extrasRecords[recordKey].supabase_id = data.id;
+              results.fotos_extras.synced++;
+              
+              console.log(`   ✅ ${recordKey} -> Supabase ID: ${data.id}`);
+            } else {
+              results.fotos_extras.errors.push(`${recordKey}: ${error}`);
+              console.log(`   ❌ ${recordKey}: ${error}`);
+            }
+          } catch (recordError) {
+            results.fotos_extras.errors.push(`${recordKey}: ${recordError}`);
+            console.log(`   💥 ${recordKey}: ${recordError}`);
+          }
+        }
+        
+        // Salvar estado atualizado
+        await AsyncStorage.setItem('offline_fotos_extras', JSON.stringify(extrasRecords));
+      }
+    } catch (error) {
+      results.fotos_extras.errors.push(`Erro geral: ${error}`);
+    }
+    
+    // 3. Sincronizar ações offline pendentes
+    console.log('\n📸 3. SINCRONIZANDO ACTIONS...');
+    try {
+      const actions = await getOfflineActions();
+      const workOrderActions = actions.filter(action => 
+        action.workOrderId === workOrderId && 
+        !action.synced && 
+        (action.type === 'DADOS_RECORD' || action.type === 'PHOTO_INICIO' || action.type === 'PHOTO_FINAL')
+      );
+      
+      console.log(`📱 Encontradas ${workOrderActions.length} ações não sincronizadas`);
+      
+      for (const action of workOrderActions) {
+        try {
+          const success = await syncAction(action);
+          if (success) {
+            await markActionAsSynced(action.id);
+            results.actions.synced++;
+            console.log(`   ✅ ${action.id} (${action.type})`);
+          } else {
+            results.actions.errors.push(`${action.id}: Falha na sincronização`);
+            console.log(`   ❌ ${action.id} (${action.type}): Falha na sincronização`);
+          }
+        } catch (actionError) {
+          results.actions.errors.push(`${action.id}: ${actionError}`);
+          console.log(`   💥 ${action.id}: ${actionError}`);
+        }
+      }
+    } catch (error) {
+      results.actions.errors.push(`Erro geral: ${error}`);
+    }
+    
+    // 4. Resumo final
+    const totalSynced = results.dados_records.synced + results.fotos_extras.synced + results.actions.synced;
+    const totalErrors = results.dados_records.errors.length + results.fotos_extras.errors.length + results.actions.errors.length;
+    
+    console.log('\n📊 ===== RESUMO DA SINCRONIZAÇÃO FORÇADA =====');
+    console.log(`✅ Total sincronizado: ${totalSynced}`);
+    console.log(`   - Dados Records: ${results.dados_records.synced}`);
+    console.log(`   - Fotos Extras: ${results.fotos_extras.synced}`);
+    console.log(`   - Actions: ${results.actions.synced}`);
+    console.log(`❌ Total de erros: ${totalErrors}`);
+    
+    if (totalErrors > 0) {
+      console.log('\n🔧 ERROS ENCONTRADOS:');
+      [...results.dados_records.errors, ...results.fotos_extras.errors, ...results.actions.errors]
+        .forEach((error, index) => console.log(`   ${index + 1}. ${error}`));
+    }
+    
+    console.log('🔄 ===== FIM DA SINCRONIZAÇÃO FORÇADA =====\n');
+    
+    return {
+      success: totalSynced > 0 || totalErrors === 0,
+      results
+    };
+    
+  } catch (error) {
+    console.error('💥 Erro na sincronização forçada:', error);
+    return {
+      success: false,
+      results: {
+        dados_records: { synced: 0, errors: [`Erro crítico: ${error}`] },
+        fotos_extras: { synced: 0, errors: [] },
+        actions: { synced: 0, errors: [] }
+      }
+    };
+  }
+};
+
+/**
+ * Debug: Testa salvamento direto na tabela dados do Supabase
+ * USAR PARA DEBUG: Testa se é possível salvar diretamente na tabela dados
+ */
+export const debugTestSaveDados = async (workOrderId: number): Promise<void> => {
+  try {
+    console.log(`🧪 ===== TESTE DE SALVAMENTO NA TABELA DADOS - OS ${workOrderId} =====`);
+    
+    // 1. Importar função e cliente Supabase
+    const { saveDadosRecord } = await import('./serviceStepsService');
+    const { supabase } = await import('./supabase');
+    
+    // 2. Criar dados de teste
+    const testData = {
+      base64Photo: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k=',
+      workOrderId: workOrderId,
+      entradaDadosId: 999999 // ID de teste
+    };
+    
+    console.log('📊 Dados de teste:', {
+      workOrderId: testData.workOrderId,
+      entradaDadosId: testData.entradaDadosId,
+      base64Size: testData.base64Photo.length
+    });
+    
+    // 3. Testar conectividade
+    const isOnline = await checkNetworkConnection();
+    console.log(`🌐 Status de conectividade: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
+    
+    if (!isOnline) {
+      console.log('❌ Sem conexão - teste cancelado');
+      return;
+    }
+    
+    // 4. Testar salvamento direto via função saveDadosRecord
+    console.log('\n📸 TESTE 1: Salvamento via saveDadosRecord...');
+    const result1 = await saveDadosRecord(
+      testData.workOrderId,
+      testData.entradaDadosId,
+      testData.base64Photo
+    );
+    
+    if (result1.error) {
+      console.log(`❌ ERRO na saveDadosRecord: ${result1.error}`);
+    } else {
+      console.log(`✅ SUCESSO na saveDadosRecord: ID ${result1.data?.id}`);
+    }
+    
+    // 5. Testar salvamento direto via cliente Supabase
+    console.log('\n📸 TESTE 2: Salvamento direto via cliente Supabase...');
+    try {
+      const insertData = {
+        ativo: 1,
+        valor: testData.base64Photo.replace(/^data:image\/[a-z]+;base64,/, ''), // Apenas base64 puro
+        ordem_servico_id: testData.workOrderId,
+        entrada_dados_id: testData.entradaDadosId + 1, // ID diferente para não conflitar
+        created_at: new Date().toISOString(),
+        dt_edicao: new Date().toISOString(),
+      };
+      
+      const { data, error } = await supabase
+        .from('dados')
+        .insert(insertData)
+        .select('*')
+        .single();
+      
+      if (error) {
+        console.log(`❌ ERRO direto no Supabase: ${error.message}`);
+        console.log(`❌ Detalhes do erro:`, error);
+      } else {
+        console.log(`✅ SUCESSO direto no Supabase: ID ${data?.id}`);
+      }
+    } catch (directError) {
+      console.log(`💥 ERRO CRÍTICO direto no Supabase:`, directError);
+    }
+    
+    // 6. Verificar se os registros foram salvos
+    console.log('\n📊 TESTE 3: Verificando registros salvos...');
+    try {
+      const { data: savedRecords, error: queryError } = await supabase
+        .from('dados')
+        .select('*')
+        .eq('ordem_servico_id', testData.workOrderId)
+        .in('entrada_dados_id', [testData.entradaDadosId, testData.entradaDadosId + 1])
+        .order('created_at', { ascending: false });
+      
+      if (queryError) {
+        console.log(`❌ ERRO ao consultar registros: ${queryError.message}`);
+      } else {
+        console.log(`📋 ${savedRecords?.length || 0} registros encontrados na tabela dados`);
+        savedRecords?.forEach((record, index) => {
+          console.log(`   ${index + 1}. ID: ${record.id}, entrada_dados_id: ${record.entrada_dados_id}, created_at: ${record.created_at}`);
+        });
+      }
+    } catch (queryError) {
+      console.log(`💥 ERRO CRÍTICO na consulta:`, queryError);
+    }
+    
+    // 7. Limpar dados de teste
+    console.log('\n🧹 TESTE 4: Limpando dados de teste...');
+    try {
+      const { error: deleteError } = await supabase
+        .from('dados')
+        .delete()
+        .eq('ordem_servico_id', testData.workOrderId)
+        .in('entrada_dados_id', [testData.entradaDadosId, testData.entradaDadosId + 1]);
+      
+      if (deleteError) {
+        console.log(`⚠️ Erro ao limpar dados de teste: ${deleteError.message}`);
+      } else {
+        console.log(`✅ Dados de teste removidos com sucesso`);
+      }
+    } catch (deleteError) {
+      console.log(`⚠️ Erro ao limpar dados de teste:`, deleteError);
+    }
+    
+    console.log('🧪 ===== FIM DO TESTE DE SALVAMENTO =====\n');
+    
+  } catch (error) {
+    console.error('💥 Erro crítico no teste de salvamento:', error);
+  }
+};
+
+/**
+ * Debug: Diagnóstico completo e sincronização forçada com logs detalhados
+ * USAR PARA DEBUG: Análise completa e tentativa de sincronização de todas as fotos
+ */
+export const debugFullDiagnosticAndSync = async (workOrderId: number): Promise<void> => {
+  try {
+    console.log(`🔬 ===== DIAGNÓSTICO COMPLETO E SINCRONIZAÇÃO - OS ${workOrderId} =====`);
+    
+    // 1. Verificar conectividade
+    const isOnline = await checkNetworkConnection();
+    console.log(`🌐 Status de conectividade: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
+    
+    if (!isOnline) {
+      console.log('❌ Sem conexão - diagnóstico limitado');
+      return;
+    }
+    
+    // 2. Importar dependências
+    const { saveDadosRecord } = await import('./serviceStepsService');
+    const { supabase } = await import('./supabase');
+    
+    let totalPhotosFound = 0;
+    let totalPhotosSynced = 0;
+    let totalErrors = 0;
+    const detailedErrors: string[] = [];
+    
+    // 3. DIAGNÓSTICO: offline_dados_records
+    console.log('\n📊 FASE 1: DIAGNÓSTICO DE OFFLINE_DADOS_RECORDS');
+    try {
+      const offlineData = await AsyncStorage.getItem('offline_dados_records');
+      if (offlineData) {
+        const records = JSON.parse(offlineData);
+        const workOrderRecords = Object.entries(records).filter(([_, record]: [string, any]) => 
+          record.ordem_servico_id === workOrderId
+        );
+        
+        console.log(`📱 Encontrados ${workOrderRecords.length} registros de dados para OS ${workOrderId}`);
+        
+        for (const [recordKey, record] of workOrderRecords) {
+          const recordData = record as any;
+          totalPhotosFound++;
+          
+          console.log(`\n🔍 Analisando: ${recordKey}`);
+          console.log(`   - Entrada ID: ${recordData.entrada_dados_id}`);
+          console.log(`   - Sincronizado: ${recordData.synced ? 'SIM' : 'NÃO'}`);
+          console.log(`   - Valor válido: ${recordData.valor ? 'SIM' : 'NÃO'}`);
+          console.log(`   - Tipo do valor: ${recordData.valor ? recordData.valor.substring(0, 20) + '...' : 'N/A'}`);
+          
+          if (!recordData.synced && recordData.valor) {
+            console.log(`🔄 Tentando sincronizar: ${recordKey}`);
+            
+            try {
+              const { data, error } = await saveDadosRecord(
+                recordData.ordem_servico_id,
+                recordData.entrada_dados_id,
+                recordData.valor
+              );
+              
+              if (error) {
+                console.log(`❌ ERRO na sincronização: ${error}`);
+                detailedErrors.push(`${recordKey}: ${error}`);
+                totalErrors++;
+              } else {
+                console.log(`✅ SUCESSO: ${recordKey} -> Supabase ID: ${data?.id}`);
+                
+                // Marcar como sincronizado
+                records[recordKey].synced = true;
+                records[recordKey].synced_at = new Date().toISOString();
+                records[recordKey].supabase_id = data?.id;
+                totalPhotosSynced++;
+              }
+            } catch (syncError) {
+              console.log(`💥 ERRO CRÍTICO na sincronização: ${syncError}`);
+              detailedErrors.push(`${recordKey}: ${syncError}`);
+              totalErrors++;
+            }
+          } else if (recordData.synced) {
+            console.log(`✅ Já sincronizado: Supabase ID: ${recordData.supabase_id || 'N/A'}`);
+          }
+        }
+        
+        // Salvar estado atualizado
+        await AsyncStorage.setItem('offline_dados_records', JSON.stringify(records));
+      } else {
+        console.log('📱 Nenhum offline_dados_records encontrado');
+      }
+    } catch (error) {
+      console.log(`💥 ERRO no diagnóstico de dados_records: ${error}`);
+      detailedErrors.push(`Dados Records: ${error}`);
+    }
+    
+    // 4. DIAGNÓSTICO: offline_fotos_extras
+    console.log('\n📊 FASE 2: DIAGNÓSTICO DE OFFLINE_FOTOS_EXTRAS');
+    try {
+      const offlineExtrasData = await AsyncStorage.getItem('offline_fotos_extras');
+      if (offlineExtrasData) {
+        const extrasRecords = JSON.parse(offlineExtrasData);
+        const workOrderExtras = Object.entries(extrasRecords).filter(([_, record]: [string, any]) => 
+          record.ordem_servico_id === workOrderId
+        );
+        
+        console.log(`📱 Encontradas ${workOrderExtras.length} fotos extras para OS ${workOrderId}`);
+        
+        for (const [recordKey, record] of workOrderExtras) {
+          const recordData = record as any;
+          totalPhotosFound++;
+          
+          console.log(`\n🔍 Analisando foto extra: ${recordKey}`);
+          console.log(`   - Etapa ID: ${recordData.etapa_id}`);
+          console.log(`   - Título: ${recordData.titulo}`);
+          console.log(`   - Sincronizado: ${recordData.synced ? 'SIM' : 'NÃO'}`);
+          console.log(`   - Valor válido: ${recordData.valor ? 'SIM' : 'NÃO'}`);
+          
+          if (!recordData.synced && recordData.valor) {
+            console.log(`🔄 Tentando sincronizar foto extra: ${recordKey}`);
+            
+            try {
+              // Para fotos extras, usar entrada_dados_id = null
+              const { data, error } = await saveDadosRecord(
+                recordData.ordem_servico_id,
+                null, // entrada_dados_id especial para fotos extras
+                recordData.valor
+              );
+              
+              if (error) {
+                console.log(`❌ ERRO na sincronização da foto extra: ${error}`);
+                detailedErrors.push(`${recordKey} (extra): ${error}`);
+                totalErrors++;
+              } else {
+                console.log(`✅ SUCESSO foto extra: ${recordKey} -> Supabase ID: ${data?.id}`);
+                
+                // Marcar como sincronizado
+                extrasRecords[recordKey].synced = true;
+                extrasRecords[recordKey].synced_at = new Date().toISOString();
+                extrasRecords[recordKey].supabase_id = data?.id;
+                totalPhotosSynced++;
+              }
+            } catch (syncError) {
+              console.log(`💥 ERRO CRÍTICO na sincronização da foto extra: ${syncError}`);
+              detailedErrors.push(`${recordKey} (extra): ${syncError}`);
+              totalErrors++;
+            }
+          } else if (recordData.synced) {
+            console.log(`✅ Foto extra já sincronizada: Supabase ID: ${recordData.supabase_id || 'N/A'}`);
+          }
+        }
+        
+        // Salvar estado atualizado
+        await AsyncStorage.setItem('offline_fotos_extras', JSON.stringify(extrasRecords));
+      } else {
+        console.log('📱 Nenhuma offline_fotos_extras encontrada');
+      }
+    } catch (error) {
+      console.log(`💥 ERRO no diagnóstico de fotos_extras: ${error}`);
+      detailedErrors.push(`Fotos Extras: ${error}`);
+    }
+    
+    // 5. DIAGNÓSTICO: offline_actions
+    console.log('\n📊 FASE 3: DIAGNÓSTICO DE OFFLINE_ACTIONS');
+    try {
+      const actions = await getOfflineActions();
+      const workOrderActions = actions.filter(action => 
+        action.workOrderId === workOrderId && 
+        (action.type === 'DADOS_RECORD' || action.type === 'PHOTO_INICIO' || action.type === 'PHOTO_FINAL')
+      );
+      
+      console.log(`📱 Encontradas ${workOrderActions.length} ações de foto para OS ${workOrderId}`);
+      
+      for (const action of workOrderActions) {
+        console.log(`\n🔍 Analisando ação: ${action.id}`);
+        console.log(`   - Tipo: ${action.type}`);
+        console.log(`   - Sincronizado: ${action.synced ? 'SIM' : 'NÃO'}`);
+        console.log(`   - Tentativas: ${action.attempts}`);
+        
+        if (action.type === 'DADOS_RECORD') {
+          const isExtra = action.data.entradaDadosId === null;
+          console.log(`   - Entrada ID: ${action.data.entradaDadosId} ${isExtra ? '(FOTO EXTRA)' : ''}`);
+        }
+        
+        if (!action.synced && action.attempts < MAX_SYNC_ATTEMPTS) {
+          console.log(`🔄 Tentando sincronizar ação: ${action.id}`);
+          
+          try {
+            const success = await syncAction(action);
+            if (success) {
+              await markActionAsSynced(action.id);
+              console.log(`✅ SUCESSO na ação: ${action.id}`);
+              totalPhotosSynced++;
+            } else {
+              console.log(`❌ FALHA na ação: ${action.id}`);
+              detailedErrors.push(`Ação ${action.id}: Falha na sincronização`);
+              totalErrors++;
+            }
+          } catch (actionError) {
+            console.log(`💥 ERRO CRÍTICO na ação: ${actionError}`);
+            detailedErrors.push(`Ação ${action.id}: ${actionError}`);
+            totalErrors++;
+          }
+        } else if (action.synced) {
+          console.log(`✅ Ação já sincronizada`);
+        } else if (action.attempts >= MAX_SYNC_ATTEMPTS) {
+          console.log(`⚠️ Ação excedeu tentativas máximas`);
+        }
+      }
+    } catch (error) {
+      console.log(`💥 ERRO no diagnóstico de ações: ${error}`);
+      detailedErrors.push(`Actions: ${error}`);
+    }
+    
+    // 6. VERIFICAR REGISTROS NO SUPABASE
+    console.log('\n📊 FASE 4: VERIFICAÇÃO NO SUPABASE');
+    try {
+      const { data: supabaseRecords, error: queryError } = await supabase
+        .from('dados')
+        .select('*')
+        .eq('ordem_servico_id', workOrderId)
+        .order('created_at', { ascending: false });
+      
+      if (queryError) {
+        console.log(`❌ ERRO ao consultar Supabase: ${queryError.message}`);
+      } else {
+        console.log(`📋 ${supabaseRecords?.length || 0} registros encontrados no Supabase para OS ${workOrderId}`);
+        supabaseRecords?.forEach((record, index) => {
+          const isExtra = record.entrada_dados_id === null;
+          console.log(`   ${index + 1}. ID: ${record.id}, entrada_dados_id: ${record.entrada_dados_id}${isExtra ? ' (EXTRA)' : ''}, created_at: ${record.created_at}`);
+        });
+      }
+    } catch (error) {
+      console.log(`💥 ERRO CRÍTICO na consulta Supabase: ${error}`);
+    }
+    
+    // 7. RESUMO FINAL
+    console.log('\n📊 ===== RESUMO DO DIAGNÓSTICO =====');
+    console.log(`🔍 Total de fotos encontradas: ${totalPhotosFound}`);
+    console.log(`✅ Total de fotos sincronizadas: ${totalPhotosSynced}`);
+    console.log(`❌ Total de erros: ${totalErrors}`);
+    console.log(`📈 Taxa de sucesso: ${totalPhotosFound > 0 ? Math.round((totalPhotosSynced / totalPhotosFound) * 100) : 0}%`);
+    
+    if (detailedErrors.length > 0) {
+      console.log('\n🔧 ERROS DETALHADOS:');
+      detailedErrors.forEach((error, index) => {
+        console.log(`   ${index + 1}. ${error}`);
+      });
+    }
+    
+    console.log('🔬 ===== FIM DO DIAGNÓSTICO COMPLETO =====\n');
+    
+  } catch (error) {
+    console.error('💥 Erro crítico no diagnóstico completo:', error);
+  }
+};

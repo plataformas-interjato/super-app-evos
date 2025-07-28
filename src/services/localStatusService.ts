@@ -169,6 +169,9 @@ export const clearAllLocalDataForWorkOrder = async (workOrderId: number): Promis
       console.log(`ℹ️ Nenhum dado local encontrado para OS ${workOrderId}`);
     }
     
+    // NOVO: Limpar dados específicos de fotos extras e dados de auditoria
+    await clearWorkOrderSpecificData(workOrderId);
+    
     // Limpar dados locais usando o novo serviço
     try {
       const localDataService = (await import('./localDataService')).default;
@@ -181,6 +184,146 @@ export const clearAllLocalDataForWorkOrder = async (workOrderId: number): Promis
     console.log(`🧹 Limpeza completa finalizada para OS ${workOrderId}`);
   } catch (error) {
     console.error(`❌ Erro ao limpar dados locais da OS ${workOrderId}:`, error);
+  }
+};
+
+/**
+ * Limpa dados específicos de uma OS em chaves globais como offline_fotos_extras e offline_dados_records
+ * NOVO: Esta função garante que fotos extras e dados de auditoria sejam removidos após finalização
+ */
+const clearWorkOrderSpecificData = async (workOrderId: number): Promise<void> => {
+  try {
+    console.log(`🧹 Limpando dados específicos da OS ${workOrderId} em chaves globais...`);
+    
+    let totalItemsRemoved = 0;
+    
+    // 1. Limpar fotos extras (offline_fotos_extras)
+    try {
+      const offlineExtrasData = await AsyncStorage.getItem('offline_fotos_extras');
+      if (offlineExtrasData) {
+        const extrasRecords = JSON.parse(offlineExtrasData);
+        const originalCount = Object.keys(extrasRecords).length;
+        
+        // Filtrar removendo registros desta OS
+        const filteredExtras: any = {};
+        Object.entries(extrasRecords).forEach(([recordKey, record]: [string, any]) => {
+          if (record.ordem_servico_id !== workOrderId) {
+            filteredExtras[recordKey] = record;
+          }
+        });
+        
+        const removedCount = originalCount - Object.keys(filteredExtras).length;
+        if (removedCount > 0) {
+          await AsyncStorage.setItem('offline_fotos_extras', JSON.stringify(filteredExtras));
+          console.log(`✅ Removidas ${removedCount} fotos extras da OS ${workOrderId}`);
+          totalItemsRemoved += removedCount;
+        }
+      }
+    } catch (error) {
+      console.warn('⚠️ Erro ao limpar fotos extras:', error);
+    }
+    
+    // 2. Limpar dados de fotos (offline_dados_records)
+    try {
+      const offlineDataRecords = await AsyncStorage.getItem('offline_dados_records');
+      if (offlineDataRecords) {
+        const dataRecords = JSON.parse(offlineDataRecords);
+        const originalCount = Object.keys(dataRecords).length;
+        
+        // Filtrar removendo registros desta OS
+        const filteredData: any = {};
+        Object.entries(dataRecords).forEach(([recordKey, record]: [string, any]) => {
+          if (record.ordem_servico_id !== workOrderId) {
+            filteredData[recordKey] = record;
+          }
+        });
+        
+        const removedCount = originalCount - Object.keys(filteredData).length;
+        if (removedCount > 0) {
+          await AsyncStorage.setItem('offline_dados_records', JSON.stringify(filteredData));
+          console.log(`✅ Removidos ${removedCount} dados de fotos da OS ${workOrderId}`);
+          totalItemsRemoved += removedCount;
+        }
+      }
+    } catch (error) {
+      console.warn('⚠️ Erro ao limpar dados de fotos:', error);
+    }
+    
+    // 3. Limpar outras chaves globais que possam conter dados da OS
+    try {
+      const globalKeysToCheck = [
+        'service_steps_cache',
+        'work_orders_cache',
+        'completed_work_orders',
+        'cached_auditorias',
+        'cached_service_data'
+      ];
+      
+      for (const key of globalKeysToCheck) {
+        try {
+          const data = await AsyncStorage.getItem(key);
+          if (data) {
+            const parsed = JSON.parse(data);
+            
+            // Se é um array
+            if (Array.isArray(parsed)) {
+              const filtered = parsed.filter(item => 
+                item.ordem_servico_id !== workOrderId && 
+                item.workOrderId !== workOrderId &&
+                item.id !== workOrderId
+              );
+              
+              if (filtered.length !== parsed.length) {
+                await AsyncStorage.setItem(key, JSON.stringify(filtered));
+                console.log(`✅ Dados da OS ${workOrderId} removidos de ${key}`);
+                totalItemsRemoved += (parsed.length - filtered.length);
+              }
+            }
+            // Se é um objeto com chaves
+            else if (typeof parsed === 'object' && parsed !== null) {
+              const filtered: any = {};
+              let hasChanges = false;
+              
+              Object.entries(parsed).forEach(([itemKey, item]: [string, any]) => {
+                const shouldKeep = !(
+                  item?.ordem_servico_id === workOrderId ||
+                  item?.workOrderId === workOrderId ||
+                  item?.id === workOrderId ||
+                  itemKey.includes(`_${workOrderId}_`) ||
+                  itemKey.includes(`${workOrderId}_`) ||
+                  itemKey.endsWith(`_${workOrderId}`)
+                );
+                
+                if (shouldKeep) {
+                  filtered[itemKey] = item;
+                } else {
+                  hasChanges = true;
+                  totalItemsRemoved++;
+                }
+              });
+              
+              if (hasChanges) {
+                await AsyncStorage.setItem(key, JSON.stringify(filtered));
+                console.log(`✅ Dados da OS ${workOrderId} removidos de ${key}`);
+              }
+            }
+          }
+        } catch (keyError) {
+          console.warn(`⚠️ Erro ao processar chave ${key}:`, keyError);
+        }
+      }
+    } catch (error) {
+      console.warn('⚠️ Erro ao limpar chaves globais:', error);
+    }
+    
+    if (totalItemsRemoved > 0) {
+      console.log(`✅ Total de ${totalItemsRemoved} itens específicos removidos da OS ${workOrderId}`);
+    } else {
+      console.log(`ℹ️ Nenhum dado específico encontrado para remover da OS ${workOrderId}`);
+    }
+    
+  } catch (error) {
+    console.error(`❌ Erro ao limpar dados específicos da OS ${workOrderId}:`, error);
   }
 };
 

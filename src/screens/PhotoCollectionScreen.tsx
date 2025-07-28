@@ -281,7 +281,7 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
       
       if (stepsFromService && stepsFromService.length > 0) {
         const totalEntries = stepsFromService.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
-        console.log(`✅ ${stepsFromService.length} etapas com ${totalEntries} entradas carregadas ${fromCache ? 'do cache' : 'do servidor'}`);
+        console.log(`✅ ${stepsFromService.length} etapas com ${totalEntries} entradas carregadas`);
         
         setSteps(stepsFromService);
         
@@ -440,12 +440,56 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
 
       if (!result.canceled && result.assets[0]) {
         const photoUri = result.assets[0].uri;
+        
+        console.log('💾 Salvando foto URI direto no AsyncStorage (SEM conversão base64)...');
+        
+        // 1. Salvar no offline_dados_records APENAS O URI (sem conversão base64)
+        const offlineKey = 'offline_dados_records';
+        const existingDataStr = await AsyncStorage.getItem(offlineKey);
+        const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
+        
+        const recordKey = `${workOrder.id}-${entryId}-${Date.now()}`;
+        existingData[recordKey] = {
+          ativo: 1,
+          valor: photoUri, // Salvar URI direto sem conversão
+          ordem_servico_id: workOrder.id,
+          entrada_dados_id: entryId,
+          created_at: new Date().toISOString(),
+          synced: false
+        };
+        
+        await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
+        
+        // 2. Criar ação no offline_actions APENAS COM URI
+        const actionKey = 'offline_actions';
+        const existingActionsStr = await AsyncStorage.getItem(actionKey);
+        const existingActions = existingActionsStr ? JSON.parse(existingActionsStr) : {};
+        
+        const actionId = `dados_record_${workOrder.id}_${entryId}_${Date.now()}`;
+        existingActions[actionId] = {
+          id: actionId,
+          type: 'DADOS_RECORD',
+          timestamp: new Date().toISOString(),
+          workOrderId: workOrder.id,
+          technicoId: user.id,
+          data: {
+            entradaDadosId: entryId,
+            photoUri: photoUri, // URI direto sem conversão
+          },
+          synced: false,
+          attempts: 0
+        };
+        
+        await AsyncStorage.setItem(actionKey, JSON.stringify(existingActions));
+        
+        // 3. Adicionar ao estado local para exibição (usando URI direto)
         setCollectedPhotos(prev => ({
           ...prev,
           [entryId]: photoUri
         }));
         
-        console.log(`📸 Foto capturada para entrada ${entryId}`);
+        console.log(`✅ Foto salva com URI direto - entrada ${entryId}`);
+        console.log('📱 Foto será convertida para base64 apenas durante sincronização');
         
         // Restaurar StatusBar após captura
         setTimeout(() => {
@@ -495,67 +539,85 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
         if (!result.canceled && result.assets[0]) {
           const photoUri = result.assets[0].uri;
           
-          // Salvar DIRETO no AsyncStorage - SEM IMPORTS DINÂMICOS
-          console.log('💾 Salvando foto direto no AsyncStorage...');
-          try {
-            const offlineKey = 'offline_dados_records';
-            const existingDataStr = await AsyncStorage.getItem(offlineKey);
-            const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
-            
-            const recordKey = `${workOrder.id}-${selectedEntryForModel.id}-${Date.now()}`;
-            existingData[recordKey] = {
-              ativo: 1,
-              valor: photoUri,
-              ordem_servico_id: workOrder.id,
-              entrada_dados_id: selectedEntryForModel.id,
-              created_at: new Date().toISOString(),
-              synced: false
+          console.log('💾 Salvando foto URI direto no AsyncStorage (SEM conversão base64)...');
+          
+          // 1. Salvar no offline_dados_records APENAS O URI (sem conversão base64)
+          const offlineKey = 'offline_dados_records';
+          const existingDataStr = await AsyncStorage.getItem(offlineKey);
+          const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
+          
+          const recordKey = `${workOrder.id}-${selectedEntryForModel.id}-${Date.now()}`;
+          existingData[recordKey] = {
+            ativo: 1,
+            valor: photoUri, // Salvar URI direto sem conversão
+            ordem_servico_id: workOrder.id,
+            entrada_dados_id: selectedEntryForModel.id,
+            created_at: new Date().toISOString(),
+            synced: false
+          };
+          
+          await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
+          
+          // 2. Criar ação no offline_actions APENAS COM URI
+          const actionKey = 'offline_actions';
+          const existingActionsStr = await AsyncStorage.getItem(actionKey);
+          const existingActions = existingActionsStr ? JSON.parse(existingActionsStr) : {};
+          
+          const actionId = `dados_record_${workOrder.id}_${selectedEntryForModel.id}_${Date.now()}`;
+          existingActions[actionId] = {
+            id: actionId,
+            type: 'DADOS_RECORD',
+            timestamp: new Date().toISOString(),
+            workOrderId: workOrder.id,
+            technicoId: user.id,
+            data: {
+              entradaDadosId: selectedEntryForModel.id,
+              photoUri: photoUri, // URI direto sem conversão
+            },
+            synced: false,
+            attempts: 0
+          };
+          
+          await AsyncStorage.setItem(actionKey, JSON.stringify(existingActions));
+          
+          // 3. Adicionar ao estado local para exibição (usando URI direto)
+          console.log(`💾 Adicionando foto ao estado local para entrada ${selectedEntryForModel.id}`);
+          setCollectedPhotos(prev => {
+            const newState = {
+              ...prev,
+              [selectedEntryForModel.id]: photoUri
             };
-            
-            await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
-            
-            // Adicionar ao estado local para exibição
-            console.log(`💾 Adicionando foto ao estado local para entrada ${selectedEntryForModel.id}`);
-            setCollectedPhotos(prev => {
-              const newState = {
-                ...prev,
-                [selectedEntryForModel.id]: photoUri
-              };
-              console.log(`📊 Estado atualizado:`, {
-                entradaId: selectedEntryForModel.id,
-                photoUri: photoUri.substring(0, 30) + '...',
-                estadoAnterior: Object.keys(prev),
-                estadoNovo: Object.keys(newState)
-              });
-              return newState;
+            console.log(`📊 Estado atualizado:`, {
+              entradaId: selectedEntryForModel.id,
+              photoUri: photoUri.substring(0, 30) + '...',
+              estadoAnterior: Object.keys(prev),
+              estadoNovo: Object.keys(newState)
             });
-            
-            console.log('✅ Foto salva offline com sucesso');
-            console.log(`✅ Foto capturada e salva para entrada ${selectedEntryForModel.id}`);
-            
-            // Restaurar StatusBar após captura
-            setTimeout(() => {
-              StatusBar.setBackgroundColor('#3b82f6', true);
-              StatusBar.setBarStyle('light-content', true);
-            }, 50);
-          } catch (offlineError) {
-            console.error('💥 Erro ao salvar foto offline:', offlineError);
-            Alert.alert('Erro', 'Não foi possível salvar a foto. Tente novamente.');
-          }
+            return newState;
+          });
+          
+          console.log(`✅ Foto salva com URI direto para entrada ${selectedEntryForModel.id}`);
+          console.log('📱 Foto será convertida para base64 apenas durante sincronização');
+          
+          // Restaurar StatusBar após captura
+          setTimeout(() => {
+            StatusBar.setBackgroundColor('#3b82f6', true);
+            StatusBar.setBarStyle('light-content', true);
+          }, 50);
         }
       } catch (cameraError) {
-        console.error('💥 Erro na câmera:', cameraError);
-        Alert.alert('Erro', 'Não foi possível tirar a foto. Tente novamente.');
+        console.error('💥 Erro ao acessar câmera:', cameraError);
+        Alert.alert('Erro', 'Não foi possível acessar a câmera. Tente novamente.');
       }
     } catch (error) {
-      console.error('💥 Erro inesperado ao tirar foto:', error);
-      Alert.alert('Erro', 'Ocorreu um erro inesperado. Tente novamente.');
+      console.error('💥 Erro na função takePhotoFromModal:', error);
+      Alert.alert('Erro', 'Erro inesperado. Tente novamente.');
     } finally {
       // Garantir que o StatusBar seja restaurado mesmo em caso de erro
       setTimeout(() => {
         StatusBar.setBackgroundColor('#3b82f6', true);
         StatusBar.setBarStyle('light-content', true);
-      }, 150);
+      }, 100);
     }
   };
 
@@ -685,44 +747,69 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
       if (!result.canceled && result.assets[0]) {
         const photoUri = result.assets[0].uri;
         
-        // Salvar foto extra no AsyncStorage
-        try {
-          const offlineKey = 'offline_fotos_extras';
-          const existingDataStr = await AsyncStorage.getItem(offlineKey);
-          const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
-          
-          existingData[extraEntry.id] = {
-            ativo: 1,
-            valor: photoUri,
-            ordem_servico_id: workOrder.id,
-            etapa_id: extraEntry.stepId,
-            titulo: extraEntry.titulo,
-            tipo: 'FOTO_EXTRA',
-            created_at: extraEntry.created_at,
-            synced: false
-          };
-          
-          await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
-          
-          // Atualizar estado local
-          setExtraPhotoEntries(prev => ({
-            ...prev,
-            [extraEntry.stepId]: prev[extraEntry.stepId].map(entry => 
-              entry.id === extraEntry.id ? { ...entry, photoUri } : entry
-            )
-          }));
-          
-          console.log('✅ Foto extra salva offline com sucesso');
-          
-          // Restaurar StatusBar após captura
-          setTimeout(() => {
-            StatusBar.setBackgroundColor('#3b82f6', true);
-            StatusBar.setBarStyle('light-content', true);
-          }, 50);
-        } catch (offlineError) {
-          console.error('💥 Erro ao salvar foto extra offline:', offlineError);
-          Alert.alert('Erro', 'Não foi possível salvar a foto extra. Tente novamente.');
-        }
+        console.log('💾 Salvando foto extra URI direto no AsyncStorage (SEM conversão base64)...');
+        
+        // 1. Salvar no offline_fotos_extras APENAS O URI (sem conversão base64)
+        const offlineKey = 'offline_fotos_extras';
+        const existingDataStr = await AsyncStorage.getItem(offlineKey);
+        const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
+        
+        existingData[extraEntry.id] = {
+          ativo: 1,
+          valor: photoUri, // Salvar URI direto sem conversão
+          ordem_servico_id: workOrder.id,
+          etapa_id: extraEntry.stepId,
+          titulo: extraEntry.titulo,
+          tipo: 'FOTO_EXTRA',
+          created_at: extraEntry.created_at,
+          synced: false
+        };
+        
+        await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
+        
+        // 2. Criar ação no offline_actions APENAS COM URI
+        const actionKey = 'offline_actions';
+        const existingActionsStr = await AsyncStorage.getItem(actionKey);
+        const existingActions = existingActionsStr ? JSON.parse(existingActionsStr) : {};
+        
+        const actionId = `foto_extra_${workOrder.id}_${extraEntry.stepId}_${Date.now()}`;
+        existingActions[actionId] = {
+          id: actionId,
+          type: 'DADOS_RECORD',
+          timestamp: new Date().toISOString(),
+          workOrderId: workOrder.id,
+          technicoId: user.id,
+          data: {
+            entradaDadosId: null, // Usar null para indicar foto extra
+            photoUri: photoUri, // URI direto sem conversão
+            extraData: {
+              etapaId: extraEntry.stepId,
+              titulo: extraEntry.titulo,
+              tipo: 'FOTO_EXTRA'
+            }
+          },
+          synced: false,
+          attempts: 0
+        };
+        
+        await AsyncStorage.setItem(actionKey, JSON.stringify(existingActions));
+        
+        // 3. Atualizar estado local (usando URI direto)
+        setExtraPhotoEntries(prev => ({
+          ...prev,
+          [extraEntry.stepId]: prev[extraEntry.stepId].map(entry => 
+            entry.id === extraEntry.id ? { ...entry, photoUri: photoUri } : entry
+          )
+        }));
+        
+        console.log('✅ Foto extra salva com URI direto');
+        console.log('📱 Foto será convertida para base64 apenas durante sincronização');
+        
+        // Restaurar StatusBar após captura
+        setTimeout(() => {
+          StatusBar.setBackgroundColor('#3b82f6', true);
+          StatusBar.setBarStyle('light-content', true);
+        }, 50);
       }
     } catch (error) {
       Alert.alert('Erro', 'Não foi possível tirar a foto extra. Tente novamente.');
@@ -753,8 +840,100 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
     // Fechar modal primeiro
     closeExtraPhotoModal();
     
-    // Tirar foto extra
-    await takeExtraPhoto(selectedExtraEntry);
+    // Solicitar permissão da câmera
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert(
+        'Permissão Necessária',
+        'É necessário permitir o acesso à câmera para tirar fotos.'
+      );
+      return;
+    }
+
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+        allowsEditing: false,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const photoUri = result.assets[0].uri;
+        
+        console.log('💾 Salvando foto extra via modal URI direto no AsyncStorage (SEM conversão base64)...');
+        
+        // 1. Salvar no offline_fotos_extras APENAS O URI (sem conversão base64)
+        const offlineKey = 'offline_fotos_extras';
+        const existingDataStr = await AsyncStorage.getItem(offlineKey);
+        const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
+        
+        existingData[selectedExtraEntry.id] = {
+          ativo: 1,
+          valor: photoUri, // Salvar URI direto sem conversão
+          ordem_servico_id: workOrder.id,
+          etapa_id: selectedExtraEntry.stepId,
+          titulo: selectedExtraEntry.titulo,
+          tipo: 'FOTO_EXTRA',
+          created_at: selectedExtraEntry.created_at,
+          synced: false
+        };
+        
+        await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
+        
+        // 2. Criar ação no offline_actions APENAS COM URI
+        const actionKey = 'offline_actions';
+        const existingActionsStr = await AsyncStorage.getItem(actionKey);
+        const existingActions = existingActionsStr ? JSON.parse(existingActionsStr) : {};
+        
+        const actionId = `foto_extra_modal_${workOrder.id}_${selectedExtraEntry.stepId}_${Date.now()}`;
+        existingActions[actionId] = {
+          id: actionId,
+          type: 'DADOS_RECORD',
+          timestamp: new Date().toISOString(),
+          workOrderId: workOrder.id,
+          technicoId: user.id,
+          data: {
+            entradaDadosId: null, // Usar null para indicar foto extra
+            photoUri: photoUri, // URI direto sem conversão
+            extraData: {
+              etapaId: selectedExtraEntry.stepId,
+              titulo: selectedExtraEntry.titulo,
+              tipo: 'FOTO_EXTRA'
+            }
+          },
+          synced: false,
+          attempts: 0
+        };
+        
+        await AsyncStorage.setItem(actionKey, JSON.stringify(existingActions));
+        
+        // 3. Atualizar estado local (usando URI direto)
+        setExtraPhotoEntries(prev => ({
+          ...prev,
+          [selectedExtraEntry.stepId]: prev[selectedExtraEntry.stepId].map(entry => 
+            entry.id === selectedExtraEntry.id ? { ...entry, photoUri: photoUri } : entry
+          )
+        }));
+        
+        console.log('✅ Foto extra via modal salva com URI direto');
+        console.log('📱 Foto será convertida para base64 apenas durante sincronização');
+        
+        // Restaurar StatusBar após captura
+        setTimeout(() => {
+          StatusBar.setBackgroundColor('#3b82f6', true);
+          StatusBar.setBarStyle('light-content', true);
+        }, 50);
+      }
+    } catch (error) {
+      Alert.alert('Erro', 'Não foi possível tirar a foto extra. Tente novamente.');
+      console.error('Erro ao tirar foto extra:', error);
+    } finally {
+      // Garantir que o StatusBar seja restaurado mesmo em caso de erro
+      setTimeout(() => {
+        StatusBar.setBackgroundColor('#3b82f6', true);
+        StatusBar.setBarStyle('light-content', true);
+      }, 100);
+    }
   };
 
   const removeExtraPhotoFromModal = () => {
@@ -900,7 +1079,21 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
       await saveCurrentComentario();
       
       const totalEntries = photoEntries.length;
-      const photosCollected = Object.keys(collectedPhotos).length;
+      
+      // CORRIGIDO: Contar tanto fotos da sessão atual quanto fotos já salvas
+      let photosCollected = 0;
+      photoEntries.forEach((entry) => {
+        const hasPhoto = collectedPhotos[entry.id]; // Foto da sessão atual
+        const hasFotoSalva = fotosSalvasUsuario[entry.id]; // Foto já salva pelo usuário
+        
+        if (hasPhoto || hasFotoSalva) {
+          photosCollected++;
+        }
+      });
+      
+      console.log(`📊 Contagem de fotos: ${photosCollected} de ${totalEntries} fotos coletadas`);
+      console.log(`📸 Fotos da sessão atual:`, Object.keys(collectedPhotos).length);
+      console.log(`�� Fotos já salvas:`, Object.keys(fotosSalvasUsuario).length);
       
       Alert.alert(
         'Continuar para Finalização',
