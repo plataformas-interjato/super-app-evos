@@ -8,7 +8,7 @@ export default {
     userInterfaceStyle: "light",
     newArchEnabled: true,
     splash: {
-      image: "./assets/splash-icon.png",
+      image: "",
       resizeMode: "contain",
       backgroundColor: "#ffffff"
     },
@@ -16,7 +16,7 @@ export default {
       supportsTablet: true,
       bundleIdentifier: "com.appfuturo.app",
       splash: {
-        image: "./assets/splash-icon.png",
+        image: "",
         resizeMode: "cover",
         backgroundColor: "#ffffff"
       }
@@ -29,7 +29,7 @@ export default {
       edgeToEdgeEnabled: true,
       package: "com.appfuturo.app",
       splash: {
-        image: "./assets/splash-icon.png",
+        image: "",
         resizeMode: "cover",
         backgroundColor: "#ffffff"
       }
@@ -37,10 +37,21 @@ export default {
     web: {
       favicon: "./assets/favicon.png"
     },
+    plugins: [
+      [
+        "expo-splash-screen",
+        {
+          image: "",
+          imageWidth: 200,
+          resizeMode: "cover",
+          backgroundColor: "#ffffff"
+        }
+      ]
+    ],
     extra: {
       eas: {
         projectId: "0855e7f0-a964-4eed-b3bd-4f3b2ba6f4a2"
       }
     }
   }
-};
+}; 
