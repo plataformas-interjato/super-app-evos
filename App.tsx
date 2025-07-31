@@ -29,9 +29,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { debugEntradasDados } from './src/services/debugEntradasDados';
 import { debugSyncStatusForWorkOrder, forceSyncPhotosForWorkOrder } from './src/services/integratedOfflineService';
 
-// NOVO: Importar sistema de fotos seguro
+// NOVO: Importar sistema de fotos seguro e dados offline unificados
 import { initializePhotoSystem, demonstratePhotoSystem } from './src/services/photoSystemInit';
 import smartOfflineDataService from './src/services/smartOfflineDataService';
+import unifiedOfflineDataService from './src/services/unifiedOfflineDataService';
 
 // Disponibilizar debug no console global
 (global as any).debugEntradasDados = debugEntradasDados;
@@ -767,6 +768,15 @@ export default function App() {
               const diagnostics = await smartOfflineDataService.getOfflineDataDiagnostics();
               console.log('📊 Diagnóstico dos dados offline (FileSystem):', diagnostics.recommendations);
               
+              // 4. NOVO: Inicializar sistema unificado de dados de usuário (FileSystem)
+              try {
+                console.log('🔧 Inicializando sistema unificado de dados offline...');
+                await unifiedOfflineDataService.initialize();
+                console.log('✅ Sistema unificado de dados offline inicializado');
+              } catch (unifiedError) {
+                console.warn('⚠️ Erro na inicialização do sistema unificado (não crítico):', unifiedError);
+              }
+              
             } catch (offlineError) {
               console.warn('⚠️ Erro nos dados offline (não crítico):', offlineError);
               console.log('📱 App funcionará apenas online');
@@ -812,6 +822,13 @@ export default function App() {
     (global as any).getOfflineDataDiagnostics = smartOfflineDataService.getOfflineDataDiagnostics;
     (global as any).ensureOfflineDataAvailable = smartOfflineDataService.ensureOfflineDataAvailable;
     
+    // NOVO: Comandos para sistema unificado de dados de usuário
+    (global as any).unifiedOfflineService = unifiedOfflineDataService;
+    (global as any).saveComentarioOffline = unifiedOfflineDataService.saveComentarioEtapa;
+    (global as any).saveDadosRecordOffline = unifiedOfflineDataService.saveDadosRecord;
+    (global as any).getUserOfflineData = unifiedOfflineDataService.getUserOfflineData;
+    (global as any).syncPendingActions = unifiedOfflineDataService.syncPendingActions;
+    
     // NOVO: Demonstrar sistema completo
     (global as any).demonstratePhotoSystem = demonstratePhotoSystem;
     
@@ -828,7 +845,23 @@ export default function App() {
       const photoStatus = await getPhotoSystemDiagnostics();
       console.log('📸 Status sistema de fotos:', photoStatus);
       
-      // 3. Recomendações
+      // 3. Verificar sistema unificado de dados de usuário
+      try {
+        const testUserId = '123';
+        const testWorkOrderId = 456;
+        
+        console.log('🔧 Testando sistema unificado de dados...');
+        const userDataTest = await unifiedOfflineDataService.getUserOfflineData(testWorkOrderId);
+        console.log('💾 Dados offline do usuário:', {
+          comentarios: userDataTest.data.comentarios.length,
+          dadosRecords: userDataTest.data.dadosRecords.length,
+          entradaDados: userDataTest.data.entradaDados.length
+        });
+      } catch (unifiedError) {
+        console.warn('⚠️ Erro no teste do sistema unificado:', unifiedError);
+      }
+      
+      // 4. Recomendações
       const allRecommendations = [
         ...offlineStatus.recommendations,
         ...photoStatus.recommendations
@@ -845,10 +878,16 @@ export default function App() {
     };
     
     console.log('🔧 Comandos de debug disponíveis:');
-    console.log('- global.downloadOfflineData() // Baixar dados offline');
+    console.log('- global.downloadOfflineData() // Baixar dados offline COMPLETOS');
     console.log('- global.getOfflineDataDiagnostics() // Ver status dados offline');
     console.log('- global.testOfflineMode() // Teste completo modo offline');
     console.log('- global.demonstratePhotoSystem() // Demonstrar sistema de fotos');
+    console.log('');
+    console.log('🔧 Sistema Unificado de Dados (FileSystem):');
+    console.log('- global.saveComentarioOffline(workOrderId, technicoId, etapaId, comentario)');
+    console.log('- global.saveDadosRecordOffline(workOrderId, technicoId, entradaId, photoUri, valor)');
+    console.log('- global.getUserOfflineData(workOrderId) // Ver dados salvos offline');
+    console.log('- global.syncPendingActions(workOrderId) // Sincronizar dados pendentes');
   }
 
   return (

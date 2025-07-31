@@ -19,8 +19,8 @@ export interface OfflineDataSyncStats {
 }
 
 /**
- * DOWNLOAD INTELIGENTE: Baixa apenas dados relevantes para o usuário
- * EVITA cache full baixando só o necessário e salvando no FileSystem
+ * DOWNLOAD COMPLETO: Baixa TODAS as etapas/entradas ativas do Supabase
+ * SEM FILTROS - Para garantir funcionamento offline completo
  */
 export const downloadOfflineData = async (userId?: string): Promise<{
   success: boolean;
@@ -29,7 +29,7 @@ export const downloadOfflineData = async (userId?: string): Promise<{
 }> => {
   
   try {
-    console.log('🔄 [SMART-OFFLINE] Iniciando download inteligente...');
+    console.log('🔄 [SMART-OFFLINE] Iniciando download COMPLETO...');
     
     // Verificar conectividade
     const netInfo = await NetInfo.fetch();
@@ -43,214 +43,138 @@ export const downloadOfflineData = async (userId?: string): Promise<{
     await secureDataStorage.initialize();
     const startTime = Date.now();
     
-    // 1. DESCOBRIR TIPOS DE OS RELEVANTES PARA O USUÁRIO
-    console.log('📥 [SMART-OFFLINE] Descobrindo tipos de OS relevantes...');
-    let tiposRelevantes: number[] = [];
-    let userSpecific = false;
-    
-    if (userId) {
-      // Buscar tipos de OS das ordens do usuário (últimos 6 meses)
-      const sixMonthsAgo = new Date();
-      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-      
-      const { data: userOrders } = await supabase
-        .from('ordem_servico')
-        .select('tipo_os_id')
-        .eq('tecnico_resp_id', parseInt(userId))
-        .eq('ativo', 1)
-        .gte('created_at', sixMonthsAgo.toISOString());
-      
-      if (userOrders && userOrders.length > 0) {
-        tiposRelevantes = Array.from(new Set(userOrders.map(o => o.tipo_os_id).filter(Boolean)));
-        userSpecific = true;
-        console.log(`📊 [SMART-OFFLINE] Usuário trabalha com ${tiposRelevantes.length} tipos de OS:`, tiposRelevantes);
-      }
-    }
-    
-    // FALLBACK: Se não temos dados do usuário, baixar tipos mais usados
-    if (tiposRelevantes.length === 0) {
-      console.log('📥 [SMART-OFFLINE] Buscando tipos de OS mais utilizados...');
-      
-      // Buscar tipos com mais ordens de serviço ativas
-      const { data: popularTypes } = await supabase
-        .from('tipo_os')
-        .select(`
-          id,
-          titulo,
-          ordem_servico!inner(id)
-        `)
-        .eq('ativo', 1)
-        .eq('ordem_servico.ativo', 1)
-        .order('id', { ascending: true })
-        .limit(5); // Máximo 5 tipos mais populares
-      
-      tiposRelevantes = popularTypes?.map(t => t.id) || [];
-      console.log(`📊 [SMART-OFFLINE] Usando ${tiposRelevantes.length} tipos populares:`, tiposRelevantes);
-    }
-
-    // PROTEÇÃO: Limitar a 10 tipos no máximo
-    if (tiposRelevantes.length > 10) {
-      tiposRelevantes = tiposRelevantes.slice(0, 10);
-      console.log(`⚠️ [SMART-OFFLINE] Limitando a 10 tipos por segurança`);
-    }
-
-    // 2. BAIXAR TIPOS DE OS RELEVANTES
-    console.log('📥 [SMART-OFFLINE] Baixando tipos de OS...');
+    // 1. BAIXAR TODOS OS TIPOS DE OS ATIVOS
+    console.log('📥 [SMART-OFFLINE] Baixando TODOS os tipos de OS ativos...');
     const { data: tiposOs, error: tiposError } = await supabase
       .from('tipo_os')
       .select('*')
-      .in('id', tiposRelevantes)
-      .eq('ativo', 1);
+      .eq('ativo', 1)
+      .order('id');
     
     if (tiposError) {
       console.error('❌ Erro ao baixar tipos OS:', tiposError);
       return { success: false, error: `Erro ao baixar tipos OS: ${tiposError.message}` };
     }
 
-    // 3. BAIXAR ETAPAS DOS TIPOS RELEVANTES
-    console.log('📥 [SMART-OFFLINE] Baixando etapas relevantes...');
+    console.log(`📊 [SMART-OFFLINE] ${tiposOs?.length || 0} tipos de OS encontrados`);
+
+    // 2. BAIXAR TODAS AS ETAPAS ATIVAS
+    console.log('📥 [SMART-OFFLINE] Baixando TODAS as etapas ativas...');
     const { data: etapas, error: etapasError } = await supabase
       .from('etapa_os')
       .select('*')
-      .in('tipo_os_id', tiposRelevantes) // ← FILTRO INTELIGENTE
       .eq('ativo', 1)
-      .order('tipo_os_id, ordem_etapa')
-      .limit(200); // ← LIMITE DE SEGURANÇA
+      .order('tipo_os_id, ordem_etapa');
     
     if (etapasError) {
       console.error('❌ Erro ao baixar etapas:', etapasError);
       return { success: false, error: `Erro ao baixar etapas: ${etapasError.message}` };
     }
 
-    // 4. BAIXAR ENTRADAS DAS ETAPAS RELEVANTES
-    const etapaIds = etapas?.map(e => e.id) || [];
-    console.log(`📥 [SMART-OFFLINE] Baixando entradas de ${etapaIds.length} etapas...`);
+    console.log(`📊 [SMART-OFFLINE] ${etapas?.length || 0} etapas encontradas`);
+
+    // 3. BAIXAR TODAS AS ENTRADAS ATIVAS
+    console.log('📥 [SMART-OFFLINE] Baixando TODAS as entradas ativas...');
+    const { data: entradas, error: entradasError } = await supabase
+      .from('entrada_dados')
+      .select('*')
+      .eq('ativo', 1)
+      .order('etapa_os_id, ordem_entrada');
     
-    let entradas: any[] = [];
-    if (etapaIds.length > 0) {
-      // PROCESSAMENTO EM LOTES para evitar URL muito longa
-      const batchSize = 50;
-      
-      for (let i = 0; i < etapaIds.length; i += batchSize) {
-        const batch = etapaIds.slice(i, i + batchSize);
-        
-        console.log(`📥 [SMART-OFFLINE] Lote ${Math.floor(i/batchSize) + 1}/${Math.ceil(etapaIds.length/batchSize)}`);
-        
-        const { data: batchEntradas, error: entradasError } = await supabase
-          .from('entrada_dados')
-          .select('*')
-          .in('etapa_os_id', batch) // ← FILTRO INTELIGENTE
-          .eq('ativo', 1)
-          .order('etapa_os_id, ordem_entrada')
-          .limit(500); // ← LIMITE POR LOTE
-        
-        if (entradasError) {
-          console.error('❌ Erro ao baixar entradas lote:', entradasError);
-          return { success: false, error: `Erro ao baixar entradas: ${entradasError.message}` };
-        }
-        
-        entradas = entradas.concat(batchEntradas || []);
-        console.log(`📥 [SMART-OFFLINE] Lote processado: +${batchEntradas?.length || 0} entradas`);
-      }
+    if (entradasError) {
+      console.error('❌ Erro ao baixar entradas:', entradasError);
+      return { success: false, error: `Erro ao baixar entradas: ${entradasError.message}` };
     }
 
-    // 5. VERIFICAR TAMANHO TOTAL DOS DADOS
+    console.log(`📊 [SMART-OFFLINE] ${entradas?.length || 0} entradas encontradas`);
+
+    // 4. VERIFICAR TAMANHO TOTAL DOS DADOS
     const totalData = {
       tipos: tiposOs || [],
       etapas: etapas || [],
-      entradas: entradas
+      entradas: entradas || []
     };
     
     const dataString = JSON.stringify(totalData);
     const dataSizeMB = dataString.length / (1024 * 1024);
     
-    console.log(`📊 [SMART-OFFLINE] Dados baixados:`, {
+    console.log(`📊 [SMART-OFFLINE] Dados COMPLETOS baixados:`, {
       tipos: tiposOs?.length || 0,
       etapas: etapas?.length || 0,
-      entradas: entradas.length,
+      entradas: entradas?.length || 0,
       sizeMB: dataSizeMB.toFixed(2)
     });
 
-    // PROTEÇÃO: Se muito grande, reduzir ainda mais
-    if (dataSizeMB > 10) { // Limite 10MB
-      console.warn('⚠️ [SMART-OFFLINE] Dados muito grandes, aplicando redução drástica...');
-      
-      // Manter apenas dados mais essenciais
-      const etapasReduzidas = etapas?.slice(0, 50) || []; // Máximo 50 etapas
-      const etapaIdsReduzidos = etapasReduzidas.map(e => e.id);
-      const entradasReduzidas = entradas.filter(e => etapaIdsReduzidos.includes(e.etapa_os_id)).slice(0, 100);
-      
-      totalData.etapas = etapasReduzidas;
-      totalData.entradas = entradasReduzidas;
-      
-      const newSize = JSON.stringify(totalData).length / (1024 * 1024);
-      console.log(`📊 [SMART-OFFLINE] Tamanho após redução: ${newSize.toFixed(2)} MB`);
-    }
-
-    // 6. SALVAR NO FILESYSTEM (usando secureDataStorage)
-    console.log('💾 [SMART-OFFLINE] Salvando dados no FileSystem...');
+    // 5. SALVAR NO FILESYSTEM (usando secureDataStorage)
+    console.log('💾 [SMART-OFFLINE] Salvando TODOS os dados no FileSystem...');
     
     const syncTime = new Date().toISOString();
     
     // Salvar cada tipo de dado separadamente
     const [tiposResult, etapasResult, entradasResult] = await Promise.all([
-      secureDataStorage.saveData('TIPOS_OS', totalData.tipos, 'tipos_os_current'),
-      secureDataStorage.saveData('ETAPAS_OS', totalData.etapas, 'etapas_os_current'),
-      secureDataStorage.saveData('ENTRADAS_DADOS', totalData.entradas, 'entradas_dados_current')
+      secureDataStorage.saveData('TIPOS_OS', totalData.tipos, 'tipos_os_complete'),
+      secureDataStorage.saveData('ETAPAS_OS', totalData.etapas, 'etapas_os_complete'),
+      secureDataStorage.saveData('ENTRADAS_DADOS', totalData.entradas, 'entradas_dados_complete')
     ]);
 
-    // Verificar se algum falhou
+    // Verificar se todos foram salvos com sucesso
     if (!tiposResult.success || !etapasResult.success || !entradasResult.success) {
-      const errors = [
-        !tiposResult.success ? `Tipos: ${tiposResult.error}` : null,
-        !etapasResult.success ? `Etapas: ${etapasResult.error}` : null,
-        !entradasResult.success ? `Entradas: ${entradasResult.error}` : null
-      ].filter(Boolean);
-      
+      console.error('❌ Erro ao salvar dados no FileSystem');
       return { 
         success: false, 
-        error: `Erro ao salvar dados: ${errors.join(', ')}` 
+        error: 'Erro ao salvar dados no FileSystem' 
       };
     }
 
-    // 7. CRIAR CACHES ESPECÍFICOS POR TIPO
-    console.log('🔄 [SMART-OFFLINE] Criando caches específicos...');
+    // 6. CRIAR CACHES ESPECÍFICOS PARA BUSCA RÁPIDA
+    console.log('🔧 [SMART-OFFLINE] Criando índices para busca rápida...');
     
-    for (const tipoId of tiposRelevantes) {
-      // Cache de etapas por tipo
-      const etapasTipo = totalData.etapas.filter(e => e.tipo_os_id === tipoId);
-      if (etapasTipo.length > 0) {
-        await secureDataStorage.saveData('CACHE_ETAPAS', etapasTipo, `cache_etapas_tipo_${tipoId}`);
-        
-        // Cache de entradas para essas etapas
-        const etapaIdsTipo = etapasTipo.map(e => e.id);
-        const entradasTipo = totalData.entradas.filter(ent => etapaIdsTipo.includes(ent.etapa_os_id));
-        
-        for (const etapaId of etapaIdsTipo) {
-          const entradasEtapa = entradasTipo.filter(ent => ent.etapa_os_id === etapaId);
-          if (entradasEtapa.length > 0) {
-            await secureDataStorage.saveData('CACHE_ENTRADAS', entradasEtapa, `cache_entradas_etapa_${etapaId}`);
-          }
-        }
+    // Cache de etapas por tipo de OS
+    const etapasPorTipo: { [key: number]: any[] } = {};
+    etapas?.forEach(etapa => {
+      if (!etapasPorTipo[etapa.tipo_os_id]) {
+        etapasPorTipo[etapa.tipo_os_id] = [];
       }
-    }
+      etapasPorTipo[etapa.tipo_os_id].push(etapa);
+    });
+
+    // Cache de entradas por etapa
+    const entradasPorEtapa: { [key: number]: any[] } = {};
+    entradas?.forEach(entrada => {
+      if (!entradasPorEtapa[entrada.etapa_os_id]) {
+        entradasPorEtapa[entrada.etapa_os_id] = [];
+      }
+      entradasPorEtapa[entrada.etapa_os_id].push(entrada);
+    });
+
+    // Salvar caches para busca rápida
+    await Promise.all([
+      secureDataStorage.saveData('CACHE_ETAPAS', Object.keys(etapasPorTipo).map(key => ({
+        tipo_os_id: parseInt(key),
+        etapas: etapasPorTipo[parseInt(key)]
+      })), 'cache_etapas_by_tipo'),
+      secureDataStorage.saveData('CACHE_ENTRADAS', Object.keys(entradasPorEtapa).map(key => ({
+        etapa_os_id: parseInt(key),
+        entradas: entradasPorEtapa[parseInt(key)]
+      })), 'cache_entradas_by_etapa')
+    ]);
 
     const endTime = Date.now();
     const stats: OfflineDataSyncStats = {
-      etapas: totalData.etapas.length,
-      entradas: totalData.entradas.length,
-      tipos: totalData.tipos.length,
+      etapas: etapas?.length || 0,
+      entradas: entradas?.length || 0,
+      tipos: tiposOs?.length || 0,
       syncTime,
-      downloadSizeMB: parseFloat(dataSizeMB.toFixed(2)),
-      userSpecific
+      downloadSizeMB: dataSizeMB,
+      userSpecific: false // Download completo para todos
     };
 
-    console.log(`✅ [SMART-OFFLINE] Download concluído em ${endTime - startTime}ms:`, stats);
+    console.log(`✅ [SMART-OFFLINE] Download COMPLETO concluído em ${endTime - startTime}ms:`, stats);
     
     return { success: true, stats };
 
   } catch (error) {
-    console.error('💥 [SMART-OFFLINE] Erro no download:', error);
+    console.error('💥 [SMART-OFFLINE] Erro no download completo:', error);
     return { 
       success: false, 
       error: `Erro inesperado: ${error instanceof Error ? error.message : 'Erro desconhecido'}` 
@@ -259,28 +183,54 @@ export const downloadOfflineData = async (userId?: string): Promise<{
 };
 
 /**
- * BUSCA INTELIGENTE: Etapas por tipo de OS (FileSystem-first)
+ * BUSCA ETAPAS POR TIPO DE OS (FileSystem completo)
  */
 export const getEtapasByTipoOS = async (tipoOsId: number): Promise<{
   etapas: OfflineEtapa[];
   fromCache: boolean;
   error?: string;
 }> => {
-  
   try {
-    console.log(`🔍 [SMART-OFFLINE] Buscando etapas do tipo OS ${tipoOsId}...`);
+    console.log(`🔍 [SMART-OFFLINE] Buscando etapas para tipo OS ${tipoOsId}...`);
     
-    // Usar secureDataStorage
-    const result = await secureDataStorage.getEtapasByTipoOS(tipoOsId);
+    // Buscar no cache específico primeiro (mais rápido)
+    const cacheResult = await secureDataStorage.getData<{ tipo_os_id: number; etapas: OfflineEtapa[] }>('CACHE_ETAPAS', 'cache_etapas_by_tipo');
     
+    if (cacheResult.data) {
+      const tipoCache = cacheResult.data.find(cache => cache.tipo_os_id === tipoOsId);
+      if (tipoCache && tipoCache.etapas) {
+        console.log(`✅ [SMART-OFFLINE] ${tipoCache.etapas.length} etapas encontradas no cache`);
+        return {
+          etapas: tipoCache.etapas,
+          fromCache: true
+        };
+      }
+    }
+    
+    // Fallback: buscar nos dados completos
+    console.log(`🔄 [SMART-OFFLINE] Cache não encontrado, buscando nos dados completos...`);
+    const completeResult = await secureDataStorage.getData<OfflineEtapa>('ETAPAS_OS', 'etapas_os_complete');
+    
+    if (completeResult.data) {
+      const etapasFiltradas = completeResult.data.filter(etapa => etapa.tipo_os_id === tipoOsId);
+      console.log(`✅ [SMART-OFFLINE] ${etapasFiltradas.length} etapas encontradas nos dados completos`);
+      
+      return {
+        etapas: etapasFiltradas,
+        fromCache: false
+      };
+    }
+    
+    // Nenhum dado encontrado
+    console.warn(`⚠️ [SMART-OFFLINE] Nenhuma etapa encontrada para tipo OS ${tipoOsId}`);
     return {
-      etapas: result.etapas,
-      fromCache: result.fromCache,
-      error: result.error
+      etapas: [],
+      fromCache: false,
+      error: 'Nenhuma etapa encontrada offline'
     };
-
+    
   } catch (error) {
-    console.error(`💥 [SMART-OFFLINE] Erro ao buscar etapas do tipo ${tipoOsId}:`, error);
+    console.error(`❌ [SMART-OFFLINE] Erro ao buscar etapas:`, error);
     return {
       etapas: [],
       fromCache: false,
@@ -290,28 +240,54 @@ export const getEtapasByTipoOS = async (tipoOsId: number): Promise<{
 };
 
 /**
- * BUSCA INTELIGENTE: Entradas de dados por etapa (FileSystem-first)
+ * BUSCA ENTRADAS POR ETAPA (FileSystem completo)
  */
 export const getEntradasByEtapa = async (etapaOsId: number): Promise<{
   entradas: OfflineEntradaDados[];
   fromCache: boolean;
   error?: string;
 }> => {
-  
   try {
-    console.log(`🔍 [SMART-OFFLINE] Buscando entradas da etapa ${etapaOsId}...`);
+    console.log(`🔍 [SMART-OFFLINE] Buscando entradas para etapa ${etapaOsId}...`);
     
-    // Usar secureDataStorage
-    const result = await secureDataStorage.getEntradasByEtapa(etapaOsId);
+    // Buscar no cache específico primeiro (mais rápido)
+    const cacheResult = await secureDataStorage.getData<{ etapa_os_id: number; entradas: OfflineEntradaDados[] }>('CACHE_ENTRADAS', 'cache_entradas_by_etapa');
     
+    if (cacheResult.data) {
+      const etapaCache = cacheResult.data.find(cache => cache.etapa_os_id === etapaOsId);
+      if (etapaCache && etapaCache.entradas) {
+        console.log(`✅ [SMART-OFFLINE] ${etapaCache.entradas.length} entradas encontradas no cache`);
+        return {
+          entradas: etapaCache.entradas,
+          fromCache: true
+        };
+      }
+    }
+    
+    // Fallback: buscar nos dados completos
+    console.log(`🔄 [SMART-OFFLINE] Cache não encontrado, buscando nos dados completos...`);
+    const completeResult = await secureDataStorage.getData<OfflineEntradaDados>('ENTRADAS_DADOS', 'entradas_dados_complete');
+    
+    if (completeResult.data) {
+      const entradasFiltradas = completeResult.data.filter(entrada => entrada.etapa_os_id === etapaOsId);
+      console.log(`✅ [SMART-OFFLINE] ${entradasFiltradas.length} entradas encontradas nos dados completos`);
+      
+      return {
+        entradas: entradasFiltradas,
+        fromCache: false
+      };
+    }
+    
+    // Nenhum dado encontrado
+    console.warn(`⚠️ [SMART-OFFLINE] Nenhuma entrada encontrada para etapa ${etapaOsId}`);
     return {
-      entradas: result.entradas,
-      fromCache: result.fromCache,
-      error: result.error
+      entradas: [],
+      fromCache: false,
+      error: 'Nenhuma entrada encontrada offline'
     };
-
+    
   } catch (error) {
-    console.error(`💥 [SMART-OFFLINE] Erro ao buscar entradas da etapa ${etapaOsId}:`, error);
+    console.error(`❌ [SMART-OFFLINE] Erro ao buscar entradas:`, error);
     return {
       entradas: [],
       fromCache: false,
@@ -325,7 +301,7 @@ export const getEntradasByEtapa = async (etapaOsId: number): Promise<{
  */
 export const isOfflineDataFresh = async (): Promise<boolean> => {
   try {
-    const etapasResult = await secureDataStorage.getData('ETAPAS_OS', 'etapas_os_current');
+    const etapasResult = await secureDataStorage.getData('ETAPAS_OS', 'etapas_os_complete');
     
     if (etapasResult.metadata) {
       const dataTime = new Date(etapasResult.metadata.timestamp);
@@ -355,8 +331,8 @@ export const ensureOfflineDataAvailable = async (userId?: string): Promise<{
     console.log('🔄 [SMART-OFFLINE] Verificando disponibilidade de dados...');
     
     // Verificar se existem dados
-    const etapasResult = await secureDataStorage.getData('ETAPAS_OS', 'etapas_os_current');
-    const entradasResult = await secureDataStorage.getData('ENTRADAS_DADOS', 'entradas_dados_current');
+    const etapasResult = await secureDataStorage.getData('ETAPAS_OS', 'etapas_os_complete');
+    const entradasResult = await secureDataStorage.getData('ENTRADAS_DADOS', 'entradas_dados_complete');
     
     const hasData = etapasResult.data && entradasResult.data;
     const isFresh = await isOfflineDataFresh();
@@ -424,9 +400,9 @@ export const getOfflineDataDiagnostics = async (): Promise<{
     
     // Verificar dados específicos
     const [etapasResult, entradasResult, tiposResult] = await Promise.all([
-      secureDataStorage.getData('ETAPAS_OS', 'etapas_os_current'),
-      secureDataStorage.getData('ENTRADAS_DADOS', 'entradas_dados_current'),
-      secureDataStorage.getData('TIPOS_OS', 'tipos_os_current')
+      secureDataStorage.getData('ETAPAS_OS', 'etapas_os_complete'),
+      secureDataStorage.getData('ENTRADAS_DADOS', 'entradas_dados_complete'),
+      secureDataStorage.getData('TIPOS_OS', 'tipos_os_complete')
     ]);
 
     const hasEtapas = !!(etapasResult.data && etapasResult.data.length > 0);

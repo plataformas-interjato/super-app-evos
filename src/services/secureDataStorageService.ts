@@ -19,7 +19,7 @@ const BACKUP_DATA_DIR = `${FileSystem.cacheDirectory}backup_data/`;
 const METADATA_KEY = 'secure_data_metadata';
 
 // TIPOS DE DADOS SUPORTADOS
-export type DataType = 'ETAPAS_OS' | 'ENTRADAS_DADOS' | 'TIPOS_OS' | 'CACHE_ETAPAS' | 'CACHE_ENTRADAS';
+export type DataType = 'ETAPAS_OS' | 'ENTRADAS_DADOS' | 'TIPOS_OS' | 'CACHE_ETAPAS' | 'CACHE_ENTRADAS' | 'USER_ACTIONS';
 
 export interface DataFileMetadata {
   id: string;
