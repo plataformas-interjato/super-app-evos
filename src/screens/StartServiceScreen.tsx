@@ -15,7 +15,7 @@ import { RFValue } from 'react-native-responsive-fontsize';
 import * as ImagePicker from 'expo-image-picker';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
-import { savePhotoInicioOffline, checkNetworkConnection } from '../services/offlineService';
+import { savePhotoInicioOffline, checkNetworkConnection } from '../services/integratedOfflineService';
 import { hasInitialPhoto } from '../services/auditService';
 
 interface StartServiceScreenProps {

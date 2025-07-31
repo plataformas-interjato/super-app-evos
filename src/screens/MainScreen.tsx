@@ -29,7 +29,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { getLocalWorkOrderStatuses, cleanSyncedLocalStatuses } from '../services/localStatusService';
 import { preloadAndCacheAllServiceSteps } from '../services/serviceStepsService';
 import { getWorkOrdersWithCache, getWorkOrdersCacheStats, updateCacheAfterOSFinalizada } from '../services/workOrderCacheService';
-import { registerSyncCallback, registerOSFinalizadaCallback } from '../services/offlineService';
+import { registerSyncCallback, registerOSFinalizadaCallback } from '../services/integratedOfflineService';
 // TEMPORARIAMENTE REMOVIDO: importações de cacheService para evitar erro SQLite
 // import { preloadAllWorkOrdersData, shouldPreload, getCachedWorkOrders, getPreloadStatus } from '../services/cacheService';
 

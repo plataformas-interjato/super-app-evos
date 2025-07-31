@@ -175,7 +175,7 @@ export const getAuditoriasByWorkOrder = async (
 };
 
 /**
- * Verifica se já existe foto inicial para uma ordem de serviço (online + offline)
+ * Verifica se já existe foto inicial para uma ordem de serviço (online + offline + sistema seguro)
  */
 export const hasInitialPhoto = async (
   workOrderId: number
@@ -183,7 +183,28 @@ export const hasInitialPhoto = async (
   try {
     console.log(`🔍 ===== VERIFICANDO FOTO INICIAL DA OS ${workOrderId} =====`);
     
-    // Verificar conectividade primeiro
+    // NOVO: Verificar primeiro no sistema seguro (prioritário)
+    console.log(`🔒 Verificando foto inicial no SISTEMA SEGURO...`);
+    try {
+      const { getPhotoSystemDiagnostics } = await import('./integratedOfflineService');
+      const securePhotoStorage = (await import('./securePhotoStorageService')).default;
+      
+      // Buscar fotos da OS no sistema seguro
+      const securePhotos = await securePhotoStorage.getPhotosByWorkOrder(workOrderId);
+      const hasSecureInitialPhoto = securePhotos.some(photo => photo.type === 'PHOTO_INICIO');
+      
+      console.log(`🔒 Fotos seguras encontradas: ${securePhotos.length}`);
+      console.log(`🔒 Foto inicial segura: ${hasSecureInitialPhoto ? 'ENCONTRADA' : 'NÃO ENCONTRADA'}`);
+      
+      if (hasSecureInitialPhoto) {
+        console.log(`✅ RESULTADO FINAL: FOTO INICIAL EXISTE NO SISTEMA SEGURO`);
+        return { hasPhoto: true, error: null };
+      }
+    } catch (secureError) {
+      console.warn(`⚠️ Erro ao verificar sistema seguro (continuando com verificação legada):`, secureError);
+    }
+    
+    // Verificar conectividade
     const NetInfo = require('@react-native-community/netinfo');
     const netInfo = await NetInfo.fetch();
     const isOnline = netInfo.isConnected === true && netInfo.isInternetReachable === true;
@@ -216,7 +237,7 @@ export const hasInitialPhoto = async (
         }
       }
       
-      // Verificar dados offline não sincronizados
+      // Verificar dados offline não sincronizados (sistema legado)
       try {
         const { getOfflineActions } = await import('./offlineService');
         const offlineActions = await getOfflineActions();
@@ -280,12 +301,34 @@ export const hasInitialPhoto = async (
 };
 
 /**
- * Verifica se já existe foto final para uma ordem de serviço (online + offline)
+ * Verifica se já existe foto final para uma ordem de serviço (online + offline + sistema seguro)
  */
 export const hasFinalPhoto = async (
   workOrderId: number
 ): Promise<{ hasPhoto: boolean; error: string | null }> => {
   try {
+    console.log(`🔍 ===== VERIFICANDO FOTO FINAL DA OS ${workOrderId} =====`);
+    
+    // NOVO: Verificar primeiro no sistema seguro (prioritário)
+    console.log(`🔒 Verificando foto final no SISTEMA SEGURO...`);
+    try {
+      const securePhotoStorage = (await import('./securePhotoStorageService')).default;
+      
+      // Buscar fotos da OS no sistema seguro
+      const securePhotos = await securePhotoStorage.getPhotosByWorkOrder(workOrderId);
+      const hasSecureFinalPhoto = securePhotos.some(photo => photo.type === 'PHOTO_FINAL' || photo.type === 'AUDITORIA');
+      
+      console.log(`🔒 Fotos seguras encontradas: ${securePhotos.length}`);
+      console.log(`🔒 Foto final segura: ${hasSecureFinalPhoto ? 'ENCONTRADA' : 'NÃO ENCONTRADA'}`);
+      
+      if (hasSecureFinalPhoto) {
+        console.log(`✅ RESULTADO FINAL: FOTO FINAL EXISTE NO SISTEMA SEGURO`);
+        return { hasPhoto: true, error: null };
+      }
+    } catch (secureError) {
+      console.warn(`⚠️ Erro ao verificar sistema seguro (continuando com verificação legada):`, secureError);
+    }
+    
     // Verificar conectividade primeiro
     const NetInfo = require('@react-native-community/netinfo');
     const netInfo = await NetInfo.fetch();

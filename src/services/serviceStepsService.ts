@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 // REMOVIDO: importações de cacheService - usando AsyncStorage direto
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import smartOfflineDataService from './smartOfflineDataService'; // NOVO: Serviço FileSystem inteligente
 
 export interface ServiceStep {
   id: number;
@@ -769,7 +770,7 @@ export const getAllStepsForDebug = async (): Promise<void> => {
 };
 
 /**
- * Busca etapas com cache - USANDO ASYNCSTORAGE DIRETO
+ * Busca etapas com cache - USANDO NOVO SISTEMA FILESYSTEM
  */
 export const getServiceStepsWithDataCached = async (
   tipoOsId: number,
@@ -777,6 +778,88 @@ export const getServiceStepsWithDataCached = async (
 ): Promise<{ data: ServiceStep[] | null; error: string | null; fromCache: boolean }> => {
   try {
     console.log(`🔍 getServiceStepsWithDataCached: tipo_os_id=${tipoOsId}, ordem_servico_id=${ordemServicoId}`);
+    
+    // NOVO: Garantir que dados offline estejam disponíveis (FileSystem)
+    const offlineDataStatus = await smartOfflineDataService.ensureOfflineDataAvailable();
+    if (!offlineDataStatus.available) {
+      console.warn('⚠️ [FILESYSTEM] Dados offline não disponíveis:', offlineDataStatus.error);
+    }
+    
+    // NOVO: Buscar etapas usando o novo serviço FileSystem
+    const etapasResult = await smartOfflineDataService.getEtapasByTipoOS(tipoOsId);
+    
+    if (etapasResult.etapas && etapasResult.etapas.length > 0) {
+      console.log(`✅ [FILESYSTEM] ${etapasResult.etapas.length} etapas encontradas no FileSystem`);
+      
+      // Converter para o formato ServiceStep
+      const steps: ServiceStep[] = etapasResult.etapas.map(etapa => ({
+        id: etapa.id,
+        titulo: etapa.titulo,
+        ordem_etapa: etapa.ordem_etapa,
+        etapa_os_id: etapa.id,
+        entradas: []
+      }));
+      
+      // Buscar entradas para cada etapa usando FileSystem
+      const stepsWithData = await Promise.all(
+        steps.map(async (step) => {
+          const entradasResult = await smartOfflineDataService.getEntradasByEtapa(step.id);
+          
+          // Converter entradas para o formato ServiceStepData
+          const entradas: ServiceStepData[] = entradasResult.entradas.map(entrada => ({
+            id: entrada.id,
+            etapa_os_id: entrada.etapa_os_id,
+            ordem_entrada: entrada.ordem_entrada,
+            titulo: entrada.titulo,
+            valor: entrada.valor_padrao || '',
+            foto_base64: '',
+            foto_modelo: entrada.foto_modelo || '',
+            completed: false
+          }));
+          
+          return {
+            ...step,
+            entradas
+          };
+        })
+      );
+      
+      // Buscar também dados locais salvos pelo usuário
+      try {
+        const localDataService = (await import('./localDataService')).default;
+        const etapaIds = steps.map(step => step.id);
+        const localData = await localDataService.getServiceStepDataCombined(ordemServicoId, etapaIds);
+        
+        // Mesclar dados locais com os dados das entradas
+        stepsWithData.forEach(step => {
+          const localStepData = localData[step.id];
+          if (localStepData && localStepData.length > 0) {
+            // Atualizar entradas existentes com dados locais ou adicionar novas
+            localStepData.forEach(localEntry => {
+              const existingIndex = step.entradas?.findIndex(e => e.id === localEntry.id);
+              if (existingIndex !== undefined && existingIndex >= 0) {
+                // Atualizar entrada existente
+                step.entradas![existingIndex] = { ...step.entradas![existingIndex], ...localEntry };
+              } else {
+                // Adicionar nova entrada
+                step.entradas = step.entradas || [];
+                step.entradas.push(localEntry);
+              }
+            });
+          }
+        });
+      } catch (localError) {
+        console.warn('⚠️ Erro ao buscar dados locais:', localError);
+      }
+      
+      const totalEntries = stepsWithData.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
+      console.log(`✅ [FILESYSTEM] ${stepsWithData.length} etapas com ${totalEntries} entradas carregadas`);
+      
+      return { data: stepsWithData, error: null, fromCache: etapasResult.fromCache };
+    }
+
+    // FALLBACK: Sistema legado se o novo FileSystem falhar
+    console.log('⚠️ [FILESYSTEM] Sistema FileSystem falhou, usando sistema legado...');
     
     // PRIMEIRO: Limpar cache problemático que pode causar SQLite error
     await clearProblematicCache();

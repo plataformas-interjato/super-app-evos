@@ -132,19 +132,12 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
   };
 
   const handleFinalPhoto = async () => {
-    // Solicitar permissão da câmera
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert(
-        'Permissão Necessária',
-        'É necessário permitir o acesso à câmera para tirar fotos.'
-      );
-      return;
-    }
-
     try {
+      console.log('📸 DEBUG: Iniciando captura de foto final');
+      
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [16, 9],
         quality: 0.8,
       });
 
@@ -152,50 +145,32 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
         const photoUri = result.assets[0].uri;
         console.log('📸 DEBUG: Foto capturada:', photoUri);
         setFinalPhoto(photoUri);
-
-        // Salvar foto no AsyncStorage (sempre salvar localmente primeiro)
-        // A sincronização com o servidor será feita quando a auditoria completa for finalizada
+        
+        // NOVO: Sempre usar sistema seguro, independente da conectividade
         try {
-          console.log('💾 DEBUG: Iniciando salvamento da foto final...');
-          console.log('💾 DEBUG: WorkOrder ID:', workOrder.id);
-          console.log('💾 DEBUG: User ID:', user.id);
+          console.log('💾 [SEGURO] Salvando foto final no sistema seguro...');
           
-          const offlineKey = 'offline_actions';
-          const existingDataStr = await AsyncStorage.getItem(offlineKey);
-          const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
+          const { savePhotoFinalOffline } = await import('../services/integratedOfflineService');
           
-          console.log('💾 DEBUG: Dados existentes no AsyncStorage:', Object.keys(existingData).length, 'ações');
+          const result = await savePhotoFinalOffline(
+            workOrder.id,
+            user.id.toString(),
+            photoUri
+          );
           
-          const actionId = `photo_final_${workOrder.id}_${user.id}_${Date.now()}`;
-          console.log('💾 DEBUG: Action ID gerado:', actionId);
-          
-          existingData[actionId] = {
-            id: actionId,
-            type: 'PHOTO_FINAL',
-            timestamp: new Date().toISOString(),
-            workOrderId: workOrder.id,
-            technicoId: user.id,
-            data: {
-              photoUri,
-            },
-            synced: false,
-            attempts: 0
-          };
-          
-          console.log('💾 DEBUG: Salvando no AsyncStorage...');
-          await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
-          console.log('✅ DEBUG: Foto final salva no AsyncStorage com sucesso');
-          
-          // Verificar se foi salvo
-          const verifyDataStr = await AsyncStorage.getItem(offlineKey);
-          if (verifyDataStr) {
-            const verifyData = JSON.parse(verifyDataStr);
-            console.log('✅ DEBUG: Verificação - dados salvos:', Object.keys(verifyData).length, 'ações');
-            console.log('✅ DEBUG: Ação salva encontrada:', !!verifyData[actionId]);
+          if (result.success) {
+            console.log('✅ [SEGURO] Foto final salva no sistema seguro:', result.photoId);
+          } else {
+            console.error('❌ [SEGURO] Erro ao salvar foto final:', result.error);
+            Alert.alert(
+              'Erro',
+              'Não foi possível salvar a foto com segurança. Tente novamente.'
+            );
+            setFinalPhoto(null);
           }
           
         } catch (saveError) {
-          console.error('💥 DEBUG: Erro ao salvar foto final:', saveError);
+          console.error('💥 [SEGURO] Erro ao salvar foto final:', saveError);
           Alert.alert(
             'Erro',
             'Não foi possível salvar a foto. Tente novamente.'
@@ -234,129 +209,42 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
       return;
     }
 
-    console.log('✅ DEBUG: Todas as validações passaram, iniciando salvamento...');
+    console.log('✅ DEBUG: Todas as validações passaram, finalizando auditoria...');
     setIsLoading(true);
     
     try {
-      // Tentar salvar auditoria completa no servidor primeiro (quando online)
-      console.log('🌐 DEBUG: Verificando conectividade para salvar auditoria final...');
+      // NOVO: A foto final já foi salva no sistema seguro
+      // Agora só precisamos finalizar a auditoria com os dados adicionais
+      console.log('🎯 [SEGURO] Finalizando auditoria - foto já salva no sistema seguro');
       
-      // Verificar conectividade
-      const NetInfo = require('@react-native-community/netinfo');
-      const netInfo = await NetInfo.fetch();
-      console.log('🌐 DEBUG: Status de conectividade:', netInfo.isConnected);
+      // A sincronização da foto final será feita automaticamente pelo sistema seguro
+      // Vamos apenas prosseguir com o fluxo normal
       
-      if (netInfo.isConnected) {
-        console.log('🌐 DEBUG: Online - tentando salvar auditoria final no servidor...');
-        
-        try {
-          // Importar dinamicamente o serviço de auditoria
-          const { saveAuditoriaFinal } = await import('../services/auditService');
-          
-          console.log('📊 DEBUG: Chamando saveAuditoriaFinal com os dados:');
-          console.log('📊 DEBUG: - workOrderId:', workOrder.id);
-          console.log('📊 DEBUG: - technicoId:', user.id);
-          console.log('📊 DEBUG: - photoUri:', finalPhoto.substring(0, 50) + '...');
-          console.log('📊 DEBUG: - trabalhoRealizado:', workCompleted);
-          console.log('📊 DEBUG: - motivo:', !workCompleted ? selectedReason : undefined);
-          console.log('📊 DEBUG: - comentario:', additionalComments.trim() || undefined);
-          
-          // Salvar auditoria completa no servidor
-          const { data, error } = await saveAuditoriaFinal(
-            workOrder.id,
-            user.id,
-            finalPhoto,
-            workCompleted,
-            !workCompleted ? selectedReason : undefined,
-            additionalComments.trim() || undefined
-          );
-          
-          console.log('📊 DEBUG: Resultado do saveAuditoriaFinal:');
-          console.log('📊 DEBUG: - data:', data ? 'Presente' : 'Nulo');
-          console.log('📊 DEBUG: - error:', error);
-          
-          if (!error && data) {
-            console.log('✅ DEBUG: Auditoria final salva no servidor com sucesso');
-            
-            // Sucesso no servidor, prosseguir com o fluxo
-            if (!workCompleted) {
-              console.log('🚀 DEBUG: Trabalho não realizado - indo direto para salvamento');
-              onFinishAudit({ workCompleted, reason: selectedReason, additionalComments, skipPhotoCollection: true });
-            } else {
-              console.log('🚀 DEBUG: Trabalho realizado - seguindo fluxo normal');
-              onFinishAudit({ workCompleted, reason: selectedReason, additionalComments });
-            }
-            return; // Sucesso, não precisa salvar offline
-          } else {
-            console.warn('⚠️ DEBUG: Erro ao salvar auditoria no servidor, salvando offline:', error);
-          }
-        } catch (serverError) {
-          console.error('💥 DEBUG: Erro ao salvar no servidor:', serverError);
-        }
-      } else {
-        console.log('📱 DEBUG: Offline - salvando auditoria final no AsyncStorage...');
-      }
-      
-      // Se chegou aqui, está offline ou houve erro no servidor
-      // Salvar no AsyncStorage para sincronização posterior
-      console.log('💾 DEBUG: Salvando auditoria final no AsyncStorage...');
-      console.log('💾 DEBUG: WorkOrder ID:', workOrder.id);
-      console.log('💾 DEBUG: User ID:', user.id);
-      
-      const offlineKey = 'offline_actions';
-      const existingDataStr = await AsyncStorage.getItem(offlineKey);
-      const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
-      
-      console.log('💾 DEBUG: Dados existentes no AsyncStorage:', Object.keys(existingData).length, 'ações');
-      
-      const actionId = `auditoria_final_${workOrder.id}_${Date.now()}`;
-      console.log('💾 DEBUG: Action ID gerado:', actionId);
-      
-      const auditoriaData = {
-        id: actionId,
-        type: 'AUDITORIA_FINAL',
-        timestamp: new Date().toISOString(),
-        workOrderId: workOrder.id,
-        technicoId: user.id,
-        data: {
-          photoUri: finalPhoto,
-          trabalhoRealizado: workCompleted,
-          motivo: !workCompleted ? selectedReason : undefined,
-          comentario: additionalComments.trim() || undefined,
-        },
-        synced: false,
-        attempts: 0,
-      };
-      
-      console.log('💾 DEBUG: Dados da auditoria:', JSON.stringify(auditoriaData, null, 2));
-      
-      existingData[actionId] = auditoriaData;
-      
-      console.log('💾 DEBUG: Salvando no AsyncStorage...');
-      await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
-      console.log('✅ DEBUG: Auditoria final salva no AsyncStorage com sucesso');
-      
-      // Verificar se foi salvo
-      const verifyDataStr = await AsyncStorage.getItem(offlineKey);
-      if (verifyDataStr) {
-        const verifyData = JSON.parse(verifyDataStr);
-        console.log('✅ DEBUG: Verificação - dados salvos:', Object.keys(verifyData).length, 'ações');
-        console.log('✅ DEBUG: Ação salva encontrada:', !!verifyData[actionId]);
-      }
-      
-      // Prosseguir com o fluxo
       if (!workCompleted) {
         console.log('🚀 DEBUG: Trabalho não realizado - indo direto para salvamento');
-        onFinishAudit({ workCompleted, reason: selectedReason, additionalComments, skipPhotoCollection: true });
+        onFinishAudit({ 
+          workCompleted, 
+          reason: selectedReason, 
+          additionalComments, 
+          skipPhotoCollection: true 
+        });
       } else {
         console.log('🚀 DEBUG: Trabalho realizado - seguindo fluxo normal');
-        onFinishAudit({ workCompleted, reason: selectedReason, additionalComments });
+        onFinishAudit({ 
+          workCompleted, 
+          reason: selectedReason, 
+          additionalComments 
+        });
       }
+      
     } catch (error) {
       console.error('💥 DEBUG: Erro ao finalizar auditoria:', error);
-      Alert.alert('Erro', 'Erro inesperado ao finalizar auditoria.');
+      Alert.alert(
+        'Erro',
+        'Erro ao finalizar auditoria. Tente novamente.',
+        [{ text: 'OK' }]
+      );
     } finally {
-      console.log('🏁 DEBUG: Finalizando handleFinish, setIsLoading(false)');
       setIsLoading(false);
     }
   };

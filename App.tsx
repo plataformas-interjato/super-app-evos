@@ -16,7 +16,7 @@ import AuditSavingScreen from './src/screens/AuditSavingScreen';
 import AuditSuccessScreen from './src/screens/AuditSuccessScreen';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import { WorkOrder } from './src/types/workOrder';
-import { startAutoSync, syncAllPendingActions, cleanOrphanedOfflineData } from './src/services/offlineService';
+import { startAutoSync, syncAllPendingActions, cleanOrphanedOfflineData } from './src/services/integratedOfflineService';
 import { updateLocalWorkOrderStatus } from './src/services/localStatusService';
 import { updateWorkOrderStatus } from './src/services/workOrderService';
 import { saveEvaluation } from './src/services/evaluationService';
@@ -27,7 +27,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Importar debug function
 import { debugEntradasDados } from './src/services/debugEntradasDados';
-import { debugSyncStatusForWorkOrder, forceSyncPhotosForWorkOrder } from './src/services/offlineService';
+import { debugSyncStatusForWorkOrder, forceSyncPhotosForWorkOrder } from './src/services/integratedOfflineService';
+
+// NOVO: Importar sistema de fotos seguro
+import { initializePhotoSystem, demonstratePhotoSystem } from './src/services/photoSystemInit';
+import smartOfflineDataService from './src/services/smartOfflineDataService';
 
 // Disponibilizar debug no console global
 (global as any).debugEntradasDados = debugEntradasDados;
@@ -48,6 +52,19 @@ function AppContent() {
   useEffect(() => {
     // Iniciar monitoramento automático
     const unsubscribe = startAutoSync();
+    
+    // NOVO: Inicializar sistema de fotos seguro
+    initializePhotoSystem().then(result => {
+      if (result.success) {
+        console.log('🎉 Sistema de fotos seguro inicializado com sucesso');
+        // Executar demonstração no console (opcional)
+        demonstratePhotoSystem();
+      } else {
+        console.warn('⚠️ Falha na inicialização do sistema de fotos:', result.message);
+      }
+    }).catch(error => {
+      console.error('❌ Erro crítico na inicialização do sistema de fotos:', error);
+    });
     
     // Tentar sincronizar ações pendentes na inicialização (com delay)
     const initSync = setTimeout(() => {
@@ -438,7 +455,7 @@ function AppContent() {
             // Agora finalizar a OS no servidor
             const { updateWorkOrderStatus } = await import('./src/services/workOrderService');
             const { clearAllLocalDataForWorkOrder } = await import('./src/services/localStatusService');
-            const { clearOfflineActionsForWorkOrder } = await import('./src/services/offlineService');
+            const { clearOfflineActionsForWorkOrder } = await import('./src/services/integratedOfflineService');
             
             // 1. Finalizar OS no servidor
             const { error: statusError } = await updateWorkOrderStatus(
@@ -467,7 +484,7 @@ function AppContent() {
               await clearOfflineActionsForWorkOrder(selectedWorkOrder.id);
               
               // 4. Notificar callbacks de OS finalizada para atualizar a UI
-              const { notifyOSFinalizadaCallbacks } = await import('./src/services/offlineService');
+              const { notifyOSFinalizadaCallbacks } = await import('./src/services/integratedOfflineService');
               notifyOSFinalizadaCallbacks(selectedWorkOrder.id);
               
               console.log('🧹 Dados locais e ações offline limpas após sincronização - ícone de sincronização removido');
@@ -704,31 +721,78 @@ export default function App() {
   const [appReady, setAppReady] = useState(false);
 
   useEffect(() => {
-    initializeApp();
-  }, []);
+    const unsubscribe = startAutoSync();
+    
+    // INICIALIZAÇÃO CORRIGIDA - NÃO BLOQUEIA O APP
+    const initializeAppSystems = async () => {
+      try {
+        console.log('🚀 Inicializando aplicativo...');
+        
+        // CRÍTICO: Marcar como pronto IMEDIATAMENTE para app funcionar
+        setAppReady(true);
+        
+        // Inicializar sistemas em background (não blocking)
+        setTimeout(async () => {
+          try {
+            console.log('🔄 Inicializando sistemas em background...');
+            
+            // 1. Sistema de fotos (em background)
+            try {
+              const photoResult = await initializePhotoSystem();
+              if (photoResult.success) {
+                console.log('✅ Sistema de fotos inicializado com sucesso');
+              } else {
+                console.warn('⚠️ Problema na inicialização do sistema de fotos:', photoResult.message);
+              }
+            } catch (photoError) {
+              console.warn('⚠️ Erro no sistema de fotos (não crítico):', photoError);
+            }
 
-  const initializeApp = async () => {
-    try {
-      console.log('🚀 Inicializando aplicativo...');
-      
-      // REMOVIDO: Inicialização do armazenamento híbrido que causa erro database full
-      // await hybridStorage.initialize();
-      // console.log('✅ Armazenamento híbrido inicializado');
-      
-      // REMOVIDO: Inicialização do adaptador de armazenamento
-      // await storageAdapter.initialize();
-      // console.log('✅ Adaptador de armazenamento inicializado');
-      
-      console.log('✅ App inicializado usando AsyncStorage direto (sem sistema híbrido)');
-      
-      setAppReady(true);
-    } catch (error) {
-      console.error('❌ Erro ao inicializar aplicativo:', error);
-      
-      // Continuar mesmo em caso de erro na inicialização
-      setAppReady(true);
-    }
-  };
+            // 2. Dados offline (em background)  
+            try {
+              console.log('🔄 Inicializando dados offline (FileSystem)...');
+              const offlineDataResult = await smartOfflineDataService.ensureOfflineDataAvailable();
+              
+              if (offlineDataResult.available) {
+                console.log('✅ Dados offline disponíveis no FileSystem para funcionamento offline');
+                if (!offlineDataResult.fresh) {
+                  console.log('⏰ Dados offline não são frescos - serão atualizados em background');
+                }
+              } else {
+                console.warn('⚠️ Dados offline não disponíveis no FileSystem:', offlineDataResult.error);
+                console.log('📱 App funcionará apenas online até próxima sincronização');
+              }
+
+              // 3. Diagnóstico do sistema offline (em background)
+              const diagnostics = await smartOfflineDataService.getOfflineDataDiagnostics();
+              console.log('📊 Diagnóstico dos dados offline (FileSystem):', diagnostics.recommendations);
+              
+            } catch (offlineError) {
+              console.warn('⚠️ Erro nos dados offline (não crítico):', offlineError);
+              console.log('📱 App funcionará apenas online');
+            }
+
+          } catch (backgroundError) {
+            console.error('💥 Erro na inicialização em background:', backgroundError);
+            // NÃO IMPEDE a app de funcionar - sistemas podem ser inicializados depois
+          }
+        }, 100); // 100ms delay para não bloquear UI
+
+      } catch (error) {
+        console.error('💥 Erro crítico na inicialização:', error);
+        // SEMPRE marcar como pronto, mesmo com erro crítico
+        setAppReady(true);
+      }
+    };
+
+    initializeAppSystems();
+    
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, []);
 
   if (!appReady) {
     return (
@@ -736,6 +800,55 @@ export default function App() {
         <ActivityIndicator size="large" color="#0066CC" />
       </View>
     );
+  }
+
+  // Disponibilizar debug no console global
+  if (__DEV__) {
+    (global as any).debugSyncStatusForWorkOrder = debugSyncStatusForWorkOrder;
+    (global as any).forceSyncPhotosForWorkOrder = forceSyncPhotosForWorkOrder;
+    
+    // NOVO: Comandos para sistema de dados offline
+    (global as any).downloadOfflineData = smartOfflineDataService.downloadOfflineData;
+    (global as any).getOfflineDataDiagnostics = smartOfflineDataService.getOfflineDataDiagnostics;
+    (global as any).ensureOfflineDataAvailable = smartOfflineDataService.ensureOfflineDataAvailable;
+    
+    // NOVO: Demonstrar sistema completo
+    (global as any).demonstratePhotoSystem = demonstratePhotoSystem;
+    
+    // NOVO: Comando completo de teste offline
+    (global as any).testOfflineMode = async () => {
+      console.log('🧪 ===== TESTE COMPLETO MODO OFFLINE =====');
+      
+      // 1. Verificar dados offline
+      const offlineStatus = await smartOfflineDataService.getOfflineDataDiagnostics();
+      console.log('📊 Status dados offline:', offlineStatus);
+      
+      // 2. Verificar sistema de fotos
+      const { getPhotoSystemDiagnostics } = await import('./src/services/integratedOfflineService');
+      const photoStatus = await getPhotoSystemDiagnostics();
+      console.log('📸 Status sistema de fotos:', photoStatus);
+      
+      // 3. Recomendações
+      const allRecommendations = [
+        ...offlineStatus.recommendations,
+        ...photoStatus.recommendations
+      ];
+      
+      console.log('💡 Recomendações:', allRecommendations);
+      
+      return {
+        offlineData: offlineStatus,
+        photoSystem: photoStatus,
+        recommendations: allRecommendations,
+        ready: offlineStatus.hasEtapas && offlineStatus.hasEntradas
+      };
+    };
+    
+    console.log('🔧 Comandos de debug disponíveis:');
+    console.log('- global.downloadOfflineData() // Baixar dados offline');
+    console.log('- global.getOfflineDataDiagnostics() // Ver status dados offline');
+    console.log('- global.testOfflineMode() // Teste completo modo offline');
+    console.log('- global.demonstratePhotoSystem() // Demonstrar sistema de fotos');
   }
 
   return (

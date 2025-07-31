@@ -13,7 +13,7 @@ import {
   retryFailedActions,
   clearAllOfflineActions,
   getRemainingActionsCount
-} from '../services/offlineService';
+} from '../services/integratedOfflineService';
 
 interface SyncStatusIndicatorProps {
   style?: any;

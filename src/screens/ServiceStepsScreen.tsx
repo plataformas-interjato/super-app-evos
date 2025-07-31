@@ -15,7 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
 import { hasFinalPhoto, hasInitialPhoto } from '../services/auditService';
-import { saveChecklistEtapaOffline, checkNetworkConnection } from '../services/offlineService';
+import { saveChecklistEtapaOffline, checkNetworkConnection } from '../services/integratedOfflineService';
 import { 
   ServiceStep, 
   ServiceStepData, 
