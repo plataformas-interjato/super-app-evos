@@ -18,6 +18,8 @@ import * as ImagePicker from 'expo-image-picker';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { checkNetworkConnection, savePhotoFinalOffline } from '../services/integratedOfflineService';
+import imageCompressionService from '../services/imageCompressionService';
 
 interface PostServiceAuditScreenProps {
   workOrder: WorkOrder;
@@ -136,51 +138,41 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
       console.log('📸 DEBUG: Iniciando captura de foto final');
       
       const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: true,
-        aspect: [16, 9],
-        quality: 0.8,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 1.0, // Máxima qualidade inicial para depois comprimir
       });
 
       if (!result.canceled && result.assets[0]) {
-        const photoUri = result.assets[0].uri;
-        console.log('📸 DEBUG: Foto capturada:', photoUri);
-        setFinalPhoto(photoUri);
+        const originalUri = result.assets[0].uri;
+        console.log('📸 Foto final capturada, iniciando compressão...');
         
-        // NOVO: Sempre usar sistema seguro, independente da conectividade
+        let photoUriToSave = originalUri;
+        
         try {
-          console.log('💾 [SEGURO] Salvando foto final no sistema seguro...');
+          // COMPRESSÃO INTELIGENTE
+          const compressed = await imageCompressionService.compressImage(originalUri, 'final');
           
-          const { savePhotoFinalOffline } = await import('../services/integratedOfflineService');
+          console.log(`✅ Foto final comprimida: ${compressed.compressionRatio.toFixed(1)}% redução (${(compressed.originalSize/(1024*1024)).toFixed(2)}MB → ${(compressed.compressedSize/(1024*1024)).toFixed(2)}MB)`);
           
-          const result = await savePhotoFinalOffline(
-            workOrder.id,
-            user.id.toString(),
-            photoUri
-          );
+          photoUriToSave = compressed.uri;
+          setFinalPhoto(compressed.uri);
           
-          if (result.success) {
-            console.log('✅ [SEGURO] Foto final salva no sistema seguro:', result.photoId);
-          } else {
-            console.error('❌ [SEGURO] Erro ao salvar foto final:', result.error);
-            Alert.alert(
-              'Erro',
-              'Não foi possível salvar a foto com segurança. Tente novamente.'
-            );
-            setFinalPhoto(null);
-          }
-          
-        } catch (saveError) {
-          console.error('💥 [SEGURO] Erro ao salvar foto final:', saveError);
-          Alert.alert(
-            'Erro',
-            'Não foi possível salvar a foto. Tente novamente.'
-          );
-          setFinalPhoto(null);
+        } catch (compressionError) {
+          console.warn('⚠️ Erro na compressão da foto final, usando original:', compressionError);
+          setFinalPhoto(originalUri);
         }
+        
+        // NOVO: Apenas salvar localmente para exibição, salvamento real será no handleFinish
+        setFinalPhoto(photoUriToSave);
+        console.log('✅ Foto final preparada para salvamento via sistema unificado');
+        
       }
     } catch (error) {
       console.error('💥 DEBUG: Erro na função handleFinalPhoto:', error);
-      Alert.alert('Erro', 'Não foi possível tirar a foto. Tente novamente.');
+      Alert.alert(
+        'Erro na Câmera',
+        'Não foi possível tirar a foto. Verifique as permissões e tente novamente.'
+      );
     }
   };
 
@@ -209,17 +201,50 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
       return;
     }
 
-    console.log('✅ DEBUG: Todas as validações passaram, finalizando auditoria...');
+    console.log('🚀 DEBUG: Iniciando salvamento da auditoria final');
     setIsLoading(true);
     
     try {
-      // NOVO: A foto final já foi salva no sistema seguro
-      // Agora só precisamos finalizar a auditoria com os dados adicionais
-      console.log('🎯 [SEGURO] Finalizando auditoria - foto já salva no sistema seguro');
+      // SALVAR AUDITORIA FINAL NO SISTEMA UNIFICADO
+      console.log('💾 [UNIFICADO] Salvando auditoria final no sistema unificado...');
       
-      // A sincronização da foto final será feita automaticamente pelo sistema seguro
-      // Vamos apenas prosseguir com o fluxo normal
+      // Converter foto para base64
+      let photoBase64 = finalPhoto;
+      if (finalPhoto && !finalPhoto.startsWith('data:image/')) {
+        const FileSystem = require('expo-file-system');
+        const base64 = await FileSystem.readAsStringAsync(finalPhoto, { 
+          encoding: FileSystem.EncodingType.Base64 
+        });
+        photoBase64 = `data:image/jpeg;base64,${base64}`;
+      }
+
+      // Importar e usar o sistema unificado
+      const { default: unifiedOfflineDataService } = await import('../services/unifiedOfflineDataService');
       
+      const result = await unifiedOfflineDataService.saveAuditoriaFinal(
+        workOrder.id,
+        user.id.toString(),
+        photoBase64,
+        workCompleted,
+        selectedReason,
+        additionalComments
+      );
+      
+      if (result.success) {
+        console.log('✅ [UNIFICADO] Auditoria final salva com sucesso');
+        if (result.savedOffline) {
+          console.log('📱 [UNIFICADO] Auditoria salva offline - será sincronizada quando houver conexão');
+        }
+      } else {
+        console.error('❌ [UNIFICADO] Erro ao salvar auditoria final:', result.error);
+        Alert.alert(
+          'Erro',
+          'Não foi possível salvar a auditoria. Tente novamente.'
+        );
+        return;
+      }
+      
+      // Prosseguir com o fluxo normal
       if (!workCompleted) {
         console.log('🚀 DEBUG: Trabalho não realizado - indo direto para salvamento');
         onFinishAudit({ 

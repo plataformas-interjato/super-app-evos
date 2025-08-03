@@ -34,8 +34,6 @@ export const savePhotoInicioOffline = async (
   photoUri: string
 ): Promise<OfflinePhotoResult> => {
   
-  console.log('📸 [SEGURO] Salvando foto de início...');
-  
   try {
     // 1. Usar sistema seguro através do adaptador
     const result = await photoMigrationAdapter.savePhotoInicioSafe(
@@ -47,21 +45,25 @@ export const savePhotoInicioOffline = async (
     // 2. Se está online, tentar sincronizar imediatamente
     const isOnline = await checkNetworkConnection();
     if (isOnline && result.success) {
-      console.log('🌐 Online: tentando sincronização imediata');
-      // Não aguardar a sincronização para não bloquear UX
-      syncPhotoInicioInBackground(result.photoId, workOrderId, technicoId).catch(error => {
-        console.warn('⚠️ Erro na sincronização em background:', error);
-      });
+      // Tentar sync em background sem bloquear
+      setTimeout(() => {
+        syncPhotoInicioInBackground(result.photoId, workOrderId, technicoId);
+      }, 500);
     }
 
-    return result;
+    return {
+      success: result.success,
+      photoId: result.photoId,
+      error: result.error,
+      savedOffline: !isOnline
+    };
 
   } catch (error) {
-    console.error('❌ Erro no savePhotoInicioOffline seguro:', error);
     return {
       success: false,
-      photoId: `error_${Date.now()}`,
-      error: error instanceof Error ? error.message : 'Erro desconhecido'
+      photoId: '',
+      error: error instanceof Error ? error.message : 'Erro inesperado',
+      savedOffline: true
     };
   }
 };
@@ -118,8 +120,6 @@ export const savePhotoFinalOffline = async (
   photoUri: string
 ): Promise<OfflinePhotoResult> => {
   
-  console.log('📸 [SEGURO] Salvando foto final...');
-  
   try {
     // 1. Usar sistema seguro através do adaptador
     const result = await photoMigrationAdapter.savePhotoFinalSafe(
@@ -131,21 +131,25 @@ export const savePhotoFinalOffline = async (
     // 2. Se está online, tentar sincronizar imediatamente
     const isOnline = await checkNetworkConnection();
     if (isOnline && result.success) {
-      console.log('🌐 Online: tentando sincronização imediata da foto final');
-      // Não aguardar a sincronização para não bloquear UX
-      syncPhotoFinalInBackground(result.photoId, workOrderId, technicoId).catch(error => {
-        console.warn('⚠️ Erro na sincronização em background:', error);
-      });
+      // Tentar sync em background sem bloquear
+      setTimeout(() => {
+        syncPhotoFinalInBackground(result.photoId, workOrderId, technicoId);
+      }, 500);
     }
 
-    return result;
+    return {
+      success: result.success,
+      photoId: result.photoId,
+      error: result.error,
+      savedOffline: !isOnline
+    };
 
   } catch (error) {
-    console.error('❌ Erro no savePhotoFinalOffline seguro:', error);
     return {
       success: false,
-      photoId: `error_${Date.now()}`,
-      error: error instanceof Error ? error.message : 'Erro desconhecido'
+      photoId: '',
+      error: error instanceof Error ? error.message : 'Erro inesperado',
+      savedOffline: true
     };
   }
 };

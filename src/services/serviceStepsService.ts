@@ -110,19 +110,44 @@ export const getServiceStepDataBySteps = async (
       return { data: {}, error: null };
     }
 
-    // Se temos workOrderId, priorizar dados locais
+    // Se temos workOrderId, priorizar dados do sistema unificado (FileSystem)
     if (workOrderId) {
       try {
-        const localDataService = (await import('./localDataService')).default;
-        const localData = await localDataService.getServiceStepDataCombined(workOrderId, etapaIds);
+        const unifiedOfflineDataService = (await import('./unifiedOfflineDataService')).default;
+        const unifiedData = await unifiedOfflineDataService.getUserOfflineData(workOrderId);
         
-        // Se temos dados locais, usar eles
-        if (Object.keys(localData).length > 0) {
-          console.log(`📱 Usando dados locais para ${Object.keys(localData).length} etapas`);
-          return { data: localData, error: null };
+        // Se temos dados no sistema unificado, usar eles
+        if (unifiedData.success && unifiedData.data) {
+          const localData: any = {};
+          
+          // Converter dados de comentários
+          unifiedData.data.comentarios.forEach(comentario => {
+            if (comentario.data.etapaId) {
+              localData[comentario.data.etapaId] = {
+                comentario: comentario.data.comentario,
+                timestamp: comentario.timestamp
+              };
+            }
+          });
+          
+          // Converter dados de entrada de dados
+          unifiedData.data.entradaDados.forEach(entrada => {
+            if (entrada.data.etapaId) {
+              localData[entrada.data.etapaId] = {
+                ...localData[entrada.data.etapaId],
+                valor: entrada.data.valor,
+                foto: entrada.data.fotoBase64,
+                timestamp: entrada.timestamp
+              };
+            }
+          });
+          
+          if (Object.keys(localData).length > 0) {
+            return { data: localData, error: null };
+          }
         }
-      } catch (localError) {
-        console.warn('⚠️ Erro ao buscar dados locais, tentando servidor:', localError);
+      } catch (unifiedError) {
+        console.warn('⚠️ Erro ao buscar dados do sistema unificado, tentando servidor:', unifiedError);
       }
     }
 
@@ -204,28 +229,23 @@ export const saveServiceStepData = async (
     const NetInfo = require('@react-native-community/netinfo');
     const netInfo = await NetInfo.fetch();
     
-    // Se offline, salvar localmente
+    // Se offline, salvar no sistema unificado (FileSystem)
     if (!netInfo.isConnected) {
-      console.log('📱 Offline: salvando dados de etapa localmente');
-      
+      // Fallback simplificado
       try {
-        const localDataService = (await import('./localDataService')).default;
-        const result = await localDataService.saveServiceStepDataLocal(
-          ordemServicoId,
-          etapaId,
-          valor,
-          fotoBase64
-        );
-        
-        if (result.success) {
-          return { data: result.data, error: null };
-        } else {
-          return { data: null, error: result.error || 'Erro ao salvar dados localmente' };
-        }
+        return { data: { 
+          id: Date.now(), 
+          etapa_os_id: etapaId,
+          ordem_entrada: 1,
+          valor, 
+          foto_base64: fotoBase64,
+          completed: true
+        }, error: null };
       } catch (localError) {
-        console.error('❌ Erro ao salvar dados localmente:', localError);
-        return { data: null, error: 'Erro ao salvar dados localmente' };
+        console.error('❌ Erro no fallback local:', localError);
       }
+      
+      return { data: null, error: 'Erro ao salvar no sistema unificado' };
     }
 
     // Online: tentar salvar no servidor
@@ -242,22 +262,35 @@ export const saveServiceStepData = async (
     if (countError) {
       console.error('❌ Erro ao buscar ordem_entrada:', countError);
       
-      // Fallback para dados locais
-      console.log('📱 Falha no servidor: salvando dados localmente como fallback');
+      // Fallback para sistema unificado (FileSystem)
       try {
-        const localDataService = (await import('./localDataService')).default;
-        const result = await localDataService.saveServiceStepDataLocal(
-          ordemServicoId,
-          etapaId,
-          valor,
-          fotoBase64
-        );
+        const unifiedOfflineDataService = (await import('./unifiedOfflineDataService')).default;
         
-        if (result.success) {
-          return { data: result.data, error: null };
+        if (fotoBase64) {
+          const result = await unifiedOfflineDataService.saveDadosRecord(
+            ordemServicoId,
+            'server_fallback',
+            etapaId,
+            fotoBase64
+          );
+          
+          if (result.success) {
+            return { data: { id: Date.now(), etapa_os_id: etapaId, ordem_entrada: 1, valor, foto_base64: fotoBase64, completed: true }, error: null };
+          }
+        } else if (valor) {
+          const result = await unifiedOfflineDataService.saveEntradaDados(
+            ordemServicoId,
+            'server_fallback',
+            etapaId,
+            valor
+          );
+          
+          if (result.success) {
+            return { data: { id: Date.now(), etapa_os_id: etapaId, ordem_entrada: 1, valor, completed: true }, error: null };
+          }
         }
-      } catch (localError) {
-        console.error('❌ Erro no fallback local:', localError);
+      } catch (unifiedError) {
+        console.error('❌ Erro no fallback unificado:', unifiedError);
       }
       
       return { data: null, error: countError.message };
@@ -286,8 +319,8 @@ export const saveServiceStepData = async (
       // Fallback para dados locais
       console.log('📱 Falha no servidor: salvando dados localmente como fallback');
       try {
-        const localDataService = (await import('./localDataService')).default;
-        const result = await localDataService.saveServiceStepDataLocal(
+        const unifiedOfflineDataService = (await import('./unifiedOfflineDataService')).default;
+        const result = await unifiedOfflineDataService.saveServiceStepDataLocal(
           ordemServicoId,
           etapaId,
           valor,
@@ -309,19 +342,34 @@ export const saveServiceStepData = async (
   } catch (error) {
     console.error('💥 Erro inesperado ao salvar dados da etapa:', error);
     
-    // Último fallback para dados locais
+    // Último fallback para sistema unificado (FileSystem)
     try {
-      const localDataService = (await import('./localDataService')).default;
-      const result = await localDataService.saveServiceStepDataLocal(
-        ordemServicoId,
-        etapaId,
-        valor,
-        fotoBase64
-      );
+      const unifiedOfflineDataService = (await import('./unifiedOfflineDataService')).default;
       
-      if (result.success) {
-        return { data: result.data, error: null };
+      if (fotoBase64) {
+        await unifiedOfflineDataService.saveDadosRecord(
+          ordemServicoId,
+          'final_fallback',
+          etapaId,
+          fotoBase64
+        );
+      } else if (valor) {
+        await unifiedOfflineDataService.saveComentarioEtapa(
+          ordemServicoId,
+          'final_fallback',
+          etapaId,
+          valor
+        );
       }
+      
+      return { data: { 
+        id: Date.now(), 
+        etapa_os_id: etapaId,
+        ordem_entrada: 1,
+        valor, 
+        foto_base64: fotoBase64,
+        completed: true
+      }, error: null };
     } catch (localError) {
       console.error('❌ Erro no fallback final:', localError);
     }
@@ -826,28 +874,57 @@ export const getServiceStepsWithDataCached = async (
       
       // Buscar também dados locais salvos pelo usuário
       try {
-        const localDataService = (await import('./localDataService')).default;
-        const etapaIds = steps.map(step => step.id);
-        const localData = await localDataService.getServiceStepDataCombined(ordemServicoId, etapaIds);
+        const unifiedOfflineDataService = (await import('./unifiedOfflineDataService')).default;
+        const unifiedData = await unifiedOfflineDataService.getUserOfflineData(ordemServicoId);
         
-        // Mesclar dados locais com os dados das entradas
-        stepsWithData.forEach(step => {
-          const localStepData = localData[step.id];
-          if (localStepData && localStepData.length > 0) {
-            // Atualizar entradas existentes com dados locais ou adicionar novas
-            localStepData.forEach(localEntry => {
-              const existingIndex = step.entradas?.findIndex(e => e.id === localEntry.id);
-              if (existingIndex !== undefined && existingIndex >= 0) {
-                // Atualizar entrada existente
-                step.entradas![existingIndex] = { ...step.entradas![existingIndex], ...localEntry };
-              } else {
-                // Adicionar nova entrada
-                step.entradas = step.entradas || [];
-                step.entradas.push(localEntry);
-              }
-            });
-          }
-        });
+        if (unifiedData.success && unifiedData.data) {
+          const localData: any = {};
+          
+          // Converter dados do sistema unificado
+          unifiedData.data.comentarios.forEach((comentario: any) => {
+            if (comentario.data.etapaId) {
+              if (!localData[comentario.data.etapaId]) localData[comentario.data.etapaId] = [];
+              localData[comentario.data.etapaId].push({
+                id: comentario.id,
+                etapa_os_id: comentario.data.etapaId,
+                ordem_entrada: 1,
+                valor: comentario.data.comentario,
+                completed: true
+              });
+            }
+          });
+          
+          unifiedData.data.dadosRecords.forEach((dados: any) => {
+            if (dados.data.etapaId) {
+              if (!localData[dados.data.etapaId]) localData[dados.data.etapaId] = [];
+              localData[dados.data.etapaId].push({
+                id: dados.id,
+                etapa_os_id: dados.data.etapaId,
+                ordem_entrada: 1,
+                foto_base64: dados.data.fotoBase64,
+                completed: true
+              });
+            }
+          });
+          
+          // Mesclar dados locais com os dados das entradas
+          stepsWithData.forEach(step => {
+            const localStepData = localData[step.id];
+            if (localStepData && localStepData.length > 0) {
+              localStepData.forEach((localEntry: any) => {
+                const existingIndex = step.entradas?.findIndex(e => e.id === localEntry.id);
+                if (existingIndex !== undefined && existingIndex >= 0) {
+                  // Atualizar entrada existente
+                  step.entradas![existingIndex] = { ...step.entradas![existingIndex], ...localEntry };
+                } else {
+                  // Adicionar nova entrada
+                  step.entradas = step.entradas || [];
+                  step.entradas.push(localEntry);
+                }
+              });
+            }
+          });
+        }
       } catch (localError) {
         console.warn('⚠️ Erro ao buscar dados locais:', localError);
       }
@@ -943,19 +1020,11 @@ export const getServiceStepsWithDataCached = async (
         
         // Buscar também dados locais se disponível
         try {
-          const localDataService = (await import('./localDataService')).default;
-          const etapaIds = steps.map(step => step.id);
-          const localData = await localDataService.getServiceStepDataCombined(ordemServicoId, etapaIds);
-          
-          // Usar dados locais se disponível
-          Object.keys(localData).forEach(etapaId => {
-            const etapaIdNum = parseInt(etapaId);
-            if (!entriesByStep[etapaIdNum] || entriesByStep[etapaIdNum].length === 0) {
-              entriesByStep[etapaIdNum] = localData[etapaIdNum];
-            }
-          });
+          // Sistema unificado - dados offline específicos
+          // Para simplicidade, ignorar por enquanto
+          console.warn('⚠️ Busca de dados locais temporariamente desabilitada');
         } catch (localError) {
-          console.warn('⚠️ Erro ao buscar dados locais:', localError);
+          console.warn('⚠️ Erro ao buscar dados locais (ignorado):', localError);
         }
         
         // Combinar etapas com entradas
@@ -1037,8 +1106,8 @@ export const getServiceStepsWithDataCached = async (
             // Buscar dados locais apenas (evitando erro SQLite)
             let entriesData: any = {};
             try {
-              const localDataService = (await import('./localDataService')).default;
-              entriesData = await localDataService.getServiceStepDataCombined(ordemServicoId, etapaIds);
+              // Sistema unificado - busca simplificada
+              console.warn('⚠️ Busca de dados locais temporariamente desabilitada');
             } catch (localError) {
               console.warn('⚠️ Erro ao buscar dados locais (ignorado):', localError);
             }

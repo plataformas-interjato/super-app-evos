@@ -15,7 +15,8 @@ import { RFValue } from 'react-native-responsive-fontsize';
 import * as ImagePicker from 'expo-image-picker';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
-import { savePhotoInicioOffline, checkNetworkConnection } from '../services/integratedOfflineService';
+import { checkNetworkConnection, savePhotoInicioOffline } from '../services/integratedOfflineService';
+import imageCompressionService from '../services/imageCompressionService';
 import { hasInitialPhoto } from '../services/auditService';
 
 interface StartServiceScreenProps {
@@ -111,19 +112,36 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
 
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.8,
+        quality: 1.0, // Máxima qualidade inicial para depois comprimir
       });
 
       if (!result.canceled && result.assets[0]) {
-        const photoUri = result.assets[0].uri;
-        setPhoto(photoUri);
+        const originalUri = result.assets[0].uri;
+        console.log('📸 Foto inicial capturada, iniciando compressão...');
+        
+        let photoUriToSave = originalUri;
+        
+        try {
+          // COMPRESSÃO INTELIGENTE
+          const compressed = await imageCompressionService.compressImage(originalUri, 'inicial');
+          
+          console.log(`✅ Foto inicial comprimida: ${compressed.compressionRatio.toFixed(1)}% redução (${(compressed.originalSize/(1024*1024)).toFixed(2)}MB → ${(compressed.compressedSize/(1024*1024)).toFixed(2)}MB)`);
+          
+          // Usar URI comprimida
+          photoUriToSave = compressed.uri;
+          setPhoto(compressed.uri);
+          
+        } catch (compressionError) {
+          console.warn('⚠️ Erro na compressão, usando foto original:', compressionError);
+          setPhoto(originalUri);
+        }
 
         // Salvar foto usando o serviço offline
         try {
           const { success, error, savedOffline } = await savePhotoInicioOffline(
             workOrder.id,
             user.id,
-            photoUri
+            photoUriToSave
           );
 
           if (success) {
@@ -162,8 +180,12 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
         }
       }
     } catch (error) {
-      console.error('💥 Erro na função takePhoto:', error);
-      Alert.alert('Erro', 'Não foi possível tirar a foto. Tente novamente.');
+      console.error('💥 Erro ao tirar foto inicial:', error);
+      Alert.alert(
+        'Erro na Câmera',
+        'Não foi possível tirar a foto. Verifique as permissões e tente novamente.',
+        [{ text: 'OK' }]
+      );
     }
   };
 

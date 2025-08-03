@@ -12,7 +12,7 @@ import { supabase } from './supabase';
 
 export interface OfflineUserAction {
   id: string;
-  type: 'COMENTARIO_ETAPA' | 'DADOS_RECORD' | 'ENTRADA_DADOS';
+  type: 'COMENTARIO_ETAPA' | 'DADOS_RECORD' | 'ENTRADA_DADOS' | 'AUDITORIA_FINAL';
   timestamp: string;
   workOrderId: number;
   technicoId: string;
@@ -25,6 +25,7 @@ export interface OfflineUserData {
   comentarios: OfflineUserAction[];
   dadosRecords: OfflineUserAction[];
   entradaDados: OfflineUserAction[];
+  auditorias: OfflineUserAction[];
 }
 
 class UnifiedOfflineDataService {
@@ -218,6 +219,142 @@ class UnifiedOfflineDataService {
   }
 
   /**
+   * SALVAR AUDITORIA FINAL (FileSystem)
+   */
+  async saveAuditoriaFinal(
+    workOrderId: number,
+    technicoId: string,
+    photoBase64: string,
+    trabalhoRealizado: boolean,
+    motivo?: string,
+    comentario?: string
+  ): Promise<{ success: boolean; error?: string; savedOffline?: boolean }> {
+    
+    await this.initialize();
+    
+    try {
+      // 1. Criar ação offline
+      const actionId = `auditoria_${workOrderId}_${Date.now()}`;
+      const offlineAction: OfflineUserAction = {
+        id: actionId,
+        type: 'AUDITORIA_FINAL',
+        timestamp: new Date().toISOString(),
+        workOrderId,
+        technicoId,
+        data: {
+          photoBase64,
+          trabalhoRealizado,
+          motivo,
+          comentario
+        },
+        synced: false,
+        attempts: 0
+      };
+
+      // 2. Salvar no FileSystem
+      const saveResult = await this._saveUserAction(offlineAction);
+      if (!saveResult.success) {
+        return { success: false, error: saveResult.error };
+      }
+
+      // 3. Tentar sincronizar online se possível
+      const syncResult = await this._tryOnlineSync(offlineAction);
+      
+      if (syncResult.success) {
+        return { success: true };
+      } else {
+        return { 
+          success: true, 
+          savedOffline: true, 
+          error: `Salvo offline: ${syncResult.error}` 
+        };
+      }
+
+    } catch (error) {
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Erro desconhecido'
+      };
+    }
+  }
+
+  /**
+   * SALVAR DADOS DE ETAPA LOCAL (MÉTODO DE COMPATIBILIDADE)
+   */
+  async saveServiceStepDataLocal(
+    workOrderId: number,
+    etapaId: number,
+    valor?: string,
+    fotoBase64?: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    
+    await this.initialize();
+    
+    try {
+      console.log(`💾 [UNIFIED-OFFLINE] Salvando dados de etapa local: OS ${workOrderId}, Etapa ${etapaId}`);
+      
+      if (fotoBase64) {
+        // Salvar como dados record (com foto)
+        const result = await this.saveDadosRecord(
+          workOrderId,
+          'fallback_local',
+          etapaId,
+          fotoBase64,
+          valor
+        );
+        
+        if (result.success) {
+          return {
+            success: true,
+            data: {
+              id: Date.now(),
+              etapa_os_id: etapaId,
+              ordem_entrada: 1,
+              valor,
+              foto_base64: fotoBase64,
+              completed: true
+            }
+          };
+        } else {
+          return { success: false, error: result.error };
+        }
+      } else if (valor) {
+        // Salvar como entrada de dados simples
+        const result = await this.saveEntradaDados(
+          workOrderId,
+          'fallback_local',
+          etapaId,
+          valor
+        );
+        
+        if (result.success) {
+          return {
+            success: true,
+            data: {
+              id: Date.now(),
+              etapa_os_id: etapaId,
+              ordem_entrada: 1,
+              valor,
+              completed: true
+            }
+          };
+        } else {
+          return { success: false, error: result.error };
+        }
+      } else {
+        return { success: false, error: 'Nenhum valor ou foto fornecido' };
+      }
+      
+    } catch (error) {
+      console.error('❌ [UNIFIED-OFFLINE] Erro ao salvar dados de etapa local:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Erro desconhecido'
+      };
+    }
+  }
+
+  /**
    * RECUPERAR DADOS OFFLINE DO USUÁRIO
    */
   async getUserOfflineData(workOrderId: number): Promise<{
@@ -239,7 +376,8 @@ class UnifiedOfflineDataService {
         const userData: OfflineUserData = {
           comentarios: actions.filter(a => a.type === 'COMENTARIO_ETAPA'),
           dadosRecords: actions.filter(a => a.type === 'DADOS_RECORD'),
-          entradaDados: actions.filter(a => a.type === 'ENTRADA_DADOS')
+          entradaDados: actions.filter(a => a.type === 'ENTRADA_DADOS'),
+          auditorias: actions.filter(a => a.type === 'AUDITORIA_FINAL')
         };
         
         return {
@@ -253,7 +391,8 @@ class UnifiedOfflineDataService {
         data: {
           comentarios: [],
           dadosRecords: [],
-          entradaDados: []
+          entradaDados: [],
+          auditorias: []
         },
         success: true
       };
@@ -264,7 +403,8 @@ class UnifiedOfflineDataService {
         data: {
           comentarios: [],
           dadosRecords: [],
-          entradaDados: []
+          entradaDados: [],
+          auditorias: []
         },
         success: false,
         error: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -289,6 +429,7 @@ class UnifiedOfflineDataService {
       // Verificar conectividade
       const netInfo = await NetInfo.fetch();
       if (!netInfo.isConnected) {
+        console.log('📱 [UNIFIED-OFFLINE] Sem conexão - pulando sincronização');
         return {
           success: false,
           synced: 0,
@@ -296,8 +437,12 @@ class UnifiedOfflineDataService {
         };
       }
 
+      console.log('🌐 [UNIFIED-OFFLINE] Conexão disponível - buscando ações pendentes...');
+
       // Buscar todas as ações pendentes ou de uma OS específica
       const allActions = await this._getAllPendingActions(workOrderId);
+      
+      console.log(`🔍 [UNIFIED-OFFLINE] ${allActions.length} ações pendentes encontradas`);
       
       if (allActions.length === 0) {
         console.log('✅ [UNIFIED-OFFLINE] Nenhuma ação pendente para sincronizar');
@@ -308,25 +453,39 @@ class UnifiedOfflineDataService {
         };
       }
 
-      console.log(`🔄 [UNIFIED-OFFLINE] ${allActions.length} ações pendentes encontradas`);
+      // Log detalhado das ações encontradas
+      allActions.forEach((action, index) => {
+        console.log(`📋 [UNIFIED-OFFLINE] Ação ${index + 1}: ${action.type} (OS: ${action.workOrderId})`);
+      });
       
       let synced = 0;
       const errors: string[] = [];
       
       for (const action of allActions) {
         try {
+          console.log(`🔄 [UNIFIED-OFFLINE] Sincronizando ação: ${action.id} (${action.type})`);
+          
           const result = await this._tryOnlineSync(action);
           if (result.success) {
             synced++;
+            console.log(`✅ [UNIFIED-OFFLINE] Ação ${action.id} sincronizada com sucesso`);
           } else {
+            console.log(`❌ [UNIFIED-OFFLINE] Erro na ação ${action.id}: ${result.error}`);
             errors.push(`${action.id}: ${result.error}`);
           }
         } catch (error) {
-          errors.push(`${action.id}: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+          const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
+          console.log(`💥 [UNIFIED-OFFLINE] Erro crítico na ação ${action.id}: ${errorMsg}`);
+          errors.push(`${action.id}: ${errorMsg}`);
         }
       }
       
       console.log(`✅ [UNIFIED-OFFLINE] Sincronização concluída: ${synced}/${allActions.length} ações sincronizadas`);
+      
+      if (errors.length > 0) {
+        console.log(`⚠️ [UNIFIED-OFFLINE] Erros encontrados: ${errors.length}`);
+        errors.forEach(error => console.log(`   - ${error}`));
+      }
       
       return {
         success: errors.length === 0,
@@ -341,6 +500,33 @@ class UnifiedOfflineDataService {
         synced: 0,
         errors: [error instanceof Error ? error.message : 'Erro desconhecido']
       };
+    }
+  }
+
+  /**
+   * CONTAR AÇÕES PENDENTES (SEM SINCRONIZAR)
+   */
+  async countPendingActions(workOrderId?: number): Promise<{
+    count: number;
+    byType: { [type: string]: number };
+  }> {
+    await this.initialize();
+    
+    try {
+      const allActions = await this._getAllPendingActions(workOrderId);
+      
+      const byType: { [type: string]: number } = {};
+      allActions.forEach(action => {
+        byType[action.type] = (byType[action.type] || 0) + 1;
+      });
+      
+      return {
+        count: allActions.length,
+        byType
+      };
+    } catch (error) {
+      console.error('❌ [UNIFIED-OFFLINE] Erro ao contar ações pendentes:', error);
+      return { count: 0, byType: {} };
     }
   }
 
@@ -407,8 +593,7 @@ class UnifiedOfflineDataService {
           result = await saveDadosRecord(
             action.workOrderId,
             action.data.entradaDadosId,
-            action.data.photoUri,
-            action.data.valor
+            action.data.photoBase64 || action.data.photoUri
           );
           break;
           
@@ -425,6 +610,21 @@ class UnifiedOfflineDataService {
             });
           
           result = { error };
+          break;
+          
+        case 'AUDITORIA_FINAL':
+          // Sincronizar auditoria final
+          const { saveAuditoriaFinal } = await import('./auditService');
+          const { data: auditoriaData, error: auditoriaError } = await saveAuditoriaFinal(
+            action.workOrderId,
+            action.technicoId,
+            action.data.photoBase64,
+            action.data.trabalhoRealizado,
+            action.data.motivo,
+            action.data.comentario
+          );
+          
+          result = { error: auditoriaError };
           break;
           
         default:
@@ -478,9 +678,37 @@ class UnifiedOfflineDataService {
         const actions = (result.data as OfflineUserAction[]) || [];
         return actions.filter(a => !a.synced);
       } else {
-        // Buscar todas as ações pendentes (implementação futura se necessário)
-        console.warn('⚠️ [UNIFIED-OFFLINE] Busca de todas as ações pendentes não implementada');
-        return [];
+        // Buscar todas as ações pendentes de todas as OSs
+        const allPendingActions: OfflineUserAction[] = [];
+        
+        // Buscar por IDs sequenciais de forma mais eficiente
+        const diagnostics = await secureDataStorage.getDiagnostics();
+        const userActionsCount = diagnostics.dataTypes.USER_ACTIONS || 0;
+        
+        console.log(`🔍 [UNIFIED-OFFLINE] ${userActionsCount} arquivos USER_ACTIONS encontrados`);
+        
+        if (userActionsCount > 0) {
+          // Buscar arquivos com IDs de 1 a 500 (range otimizado)
+          for (let osId = 1; osId <= 500; osId++) {
+            try {
+              const result = await secureDataStorage.getData('USER_ACTIONS', `user_actions_${osId}`);
+              if (result.data && Array.isArray(result.data)) {
+                const actions = result.data as OfflineUserAction[];
+                const pendingActions = actions.filter(a => !a.synced);
+                if (pendingActions.length > 0) {
+                  console.log(`📋 [UNIFIED-OFFLINE] OS ${osId}: ${pendingActions.length} ações pendentes`);
+                }
+                allPendingActions.push(...pendingActions);
+              }
+            } catch {
+              // Ignorar erros - arquivo não existe
+              continue;
+            }
+          }
+        }
+        
+        console.log(`📊 [UNIFIED-OFFLINE] Total: ${allPendingActions.length} ações pendentes encontradas`);
+        return allPendingActions;
       }
     } catch (error) {
       console.error('❌ [UNIFIED-OFFLINE] Erro ao buscar ações pendentes:', error);
