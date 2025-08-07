@@ -27,6 +27,7 @@ interface WorkOrderDetailScreenProps {
 
 const { width } = Dimensions.get('window');
 
+// Validação de Funcionalidade: Online - Tela visualização da ordem de serviço (após o modal) - Validado pelo usuário. Não alterar sem nova validação.
 const WorkOrderDetailScreen: React.FC<WorkOrderDetailScreenProps> = ({
   workOrder,
   user,
@@ -73,6 +74,7 @@ const WorkOrderDetailScreen: React.FC<WorkOrderDetailScreenProps> = ({
       
       {/* Header */}
       <View style={styles.header}>
+      {/* Validação de Funcionalidade: Online - Tela visualização da ordem de serviço (após o modal) - Validado pelo usuário. Não alterar sem nova validação. */}
         <TouchableOpacity onPress={onBackPress} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
@@ -81,6 +83,7 @@ const WorkOrderDetailScreen: React.FC<WorkOrderDetailScreenProps> = ({
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Card Principal */}
+        {/* Validação de Funcionalidade: Online - Tela visualização da ordem de serviço (após o modal) - Validado pelo usuário. Não alterar sem nova validação. */}
         <View style={styles.mainCard}>
           {/* Badge de Status e ID */}
           <View style={styles.cardHeader}>
@@ -167,6 +170,7 @@ const WorkOrderDetailScreen: React.FC<WorkOrderDetailScreenProps> = ({
         )}
 
         {/* Botão de Iniciar - apenas para técnicos */}
+        {/* Validação de Funcionalidade: Online - Tela visualização da ordem de serviço (após o modal) - Validado pelo usuário. Não alterar sem nova validação. */}
         {user.userType === 'tecnico' && (
           <TouchableOpacity style={styles.startButton} onPress={onStartService}>
             <Text style={styles.startButtonText}>

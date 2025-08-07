@@ -688,48 +688,21 @@ class UnifiedOfflineDataService {
         console.log(`🔍 [UNIFIED-OFFLINE] ${userActionsCount} arquivos USER_ACTIONS encontrados`);
         
         if (userActionsCount > 0) {
-          // SOLUÇÃO CORRETA: Buscar apenas IDs que realmente existem
-          try {
-            const allMetadata = await secureDataStorage.getAllMetadata();
-            const userActionFiles = Object.values(allMetadata)
-              .filter(meta => meta.dataType === 'USER_ACTIONS')
-              .map(meta => meta.id);
-              
-            console.log(`🔍 [UNIFIED-OFFLINE] Encontrados ${userActionFiles.length} arquivos USER_ACTIONS`);
-            
-            for (const fileId of userActionFiles) {
-              try {
-                const result = await secureDataStorage.getData('USER_ACTIONS', fileId);
-                if (result.data && Array.isArray(result.data)) {
-                  const actions = result.data as OfflineUserAction[];
-                  const pendingActions = actions.filter(a => !a.synced);
-                  if (pendingActions.length > 0) {
-                    console.log(`📋 [UNIFIED-OFFLINE] ${fileId}: ${pendingActions.length} ações pendentes`);
-                  }
-                  allPendingActions.push(...pendingActions);
+          // Buscar arquivos com IDs de 1 a 500 (range otimizado)
+          for (let osId = 1; osId <= 500; osId++) {
+            try {
+              const result = await secureDataStorage.getData('USER_ACTIONS', `user_actions_${osId}`);
+              if (result.data && Array.isArray(result.data)) {
+                const actions = result.data as OfflineUserAction[];
+                const pendingActions = actions.filter(a => !a.synced);
+                if (pendingActions.length > 0) {
+                  console.log(`📋 [UNIFIED-OFFLINE] OS ${osId}: ${pendingActions.length} ações pendentes`);
                 }
-              } catch (error) {
-                console.warn(`⚠️ [UNIFIED-OFFLINE] Erro ao carregar ${fileId}:`, error);
-                continue;
+                allPendingActions.push(...pendingActions);
               }
-            }
-          } catch (metadataError) {
-            // Fallback: buscar range limitado mas informar sobre limitação
-            console.warn('⚠️ [UNIFIED-OFFLINE] Fallback: buscando range limitado 1-50');
-            for (let osId = 1; osId <= 50; osId++) {
-              try {
-                const result = await secureDataStorage.getData('USER_ACTIONS', `user_actions_${osId}`);
-                if (result.data && Array.isArray(result.data)) {
-                  const actions = result.data as OfflineUserAction[];
-                  const pendingActions = actions.filter(a => !a.synced);
-                  if (pendingActions.length > 0) {
-                    console.log(`📋 [UNIFIED-OFFLINE] OS ${osId}: ${pendingActions.length} ações pendentes`);
-                  }
-                  allPendingActions.push(...pendingActions);
-                }
-              } catch {
-                continue;
-              }
+            } catch {
+              // Ignorar erros - arquivo não existe
+              continue;
             }
           }
         }

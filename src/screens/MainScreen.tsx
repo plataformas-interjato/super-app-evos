@@ -45,7 +45,6 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
   const [activeFilter, setActiveFilter] = useState<FilterStatus>('todas');
   const [activeTab, setActiveTab] = useState<'home' | 'profile'>('home');
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
-  const [isConnected, setIsConnected] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -57,34 +56,24 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
   const [lastRefreshTrigger, setLastRefreshTrigger] = useState<number>(0);
   const [lastFilterKey, setLastFilterKey] = useState<string>('');
 
-  const { appUser } = useAuth();
+  const { appUser, isConnected } = useAuth();
 
+  // Efeito para carregar as ordens de serviço assim que o usuário for identificado
   useEffect(() => {
-    // CARREGAMENTO INICIAL - apenas na primeira vez
-    loadWorkOrders();
-    
-    // Verificar conexão inicial
-    NetInfo.fetch().then(state => {
-      setIsConnected(state.isConnected || false);
-    });
-    
-    // Listener para mudanças de conectividade
-    const unsubscribe = NetInfo.addEventListener(state => {
-      setIsConnected(state.isConnected || false);
-    });
+    if (appUser) {
+      loadWorkOrders();
+    }
+    // A intencional ausência de dependências de `loadWorkOrders` é para
+    // garantir que este hook só seja reativado quando o `appUser` mudar.
+  }, [appUser]);
 
+  // Efeito para registrar listeners e callbacks uma única vez
+  useEffect(() => {
     // Pré-carregar todos os dados quando online (em background)
     preloadAllData();
     
-    // Registrar callback para sincronização automática
     const unsubscribeSync = registerSyncCallback(async (result) => {
       if (result.synced > 0) {
-        console.log(`🔄 ${result.synced} ações sincronizadas - verificando se precisamos atualizar dados`);
-        
-        // IMPORTANTE: Não atualizar dados automaticamente após sincronização
-        // para evitar sobrescrever status locais "finalizada" com status do servidor
-        console.log('✅ Sincronização concluída - mantendo status locais para evitar regressão');
-        
         // Apenas recarregar se não há status locais pendentes
         setTimeout(async () => {
           try {
@@ -92,59 +81,31 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
             const hasLocalChanges = Object.values(localStatuses).some(status => !status.synced);
             
             if (!hasLocalChanges) {
-              console.log('📱 Nenhum status local pendente - pode atualizar dados do servidor');
-              
-              // Verificar se ainda não está carregando para evitar conflitos
               if (isLoadingWorkOrders) {
-                console.log('⚠️ loadWorkOrders em execução, pulando atualização pós-sync');
                 return;
               }
-              
-              const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
-              
-              const { data: freshData, error: fetchError } = await fetchWorkOrdersWithFilters(
-                userId,
-                activeFilter,
-                searchText.trim() || undefined
-              );
-              
-              if (!fetchError && freshData) {
-                const mergedWorkOrders = await mergeLocalStatus(freshData);
-                setWorkOrders(mergedWorkOrders);
-              }
-            } else {
-              console.log('⚠️ Status locais pendentes - não atualizando para preservar mudanças');
+              await loadWorkOrders();
             }
           } catch (error) {
-            console.error('❌ Erro ao verificar status locais após sincronização:', error);
+            // Erro não crítico
           }
         }, 2000);
       }
     });
     
-    // Callback para OS finalizada - MANTER para atualizar quando OS é finalizada
     const unsubscribeOSFinalizada = registerOSFinalizadaCallback(async (workOrderId) => {
-      console.log(`✅ OS ${workOrderId} finalizada online - atualizando home INSTANTANEAMENTE`);
-      
       try {
-        // ATUALIZAÇÃO INSTANTÂNEA: Não usar setTimeout, atualizar imediatamente
-        console.log('🔄 Atualizando home imediatamente após OS finalizada...');
         await loadWorkOrders();
-        console.log('✅ Home atualizada instantaneamente após OS finalizada online');
-        
       } catch (error) {
-        console.error('❌ Erro ao processar OS finalizada:', error);
-        // Mesmo com erro, tentar recarregar
-        await loadWorkOrders();
+        // Erro não crítico
       }
     });
 
     return () => {
-      unsubscribe();
       unsubscribeSync();
       unsubscribeOSFinalizada();
     };
-  }, [appUser]);
+  }, []); // Array de dependências vazio para rodar apenas uma vez.
 
   // Sistema de refresh automático a cada 3 minutos quando online - MANTER
   useEffect(() => {
@@ -200,116 +161,38 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     }
   }, [refreshTrigger, lastRefreshTrigger, isLoadingWorkOrders]);
 
+  // Validação de Funcionalidade: Online - Listagem das OS, filtros de busca id ou titulo e botoes status - Validado pelo usuário. Não alterar sem nova validação.
   const loadWorkOrders = async () => {
-    // Proteção contra execuções simultâneas
-    if (isLoadingWorkOrders) {
-      console.log('⚠️ loadWorkOrders já em execução, ignorando nova chamada');
+    if (isLoadingWorkOrders) return;
+
+    // Apenas prossiga se o usuário estiver carregado.
+    if (!appUser) {
+      setLoading(false);
       return;
     }
 
-    try {
-      setIsLoadingWorkOrders(true);
-      setError(null);
-      
-      // Verificação de segurança: se não há usuário, não carregar
-      if (!appUser) {
-        console.log('⚠️ Usuário não disponível, pulando carregamento de OSs');
-        setLoading(false);
-        return;
-      }
-      
-      const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
-      
-      console.log('🔍 Carregando ordens de serviço com cache...');
-      console.log('👤 Usuário:', appUser?.name, '- Tipo:', appUser?.userType);
-      console.log('🔢 ID numérico do usuário:', appUser?.id);
-      console.log('🔧 UserId para filtro:', userId);
-      console.log('📋 Filtro ativo:', activeFilter);
-      console.log('🔎 Busca:', searchText);
-      
-      // Verificar conectividade antes de fazer a requisição
-      const netInfo = await NetInfo.fetch();
-      console.log('📶 Status de conectividade:', netInfo.isConnected ? 'Online' : 'Offline');
-      
-      // MELHORADO: Se online, sempre buscar dados frescos para garantir status atualizados
-      let data, fetchError, fromCache;
-      
-      if (netInfo.isConnected) {
-        console.log('🌐 ONLINE: Buscando dados frescos para garantir status atualizados');
-        
-        // Limpar cache primeiro para garantir dados frescos
-        const { clearWorkOrdersCache } = require('../services/workOrderCacheService');
-        await clearWorkOrdersCache(userId);
-        
-        // Buscar diretamente do servidor
-        const freshResult = await fetchWorkOrdersWithFilters(
-          userId,
-          'todas', // Buscar todas para fazer cache completo
-          undefined // Sem filtro de busca para cache completo
-        );
-        
-        data = freshResult.data;
-        fetchError = freshResult.error;
-        fromCache = false;
-        
-        // Fazer cache dos dados frescos
-        if (data && !fetchError) {
-          const { cacheWorkOrders } = require('../services/workOrderCacheService');
-          await cacheWorkOrders(data, userId);
-          
-          // Aplicar filtros
-          const { filterCachedWorkOrders } = require('../services/workOrderCacheService');
-          data = filterCachedWorkOrders(
-            data,
-            activeFilter,
-            searchText.trim() || undefined
-          );
-        }
-      } else {
-        // OFFLINE: Usar cache como antes
-        console.log('📱 OFFLINE: Usando sistema de cache');
-        const result = await getWorkOrdersWithCache(
-          () => fetchWorkOrdersWithFilters(
-            userId,
-            'todas',
-            undefined
-          ),
-          userId,
-          activeFilter,
-          searchText.trim() || undefined
-        );
-        
-        data = result.data;
-        fetchError = result.error;
-        fromCache = result.fromCache;
-      }
+    setIsLoadingWorkOrders(true);
+    setLoading(true);
+    setError(null);
+    
+    const userId = appUser.userType === 'tecnico' ? appUser.id : undefined;
 
-      if (fetchError) {
-        setError(fetchError);
-        console.error('❌ Erro ao carregar ordens de serviço:', fetchError);
-        setWorkOrders([]);
-      } else {
-        console.log(`✅ ${data?.length || 0} ordens de serviço carregadas ${fromCache ? 'do cache' : 'do servidor'}`);
-        
-        // Mesclar com status locais (importante para refletir mudanças offline)
-        const mergedWorkOrders = await mergeLocalStatus(data || []);
-        setWorkOrders(mergedWorkOrders);
-        
-        // Mostrar indicador se dados vieram do cache
-        if (fromCache) {
-          console.log(`📱 Dados carregados do cache ${netInfo.isConnected ? 'online' : 'offline'}`);
-        }
-        
-        // 🚀 NOVO: Pré-carregar todas as informações das OSs automaticamente
-        if (data && data.length > 0) {
-          console.log('🚀 Iniciando pré-carregamento automático das OSs...');
-          preloadWorkOrdersData(data, fromCache);
-        }
+    try {
+      const result = await getWorkOrdersWithCache(
+        () => fetchWorkOrdersWithFilters(userId, 'todas', undefined),
+        userId,
+        activeFilter,
+        searchText.trim() || undefined
+      );
+
+      if (result.error) {
+        setError(result.error);
       }
+      
+      setWorkOrders(result.data || []);
+
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Erro inesperado ao carregar ordens de serviço';
-      setError(errorMessage);
-      console.error('💥 Erro inesperado:', err);
+      setError('Um erro inesperado ocorreu ao carregar as ordens.');
       setWorkOrders([]);
     } finally {
       setLoading(false);
@@ -321,100 +204,53 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     setRefreshing(true);
     
     try {
-      console.log('🔄 Pull-to-refresh: forçando atualização do Supabase...');
-      
-      // Verificação de segurança: se não há usuário, não fazer refresh
       if (!appUser) {
-        console.log('⚠️ Usuário não disponível, pulando refresh');
         setRefreshing(false);
         return;
       }
       
       const userId = appUser?.userType === 'tecnico' ? appUser.id : undefined;
-      console.log('👤 UserId para refresh:', userId);
-      
-      // Verificar conectividade
       const netInfo = await NetInfo.fetch();
-      console.log('📶 Status de conectividade no refresh:', netInfo.isConnected ? 'Online' : 'Offline');
       
       if (!netInfo.isConnected) {
-        console.log('📱 Offline: não é possível atualizar do servidor');
-        Alert.alert(
-          'Sem Conexão',
-          'Não é possível atualizar os dados sem conexão com a internet.',
-          [{ text: 'OK' }]
-        );
+        Alert.alert('Sem Conexão', 'Você precisa estar online para atualizar as ordens de serviço.', [{ text: 'OK' }]);
         setRefreshing(false);
         return;
       }
       
-      // PRIMEIRO: Limpar o cache existente para garantir dados frescos
-      console.log('🗑️ Limpando cache antes do refresh...');
-      const { clearWorkOrdersCache } = require('../services/workOrderCacheService');
-      await clearWorkOrdersCache(userId);
+      // 1. BUSCAR DADOS NOVOS PRIMEIRO
+      const freshData = await fetchWorkOrdersWithFilters(userId, 'todas', undefined);
       
-      // SEGUNDO: Buscar dados frescos do servidor DIRETAMENTE
-      console.log('🌐 Buscando dados frescos do Supabase...');
-      const freshData = await fetchWorkOrdersWithFilters(
-        userId,
-        'todas', // Buscar todas para fazer cache completo
-        undefined // Sem filtro de busca para cache completo
-      );
-      
-      console.log('📊 Resultado da busca fresca:', {
-        success: !freshData.error,
-        dataCount: freshData.data?.length || 0,
-        error: freshData.error
-      });
-      
-      if (freshData.data && !freshData.error) {
-        // TERCEIRO: Fazer cache dos dados frescos
-        console.log('💾 Fazendo cache dos dados frescos...');
-        const { cacheWorkOrders } = require('../services/workOrderCacheService');
-        await cacheWorkOrders(freshData.data, userId);
-        
-        // QUARTO: Aplicar filtros nos dados frescos
-        console.log('🔍 Aplicando filtros nos dados frescos...');
-        const { filterCachedWorkOrders } = require('../services/workOrderCacheService');
-        const filteredData = filterCachedWorkOrders(
-          freshData.data,
-          activeFilter,
-          searchText.trim() || undefined
-        );
-        
-        console.log(`✅ ${filteredData.length} ordens filtradas de ${freshData.data.length} totais`);
-        
-        // QUINTO: Aplicar dados frescos diretamente na tela (SEM status locais no pull-to-refresh)
-        console.log('📱 Aplicando dados frescos do servidor (ignorando status locais)...');
-        setWorkOrders(filteredData);
-        
-        console.log('🎉 Pull-to-refresh concluído - dados frescos do servidor aplicados');
-      } else {
-        console.error('❌ Erro ao buscar dados frescos:', freshData.error);
-        Alert.alert(
-          'Erro na Atualização',
-          freshData.error || 'Não foi possível atualizar os dados do servidor.',
-          [{ text: 'OK' }]
-        );
-        
-        // Mesmo com erro, tentar recarregar do cache
-        await loadWorkOrders();
+      // 2. SE A BUSCA FALHAR, NÃO FAZER NADA E MANTER O CACHE ANTIGO
+      if (freshData.error || !freshData.data) {
+        Alert.alert('Erro na Atualização', freshData.error || 'Não foi possível buscar novas ordens de serviço. Seus dados offline foram mantidos.', [{ text: 'OK' }]);
+        setRefreshing(false);
+        return;
       }
-    } catch (error) {
-      console.error('💥 Erro inesperado no pull-to-refresh:', error);
-      Alert.alert(
-        'Erro',
-        'Erro inesperado ao atualizar dados. Tente novamente.',
-        [{ text: 'OK' }]
-      );
       
-      // Em caso de erro, tentar recarregar normalmente
-      await loadWorkOrders();
+      // 3. SE A BUSCA TIVER SUCESSO, ATUALIZAR O CACHE
+      const { cacheWorkOrders, clearWorkOrdersCache, filterCachedWorkOrders } = require('../services/workOrderCacheService');
+      
+      // Limpa o cache antigo e salva os dados novos de forma segura
+      await clearWorkOrdersCache(userId);
+      await cacheWorkOrders(freshData.data, userId);
+      
+      // Aplicar filtros e atualizar a tela
+      const filteredData = filterCachedWorkOrders(
+        freshData.data,
+        activeFilter,
+        searchText.trim() || undefined
+      );
+      setWorkOrders(filteredData);
+      
+    } catch (error) {
+      Alert.alert('Erro', 'Ocorreu um erro inesperado ao tentar atualizar.', [{ text: 'OK' }]);
     } finally {
       setRefreshing(false);
     }
   };
 
+  // Validação de Funcionalidade: Online - Modal ao clicar na OS - Validado pelo usuário. Não alterar sem nova validação.
   const handleWorkOrderPress = (workOrder: WorkOrder) => {
     // Não permite clique em OS encerradas (finalizadas ou canceladas)
     if (workOrder.status === 'finalizada' || workOrder.status === 'cancelada') {
@@ -428,6 +264,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
     }
   };
 
+  // Validação de Funcionalidade: Online - Página após abrir modal - Validado pelo usuário. Não alterar sem nova validação.
   const handleModalConfirm = () => {
     if (selectedWorkOrder && onOpenWorkOrder) {
       onOpenWorkOrder(selectedWorkOrder);
@@ -701,6 +538,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
           {/* Barra de busca - FIXO */}
           <View style={styles.searchContainer}>
             <View style={styles.searchInputContainer}>
+              {/* Validação de Funcionalidade: Online - Listagem das OS, filtros de busca id ou titulo e botoes status - Validado pelo usuário. Não alterar sem nova validação. */}
               <TextInput
                 style={styles.searchInput}
                 placeholder="Buscar por ID ou título"
@@ -714,6 +552,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
           
           {/* Filtros - FIXO */}
           <View style={styles.filtersContainer}>
+            {/* Validação de Funcionalidade: Online - Listagem das OS, filtros de busca id ou titulo e botoes status - Validado pelo usuário. Não alterar sem nova validação. */}
             {filters.map((filter) => (
               <TouchableOpacity
                 key={filter.key}
@@ -774,13 +613,19 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
               {!loading && !error && workOrders.length === 0 && (
                 <View style={styles.emptyContainer}>
                   <Ionicons name="document-text-outline" size={64} color="#9ca3af" />
-                  <Text style={styles.emptyTitle}>Nenhuma ordem de serviço encontrada</Text>
+                  <Text style={styles.emptyTitle}>
+                    {isConnected ? 'Nenhuma ordem de serviço encontrada' : 'Sem ordens de serviço offline'}
+                  </Text>
                   <Text style={styles.emptySubtitle}>
-                    {searchText ? 'Tente usar outros termos de busca' : 'Não há ordens de serviço no momento'}
+                    {isConnected 
+                      ? (searchText ? 'Tente usar outros termos de busca' : 'Não há ordens de serviço no momento')
+                      : 'Conecte-se à internet e faça login para baixar suas ordens de serviço'
+                    }
                   </Text>
                 </View>
               )}
               
+              {/* Validação de Funcionalidade: Online - Listagem das OS, filtros de busca id ou titulo e botoes status - Validado pelo usuário. Não alterar sem nova validação. */}
               {workOrders.map((workOrder, index) => (
                 <TouchableOpacity 
                   key={workOrder.id} 
@@ -866,6 +711,7 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
           onTabPress={handleTabPress}
         />
 
+        {/* Validação de Funcionalidade: Online - Modal ao clicar na OS - Validado pelo usuário. Não alterar sem nova validação. */}
         {selectedWorkOrder && (
           <WorkOrderModal
             visible={modalVisible}

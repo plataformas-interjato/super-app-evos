@@ -39,6 +39,7 @@ interface AuditData {
   skipPhotoCollection?: boolean;
 }
 
+// Validação de Funcionalidade: Online - Confirmação usuario / Foto final - Trabalho realizado - Validado pelo usuário. Não alterar sem nova validação.
 const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
   workOrder,
   user,
@@ -132,6 +133,7 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
       console.error('💥 DEBUG: Erro ao verificar AsyncStorage:', error);
     }
   };
+  // Validação de Funcionalidade: Online - Confirmação usuario / Foto final - Trabalho realizado - Validado pelo usuário. Não alterar sem nova validação.
 
   const handleFinalPhoto = async () => {
     try {
@@ -174,6 +176,7 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
         'Não foi possível tirar a foto. Verifique as permissões e tente novamente.'
       );
     }
+  // Validação de Funcionalidade: Online - Confirmação usuario / Foto final - Trabalho realizado - Validado pelo usuário. Não alterar sem nova validação.
   };
 
   const handleFinish = async () => {
@@ -302,6 +305,7 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        {/* Validação de Funcionalidade: Online - Confirmação usuario / Foto final - Trabalho realizado - Validado pelo usuário. Não alterar sem nova validação. */}
         {/* User Confirmation Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Confirmação de usuário*</Text>
@@ -326,6 +330,7 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
           </View>
         </View>
 
+        {/* Validação de Funcionalidade: Online - Confirmação usuario / Foto final - Trabalho realizado - Validado pelo usuário. Não alterar sem nova validação. */}
         {/* Work Completion Question */}
         <View style={styles.section}>
           <Text style={styles.questionTitle}>O trabalho foi realizado?*</Text>
@@ -389,6 +394,7 @@ const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
           </View>
         )}
 
+        {/* Validação de Funcionalidade: Online - Confirmação usuario / Foto final - Trabalho realizado - Validado pelo usuário. Não alterar sem nova validação. */}
         {/* Action Button */}
         <TouchableOpacity 
           style={[styles.actionButton, !canProceed && styles.actionButtonDisabled]} 
@@ -486,7 +492,7 @@ const styles = StyleSheet.create({
     height: 250,
     borderRadius: 8,
     backgroundColor: '#f3f4f6',
-    resizeMode: 'contain',
+    resizeMode: 'cover',
   },
   removePhotoButton: {
     position: 'absolute',

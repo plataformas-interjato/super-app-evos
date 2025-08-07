@@ -52,6 +52,7 @@ interface ExtraPhotoEntry {
   created_at: string;
 }
 
+// Validação de Funcionalidade: Online - Tela de auditoria pós serviço / fotos do serviço - Sistema unificado FileSystem - Validado pelo usuário. Não alterar sem nova validação.
 const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   workOrder,
   user,
@@ -491,6 +492,27 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
           Alert.alert('Erro', 'Erro interno ao salvar foto.');
         }
         
+        // 2. Criar ação no offline_actions APENAS COM URI
+        const actionKey = 'offline_actions';
+        const existingActionsStr = await AsyncStorage.getItem(actionKey);
+        const existingActions = existingActionsStr ? JSON.parse(existingActionsStr) : {};
+        
+        const actionId = `dados_record_${workOrder.id}_${entryId}_${Date.now()}`;
+        existingActions[actionId] = {
+          id: actionId,
+          type: 'DADOS_RECORD',
+          timestamp: new Date().toISOString(),
+          workOrderId: workOrder.id,
+          technicoId: user.id,
+          data: {
+            entradaDadosId: entryId,
+            photoUri: photoUriToSave, // URI direto sem conversão
+          },
+          synced: false,
+          attempts: 0
+        };
+        
+        await AsyncStorage.setItem(actionKey, JSON.stringify(existingActions));
         
         // Restaurar StatusBar após captura
         setTimeout(() => {
@@ -587,6 +609,27 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
             Alert.alert('Erro', 'Erro interno ao salvar foto.');
           }
           
+          // 2. Criar ação no offline_actions APENAS COM URI
+          const actionKey = 'offline_actions';
+          const existingActionsStr = await AsyncStorage.getItem(actionKey);
+          const existingActions = existingActionsStr ? JSON.parse(existingActionsStr) : {};
+          
+          const actionId = `dados_record_${workOrder.id}_${selectedEntryForModel.id}_${Date.now()}`;
+          existingActions[actionId] = {
+            id: actionId,
+            type: 'DADOS_RECORD',
+            timestamp: new Date().toISOString(),
+            workOrderId: workOrder.id,
+            technicoId: user.id,
+            data: {
+              entradaDadosId: selectedEntryForModel.id,
+              photoUri: photoUriToSave, // URI direto sem conversão
+            },
+            synced: false,
+            attempts: 0
+          };
+          
+          await AsyncStorage.setItem(actionKey, JSON.stringify(existingActions));
           
           // 3. Adicionar ao estado local para exibição (usando URI direto)
           console.log(`💾 Adicionando foto ao estado local para entrada ${selectedEntryForModel.id}`);
@@ -755,35 +798,63 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
       if (!result.canceled && result.assets[0]) {
         const photoUri = result.assets[0].uri;
         
-        console.log("💾 Salvando foto extra no sistema unificado (FileSystem)...");
+        console.log('💾 Salvando foto extra URI direto no AsyncStorage (SEM conversão base64)...');
         
-        try {
-          const { default: unifiedOfflineDataService } = await import("../services/unifiedOfflineDataService");
-          
-          const result = await unifiedOfflineDataService.saveDadosRecord(
-            workOrder.id,
-            user.id.toString(),
-            extraEntry.stepId, // Usar stepId como entradaDadosId
-            photoUri
-          );
-          
-          if (result.success) {
-            console.log("✅ Foto extra salva no sistema unificado");
-            
-            setExtraPhotoEntries(prev => ({
-              ...prev,
-              [extraEntry.stepId]: prev[extraEntry.stepId].map(entry => 
-                entry.id === extraEntry.id ? { ...entry, photoUri: photoUri } : entry
-              )
-            }));
-          } else {
-            console.error("❌ Erro ao salvar foto extra:", result.error);
-            Alert.alert("Erro", "Não foi possível salvar a foto extra.");
-          }
-        } catch (unifiedError) {
-          console.error("❌ Erro no sistema unificado:", unifiedError);
-          Alert.alert("Erro", "Erro interno ao salvar foto extra.");
-        }
+        // 1. Salvar no offline_fotos_extras APENAS O URI (sem conversão base64)
+        const offlineKey = 'offline_fotos_extras';
+        const existingDataStr = await AsyncStorage.getItem(offlineKey);
+        const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
+        
+        existingData[extraEntry.id] = {
+          ativo: 1,
+          valor: photoUri, // Salvar URI direto sem conversão
+          ordem_servico_id: workOrder.id,
+          etapa_id: extraEntry.stepId,
+          titulo: extraEntry.titulo,
+          tipo: 'FOTO_EXTRA',
+          created_at: extraEntry.created_at,
+          synced: false
+        };
+        
+        await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
+        
+        // 2. Criar ação no offline_actions APENAS COM URI
+        const actionKey = 'offline_actions';
+        const existingActionsStr = await AsyncStorage.getItem(actionKey);
+        const existingActions = existingActionsStr ? JSON.parse(existingActionsStr) : {};
+        
+        const actionId = `foto_extra_${workOrder.id}_${extraEntry.stepId}_${Date.now()}`;
+        existingActions[actionId] = {
+          id: actionId,
+          type: 'DADOS_RECORD',
+          timestamp: new Date().toISOString(),
+          workOrderId: workOrder.id,
+          technicoId: user.id,
+          data: {
+            entradaDadosId: null, // Usar null para indicar foto extra
+            photoUri: photoUri, // URI direto sem conversão
+            extraData: {
+              etapaId: extraEntry.stepId,
+              titulo: extraEntry.titulo,
+              tipo: 'FOTO_EXTRA'
+            }
+          },
+          synced: false,
+          attempts: 0
+        };
+        
+        await AsyncStorage.setItem(actionKey, JSON.stringify(existingActions));
+        
+        // 3. Atualizar estado local (usando URI direto)
+        setExtraPhotoEntries(prev => ({
+          ...prev,
+          [extraEntry.stepId]: prev[extraEntry.stepId].map(entry => 
+            entry.id === extraEntry.id ? { ...entry, photoUri: photoUri } : entry
+          )
+        }));
+        
+        console.log('✅ Foto extra salva com URI direto');
+        console.log('📱 Foto será convertida para base64 apenas durante sincronização');
         
         // Restaurar StatusBar após captura
         setTimeout(() => {
@@ -840,35 +911,63 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
       if (!result.canceled && result.assets[0]) {
         const photoUri = result.assets[0].uri;
         
-        console.log("💾 Salvando foto extra via modal no sistema unificado (FileSystem)...");
+        console.log('💾 Salvando foto extra via modal URI direto no AsyncStorage (SEM conversão base64)...');
         
-        try {
-          const { default: unifiedOfflineDataService } = await import("../services/unifiedOfflineDataService");
-          
-          const result = await unifiedOfflineDataService.saveDadosRecord(
-            workOrder.id,
-            user.id.toString(),
-            selectedExtraEntry.stepId,
-            photoUri
-          );
-          
-          if (result.success) {
-            console.log("✅ Foto extra via modal salva no sistema unificado");
-            
-            setExtraPhotoEntries(prev => ({
-              ...prev,
-              [selectedExtraEntry.stepId]: prev[selectedExtraEntry.stepId].map(entry => 
-                entry.id === selectedExtraEntry.id ? { ...entry, photoUri: photoUri } : entry
-              )
-            }));
-          } else {
-            console.error("❌ Erro ao salvar foto extra via modal:", result.error);
-            Alert.alert("Erro", "Não foi possível salvar a foto extra.");
-          }
-        } catch (unifiedError) {
-          console.error("❌ Erro no sistema unificado:", unifiedError);
-          Alert.alert("Erro", "Erro interno ao salvar foto extra.");
-        }
+        // 1. Salvar no offline_fotos_extras APENAS O URI (sem conversão base64)
+        const offlineKey = 'offline_fotos_extras';
+        const existingDataStr = await AsyncStorage.getItem(offlineKey);
+        const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
+        
+        existingData[selectedExtraEntry.id] = {
+          ativo: 1,
+          valor: photoUri, // Salvar URI direto sem conversão
+          ordem_servico_id: workOrder.id,
+          etapa_id: selectedExtraEntry.stepId,
+          titulo: selectedExtraEntry.titulo,
+          tipo: 'FOTO_EXTRA',
+          created_at: selectedExtraEntry.created_at,
+          synced: false
+        };
+        
+        await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
+        
+        // 2. Criar ação no offline_actions APENAS COM URI
+        const actionKey = 'offline_actions';
+        const existingActionsStr = await AsyncStorage.getItem(actionKey);
+        const existingActions = existingActionsStr ? JSON.parse(existingActionsStr) : {};
+        
+        const actionId = `foto_extra_modal_${workOrder.id}_${selectedExtraEntry.stepId}_${Date.now()}`;
+        existingActions[actionId] = {
+          id: actionId,
+          type: 'DADOS_RECORD',
+          timestamp: new Date().toISOString(),
+          workOrderId: workOrder.id,
+          technicoId: user.id,
+          data: {
+            entradaDadosId: null, // Usar null para indicar foto extra
+            photoUri: photoUri, // URI direto sem conversão
+            extraData: {
+              etapaId: selectedExtraEntry.stepId,
+              titulo: selectedExtraEntry.titulo,
+              tipo: 'FOTO_EXTRA'
+            }
+          },
+          synced: false,
+          attempts: 0
+        };
+        
+        await AsyncStorage.setItem(actionKey, JSON.stringify(existingActions));
+        
+        // 3. Atualizar estado local (usando URI direto)
+        setExtraPhotoEntries(prev => ({
+          ...prev,
+          [selectedExtraEntry.stepId]: prev[selectedExtraEntry.stepId].map(entry => 
+            entry.id === selectedExtraEntry.id ? { ...entry, photoUri: photoUri } : entry
+          )
+        }));
+        
+        console.log('✅ Foto extra via modal salva com URI direto');
+        console.log('📱 Foto será convertida para base64 apenas durante sincronização');
         
         // Restaurar StatusBar após captura
         setTimeout(() => {
@@ -1179,8 +1278,9 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
               }
             }}
           >
+            {/* Validação de Funcionalidade: Online - Exibição de fotos - resizeMode="cover" adicionado para tamanho consistente - Validado pelo usuário. Não alterar sem nova validação. */}
             {shouldShowPhoto && photoToShow ? (
-              <Image source={{ uri: photoToShow }} style={styles.photoImage} />
+              <Image source={{ uri: photoToShow }} style={styles.photoImage} resizeMode="cover" />
             ) : (
               <Ionicons name="camera" size={40} color="#000000" />
             )}
@@ -1561,6 +1661,7 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
           <StatusBar backgroundColor="black" barStyle="light-content" />
           
           {/* Foto Atual - Ocupa mais espaço sem header e texto */}
+          {/* Validação de Funcionalidade: Online - Visualização de foto tirada pelo usuário - resizeMode="contain" para fidelidade da imagem original - Validado pelo usuário. Não alterar sem nova validação. */}
           <View style={styles.modalImageContainerFullscreen}>
             {selectedEntryForCurrent && (
               <Image
@@ -1883,7 +1984,8 @@ const styles = StyleSheet.create({
     paddingBottom: 200,
   },
   modalImage: {
-    width: '90%',
+    
+    width: '100%',
     height: '100%',
   },
   modalTextContainer: {

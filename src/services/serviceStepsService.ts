@@ -818,467 +818,245 @@ export const getAllStepsForDebug = async (): Promise<void> => {
 };
 
 /**
- * Busca etapas com cache - USANDO NOVO SISTEMA FILESYSTEM
+ * Busca etapas com cache - USANDO SISTEMA UNIFICADO FILESYSTEM COM FALLBACKS
  */
 export const getServiceStepsWithDataCached = async (
   tipoOsId: number,
   ordemServicoId: number
 ): Promise<{ data: ServiceStep[] | null; error: string | null; fromCache: boolean }> => {
   try {
-    console.log(`🔍 getServiceStepsWithDataCached: tipo_os_id=${tipoOsId}, ordem_servico_id=${ordemServicoId}`);
+    console.log(`🔍 [FILESYSTEM] getServiceStepsWithDataCached: tipo_os_id=${tipoOsId}, ordem_servico_id=${ordemServicoId}`);
     
-    // NOVO: Garantir que dados offline estejam disponíveis (FileSystem)
-    const offlineDataStatus = await smartOfflineDataService.ensureOfflineDataAvailable();
-    if (!offlineDataStatus.available) {
-      console.warn('⚠️ [FILESYSTEM] Dados offline não disponíveis:', offlineDataStatus.error);
-    }
-    
-    // NOVO: Buscar etapas usando o novo serviço FileSystem
-    const etapasResult = await smartOfflineDataService.getEtapasByTipoOS(tipoOsId);
-    
-    if (etapasResult.etapas && etapasResult.etapas.length > 0) {
-      console.log(`✅ [FILESYSTEM] ${etapasResult.etapas.length} etapas encontradas no FileSystem`);
-      
-      // Converter para o formato ServiceStep
-      const steps: ServiceStep[] = etapasResult.etapas.map(etapa => ({
-        id: etapa.id,
-        titulo: etapa.titulo,
-        ordem_etapa: etapa.ordem_etapa,
-        etapa_os_id: etapa.id,
-        entradas: []
-      }));
-      
-      // Buscar entradas para cada etapa usando FileSystem
-      const stepsWithData = await Promise.all(
-        steps.map(async (step) => {
-          const entradasResult = await smartOfflineDataService.getEntradasByEtapa(step.id);
-          
-          // Converter entradas para o formato ServiceStepData
-          const entradas: ServiceStepData[] = entradasResult.entradas.map(entrada => ({
-            id: entrada.id,
-            etapa_os_id: entrada.etapa_os_id,
-            ordem_entrada: entrada.ordem_entrada,
-            titulo: entrada.titulo,
-            valor: entrada.valor_padrao || '',
-            foto_base64: '',
-            foto_modelo: entrada.foto_modelo || '',
-            completed: false
-          }));
-          
-          return {
-            ...step,
-            entradas
-          };
-        })
-      );
-      
-      // Buscar também dados locais salvos pelo usuário
-      try {
-        const unifiedOfflineDataService = (await import('./unifiedOfflineDataService')).default;
-        const unifiedData = await unifiedOfflineDataService.getUserOfflineData(ordemServicoId);
-        
-        if (unifiedData.success && unifiedData.data) {
-          const localData: any = {};
-          
-          // Converter dados do sistema unificado
-          unifiedData.data.comentarios.forEach((comentario: any) => {
-            if (comentario.data.etapaId) {
-              if (!localData[comentario.data.etapaId]) localData[comentario.data.etapaId] = [];
-              localData[comentario.data.etapaId].push({
-                id: comentario.id,
-                etapa_os_id: comentario.data.etapaId,
-                ordem_entrada: 1,
-                valor: comentario.data.comentario,
-                completed: true
-              });
-            }
-          });
-          
-          unifiedData.data.dadosRecords.forEach((dados: any) => {
-            if (dados.data.etapaId) {
-              if (!localData[dados.data.etapaId]) localData[dados.data.etapaId] = [];
-              localData[dados.data.etapaId].push({
-                id: dados.id,
-                etapa_os_id: dados.data.etapaId,
-                ordem_entrada: 1,
-                foto_base64: dados.data.fotoBase64,
-                completed: true
-              });
-            }
-          });
-          
-          // Mesclar dados locais com os dados das entradas
-          stepsWithData.forEach(step => {
-            const localStepData = localData[step.id];
-            if (localStepData && localStepData.length > 0) {
-              localStepData.forEach((localEntry: any) => {
-                const existingIndex = step.entradas?.findIndex(e => e.id === localEntry.id);
-                if (existingIndex !== undefined && existingIndex >= 0) {
-                  // Atualizar entrada existente
-                  step.entradas![existingIndex] = { ...step.entradas![existingIndex], ...localEntry };
-                } else {
-                  // Adicionar nova entrada
-                  step.entradas = step.entradas || [];
-                  step.entradas.push(localEntry);
-                }
-              });
-            }
-          });
-        }
-      } catch (localError) {
-        console.warn('⚠️ Erro ao buscar dados locais:', localError);
-      }
-      
-      const totalEntries = stepsWithData.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
-      console.log(`✅ [FILESYSTEM] ${stepsWithData.length} etapas com ${totalEntries} entradas carregadas`);
-      
-      return { data: stepsWithData, error: null, fromCache: etapasResult.fromCache };
-    }
-
-    // FALLBACK: Sistema legado se o novo FileSystem falhar
-    console.log('⚠️ [FILESYSTEM] Sistema FileSystem falhou, usando sistema legado...');
-    
-    // PRIMEIRO: Limpar cache problemático que pode causar SQLite error
-    await clearProblematicCache();
-    
-    // DEBUG: Verificar estado do AsyncStorage (comentado para evitar erro SQLite)
-    // await debugAsyncStorageEntries(tipoOsId);
-    
-    // GARANTIR: Cache inicial carregado (comentado para evitar erro SQLite)
-    // await ensureInitialCacheLoaded();
-    
-    // Verificar conectividade PRIMEIRO
-    const NetInfo = require('@react-native-community/netinfo');
-    const netInfo = await NetInfo.fetch();
-    console.log(`📶 Conectividade: ${netInfo.isConnected ? 'Online' : 'Offline'}`);
-    
-    // PRIORIDADE 1: Se ONLINE, buscar dados frescos do servidor primeiro
-    if (netInfo.isConnected) {
-      console.log('🌐 ONLINE: Buscando etapas e entradas direto do servidor...');
-      try {
-        const serverResult = await getServiceStepsWithData(tipoOsId, ordemServicoId);
-        
-        if (serverResult.data && !serverResult.error) {
-          // Fazer cache dos dados do servidor para uso offline futuro
-          try {
-            await cacheServerData(tipoOsId, serverResult.data);
-          } catch (cacheError) {
-            console.warn('⚠️ Erro ao fazer cache dos dados do servidor:', cacheError);
-          }
-          
-          const totalEntries = serverResult.data.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
-          console.log(`✅ ONLINE: ${serverResult.data.length} etapas com ${totalEntries} entradas do servidor`);
-          
-          return { ...serverResult, fromCache: false };
-        } else {
-          console.warn('⚠️ ONLINE: Erro ao buscar do servidor, tentando cache:', serverResult.error);
-        }
-      } catch (serverError) {
-        console.error('💥 ONLINE: Erro de conexão com servidor:', serverError);
-      }
-    }
-    
-    // PRIORIDADE 2: Buscar dados direto do AsyncStorage (SEM usar sistema híbrido)
-    console.log('📱 Buscando dados direto do AsyncStorage...');
-    
+    // ESTRATÉGIA 1: Tentar sistema FileSystem primeiro
     try {
-      // Buscar etapas direto do AsyncStorage
-      const stepsKey = `service_steps_${tipoOsId}`;
-      const stepsData = await AsyncStorage.getItem(stepsKey);
+      await smartOfflineDataService.ensureOfflineDataAvailable();
       
-      if (stepsData) {
-        const steps: ServiceStep[] = JSON.parse(stepsData);
-        console.log(`📝 ${steps.length} etapas encontradas no AsyncStorage`);
+      const etapasResult = await smartOfflineDataService.getEtapasByTipoOS(tipoOsId);
+      
+      if (etapasResult.etapas && etapasResult.etapas.length > 0) {
+        console.log(`✅ [FILESYSTEM] ${etapasResult.etapas.length} etapas encontradas no FileSystem`);
         
-        // Buscar entradas direto do AsyncStorage
-        const entriesKey = `service_entries_${tipoOsId}`;
-        const entriesData = await AsyncStorage.getItem(entriesKey);
-        
-        let entriesByStep: any = {};
-        // SIMPLIFICADO: Não buscar entradas do cache para evitar erro SQLite
-        /*
-        if (entriesData) {
-          entriesByStep = JSON.parse(entriesData);
-        } else {
-          // NOVO: Tentar buscar entradas individuais se o formato conjunto não existir
-          console.log('📱 Formato conjunto não encontrado, tentando buscar entradas individuais...');
-          
-          for (const step of steps) {
-            try {
-              const individualKey = `service_entries_step_${step.id}`;
-              const individualData = await AsyncStorage.getItem(individualKey);
-              
-              if (individualData) {
-                entriesByStep[step.id] = JSON.parse(individualData);
-              }
-            } catch (individualError) {
-              console.warn(`⚠️ Erro ao buscar entradas individuais da etapa ${step.id}:`, individualError);
-            }
-          }
-        }
-        */
-        
-        // Buscar também dados locais se disponível
-        try {
-          // Sistema unificado - dados offline específicos
-          // Para simplicidade, ignorar por enquanto
-          console.warn('⚠️ Busca de dados locais temporariamente desabilitada');
-        } catch (localError) {
-          console.warn('⚠️ Erro ao buscar dados locais (ignorado):', localError);
-        }
-        
-        // Combinar etapas com entradas
-        const stepsWithData = steps.map(step => ({
-          ...step,
-          entradas: entriesByStep[step.id] || []
+        // Converter para o formato ServiceStep
+        const steps: ServiceStep[] = etapasResult.etapas.map(etapa => ({
+          id: etapa.id,
+          titulo: etapa.titulo,
+          ordem_etapa: etapa.ordem_etapa,
+          etapa_os_id: etapa.id,
+          entradas: []
         }));
         
-        const totalEntries = stepsWithData.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
-        console.log(`✅ ${stepsWithData.length} etapas com ${totalEntries} entradas carregadas do AsyncStorage`);
-        
-        // VERIFICAÇÃO ADICIONAL: Se online e sem entradas, tentar servidor
-        if (netInfo.isConnected && totalEntries === 0) {
-          console.log('🌐 ONLINE: Cache local sem entradas, forçando busca do servidor...');
-          try {
-            const serverResult = await getServiceStepsWithData(tipoOsId, ordemServicoId);
-            
-            if (serverResult.data && !serverResult.error) {
-              const serverTotalEntries = serverResult.data.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
-              
-              if (serverTotalEntries > 0) {
-                console.log(`✅ SERVIDOR: ${serverResult.data.length} etapas com ${serverTotalEntries} entradas encontradas`);
-                
-                // Fazer cache dos dados do servidor
-                try {
-                  await cacheServerData(tipoOsId, serverResult.data);
-                } catch (cacheError) {
-                  console.warn('⚠️ Erro ao fazer cache dos dados do servidor:', cacheError);
-                }
-                
-                return { ...serverResult, fromCache: false };
-              }
-            }
-          } catch (serverError) {
-            console.warn('⚠️ Erro ao forçar busca do servidor:', serverError);
-          }
-        }
-        
-        return { data: stepsWithData, error: null, fromCache: true };
-      }
-    } catch (asyncStorageError) {
-      console.warn('⚠️ Erro ao buscar dados do AsyncStorage direto:', asyncStorageError);
-    }
-    
-    // Se está OFFLINE e não tem dados no AsyncStorage, tentar dados de inicialização
-    if (!netInfo.isConnected) {
-      console.log('📱 OFFLINE: Tentando dados de inicialização...');
-      
-      try {
-        // Buscar etapas do cache inicial (SEM usar sistema híbrido)
-        const initialEtapasData = await AsyncStorage.getItem('initial_cache_etapas_os');
-        
-        if (initialEtapasData) {
-          const cachedEtapas = JSON.parse(initialEtapasData);
-          
-          // Filtrar etapas do tipo específico
-          const etapasFiltradas = cachedEtapas.filter((etapa: any) => 
-            etapa.tipo_os_id === tipoOsId && etapa.ativo === 1
-          );
-          
-          if (etapasFiltradas.length > 0) {
-            console.log(`📝 ${etapasFiltradas.length} etapas encontradas no cache inicial`);
-            
-            // Mapear para formato ServiceStep
-            const steps: ServiceStep[] = etapasFiltradas.map((etapa: any) => ({
-              id: etapa.id,
-              titulo: etapa.titulo,
-              ordem_etapa: etapa.ordem_etapa || 0,
-              etapa_os_id: etapa.id,
-              entradas: []
-            }));
-            
-            // Buscar entradas do cache inicial
-            /*
-            const initialEntradasData = await AsyncStorage.getItem('initial_cache_entradas_dados');
-            */
-            const etapaIds = steps.map(step => step.id);
-            
-            // Buscar dados locais apenas (evitando erro SQLite)
-            let entriesData: any = {};
+        // Buscar entradas para cada etapa usando FileSystem
+        const stepsWithData = await Promise.all(
+          steps.map(async (step) => {
             try {
-              // Sistema unificado - busca simplificada
-              console.warn('⚠️ Busca de dados locais temporariamente desabilitada');
-            } catch (localError) {
-              console.warn('⚠️ Erro ao buscar dados locais (ignorado):', localError);
+              const entradasResult = await smartOfflineDataService.getEntradasByEtapa(step.id);
+              
+              // Converter entradas para o formato ServiceStepData
+              const entradas: ServiceStepData[] = entradasResult.entradas.map(entrada => ({
+                id: entrada.id,
+                etapa_os_id: entrada.etapa_os_id,
+                ordem_entrada: entrada.ordem_entrada,
+                titulo: entrada.titulo,
+                valor: entrada.valor_padrao || '',
+                foto_base64: '',
+                foto_modelo: entrada.foto_modelo || '',
+                completed: false
+              }));
+              
+              return {
+                ...step,
+                entradas
+              };
+            } catch (entradaError) {
+              console.warn(`⚠️ [FILESYSTEM] Erro ao buscar entradas para etapa ${step.id}:`, entradaError);
+              return {
+                ...step,
+                entradas: []
+              };
             }
+          })
+        );
+        
+        // Buscar também dados locais salvos pelo usuário
+        try {
+          const unifiedOfflineDataService = (await import('./unifiedOfflineDataService')).default;
+          const unifiedData = await unifiedOfflineDataService.getUserOfflineData(ordemServicoId);
+          
+          if (unifiedData.success && unifiedData.data) {
+            const localData: any = {};
             
-            // SIMPLIFICADO: Não tentar buscar de múltiplas fontes para evitar erro SQLite
-            // Tentar buscar do cache principal primeiro
-            /*
-            const entriesKey = `service_entries_${tipoOsId}`;
-            const mainEntriesData = await AsyncStorage.getItem(entriesKey);
-            
-            if (mainEntriesData) {
-              const cachedEntries = JSON.parse(mainEntriesData);
-              etapaIds.forEach(etapaId => {
-                if (!entriesData[etapaId] || entriesData[etapaId].length === 0) {
-                  if (cachedEntries[etapaId]) {
-                    entriesData[etapaId] = cachedEntries[etapaId];
-                  }
-                }
-              });
-            } else {
-              // Tentar buscar entradas individuais se o formato conjunto não existir
-              for (const etapaId of etapaIds) {
-                if (!entriesData[etapaId] || entriesData[etapaId].length === 0) {
-                  try {
-                    const individualKey = `service_entries_step_${etapaId}`;
-                    const individualData = await AsyncStorage.getItem(individualKey);
-                    
-                    if (individualData) {
-                      entriesData[etapaId] = JSON.parse(individualData);
-                    }
-                  } catch (individualError) {
-                    console.warn(`⚠️ Erro ao buscar entradas individuais da etapa ${etapaId}:`, individualError);
-                  }
-                }
+            // Converter dados do sistema unificado
+            unifiedData.data.comentarios.forEach((comentario: any) => {
+              if (comentario.data.etapaId) {
+                if (!localData[comentario.data.etapaId]) localData[comentario.data.etapaId] = [];
+                localData[comentario.data.etapaId].push({
+                  id: comentario.id,
+                  etapa_os_id: comentario.data.etapaId,
+                  ordem_entrada: 1,
+                  valor: comentario.data.comentario,
+                  completed: true
+                });
               }
-            }
+            });
             
-            // Combinar com dados do cache inicial se ainda não houver dados locais
-            if (initialEntradasData) {
-              const cachedEntradas = JSON.parse(initialEntradasData);
-              etapaIds.forEach(etapaId => {
-                if (!entriesData[etapaId] || entriesData[etapaId].length === 0) {
-                  const cacheData = cachedEntradas.filter((entrada: any) => entrada.etapa_os_id === etapaId);
-                  
-                  if (cacheData.length > 0) {
-                    entriesData[etapaId] = cacheData.map((entrada: any) => ({
-                      id: entrada.id,
-                      etapa_os_id: entrada.etapa_os_id,
-                      ordem_entrada: entrada.ordem_entrada || 1,
-                      titulo: entrada.titulo,
-                      valor: entrada.valor,
-                      foto_base64: entrada.foto_base64,
-                      foto_modelo: entrada.foto_modelo,
-                      completed: entrada.completed || false,
-                      created_at: entrada.created_at,
-                      local: false
-                    }));
+            unifiedData.data.dadosRecords.forEach((dados: any) => {
+              if (dados.data.etapaId) {
+                if (!localData[dados.data.etapaId]) localData[dados.data.etapaId] = [];
+                localData[dados.data.etapaId].push({
+                  id: dados.id,
+                  etapa_os_id: dados.data.etapaId,
+                  ordem_entrada: 1,
+                  foto_base64: dados.data.fotoBase64,
+                  completed: true
+                });
+              }
+            });
+            
+            // Mesclar dados locais com os dados das entradas
+            stepsWithData.forEach(step => {
+              const localStepData = localData[step.id];
+              if (localStepData && localStepData.length > 0) {
+                localStepData.forEach((localEntry: any) => {
+                  const existingIndex = step.entradas?.findIndex(e => e.id === localEntry.id);
+                  if (existingIndex !== undefined && existingIndex >= 0) {
+                    // Atualizar entrada existente
+                    step.entradas![existingIndex] = { ...step.entradas![existingIndex], ...localEntry };
+                  } else {
+                    // Adicionar nova entrada
+                    step.entradas = step.entradas || [];
+                    step.entradas.push(localEntry);
                   }
-                }
-              });
-            }
-            */
-            
-            // Combinar etapas com entradas
-            const stepsWithData = steps.map(step => ({
-              ...step,
-              entradas: entriesData[step.id] || []
-            }));
-            
-            const totalEntries = stepsWithData.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
-            console.log(`✅ OFFLINE: ${stepsWithData.length} etapas com ${totalEntries} entradas recuperadas`);
-            
-            return { data: stepsWithData, error: null, fromCache: true };
+                });
+              }
+            });
           }
+        } catch (localError) {
+          console.warn('⚠️ [FILESYSTEM] Erro ao buscar dados locais:', localError);
         }
-      } catch (fallbackError) {
-        console.error('💥 Erro na abordagem alternativa offline:', fallbackError);
+        
+        const totalEntries = stepsWithData.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
+        console.log(`✅ [FILESYSTEM] ${stepsWithData.length} etapas com ${totalEntries} entradas carregadas`);
+        
+        return { data: stepsWithData, error: null, fromCache: etapasResult.fromCache };
       }
-      
-      console.log('❌ OFFLINE: Nenhum dado encontrado');
-      return { data: null, error: 'Sem dados offline disponíveis - faça login online primeiro', fromCache: false };
+    } catch (filesystemError) {
+      console.warn('⚠️ [FILESYSTEM] Sistema FileSystem falhou:', filesystemError);
     }
 
-    // APENAS SE ESTIVER ONLINE - buscar do servidor
-    console.log('🌐 ONLINE: Buscando etapas do servidor...');
+    // ESTRATÉGIA 2: FALLBACK para AsyncStorage (sistema legado)
+    console.log('🔄 [FALLBACK] Tentando sistema legado AsyncStorage...');
+    
     try {
-      const serverResult = await getServiceStepsWithData(tipoOsId, ordemServicoId);
+      // Limpar cache problemático que pode causar SQLite error
+      await clearProblematicCache();
       
-      if (serverResult.data && !serverResult.error) {
-        // Fazer cache dos dados do servidor (DIRETO NO ASYNCSTORAGE)
+      // Verificar conectividade PRIMEIRO
+      const netInfo = await NetInfo.fetch();
+      console.log(`📶 [FALLBACK] Conectividade: ${netInfo.isConnected ? 'Online' : 'Offline'}`);
+      
+      let steps: ServiceStep[] = [];
+      let fromCache = false;
+      
+      if (netInfo.isConnected) {
+        // Online: Tentar buscar do servidor usando sistema legado
+        console.log('🌐 [FALLBACK] Online: buscando do servidor...');
         try {
-          await cacheServerData(tipoOsId, serverResult.data);
-        } catch (cacheError) {
-          console.warn('⚠️ Erro ao fazer cache dos dados do servidor:', cacheError);
-        }
-        
-        const totalEntries = serverResult.data.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
-        console.log(`✅ ONLINE: ${serverResult.data.length} etapas com ${totalEntries} entradas do servidor`);
-        
-        return { ...serverResult, fromCache: false };
-      } else {
-        console.error('❌ Erro do servidor:', serverResult.error);
-        return { ...serverResult, fromCache: false };
-      }
-    } catch (serverError) {
-      console.error('💥 Erro de conexão com servidor:', serverError);
-      // Se há erro de conexão, tentar usar dados do cache inicial como fallback
-      console.log('🔄 Tentando usar cache inicial como fallback após erro de servidor...');
-      
-      try {
-        const initialEtapasData = await AsyncStorage.getItem('initial_cache_etapas_os');
-        
-        if (initialEtapasData) {
-          const cachedEtapas = JSON.parse(initialEtapasData);
-          const etapasFiltradas = cachedEtapas.filter((etapa: any) => 
-            etapa.tipo_os_id === tipoOsId && etapa.ativo === 1
-          );
-          
-          if (etapasFiltradas.length > 0) {
-            const steps: ServiceStep[] = etapasFiltradas.map((etapa: any) => ({
-              id: etapa.id,
-              titulo: etapa.titulo,
-              ordem_etapa: etapa.ordem_etapa || 0,
-              etapa_os_id: etapa.id,
-              entradas: []
-            }));
-            
-            const initialEntradasData = await AsyncStorage.getItem('initial_cache_entradas_dados');
-            const etapaIds = steps.map(step => step.id);
-            
-            const entriesData: any = {};
-            if (initialEntradasData) {
-              const cachedEntradas = JSON.parse(initialEntradasData);
-              etapaIds.forEach(etapaId => {
-                const cacheData = cachedEntradas.filter((entrada: any) => entrada.etapa_os_id === etapaId);
-                
-                if (cacheData.length > 0) {
-                  entriesData[etapaId] = cacheData.map((entrada: any) => ({
-                    id: entrada.id,
-                    etapa_os_id: entrada.etapa_os_id,
-                    ordem_entrada: entrada.ordem_entrada || 1,
-                    titulo: entrada.titulo,
-                    valor: entrada.valor,
-                    foto_base64: entrada.foto_base64,
-                    foto_modelo: entrada.foto_modelo,
-                    completed: entrada.completed || false,
-                    created_at: entrada.created_at,
-                    local: false
-                  }));
-                }
-              });
-            }
-            
-            const stepsWithData = steps.map(step => ({
-              ...step,
-              entradas: entriesData[step.id] || []
-            }));
-            
-            console.log('✅ FALLBACK: Usando cache inicial após erro de servidor');
-            return { data: stepsWithData, error: null, fromCache: true };
+          const freshResult = await getServiceStepsByTypeId(tipoOsId);
+          if (freshResult.data && freshResult.data.length > 0) {
+            console.log(`✅ [FALLBACK] ${freshResult.data.length} etapas carregadas do servidor`);
+            steps = freshResult.data;
+            fromCache = false;
           }
+        } catch (serverError) {
+          console.warn('⚠️ [FALLBACK] Erro ao buscar do servidor:', serverError);
         }
-      } catch (fallbackError) {
-        console.error('💥 Erro no fallback:', fallbackError);
       }
       
-      return { data: null, error: `Erro de conexão: ${serverError}`, fromCache: false };
+      // Se offline ou erro no servidor, tentar AsyncStorage legado
+      if (steps.length === 0) {
+        console.log('📱 [FALLBACK] Tentando cache AsyncStorage...');
+        
+        try {
+          const offlineService = await import('./offlineDataService');
+          const etapasResult = await offlineService.getEtapasByTipoOS(tipoOsId);
+          
+          if (etapasResult.etapas && etapasResult.etapas.length > 0) {
+            console.log(`✅ [FALLBACK] ${etapasResult.etapas.length} etapas encontradas no AsyncStorage`);
+            
+            // Converter para o formato ServiceStep
+            const stepsPromises = etapasResult.etapas.map(async (etapa) => {
+              // Buscar entradas para cada etapa
+              const entradasResult = await offlineService.getEntradasByEtapa(etapa.id);
+              
+              const entradas: ServiceStepData[] = entradasResult.entradas.map(entrada => ({
+                id: entrada.id,
+                etapa_os_id: entrada.etapa_os_id,
+                ordem_entrada: entrada.ordem_entrada,
+                titulo: entrada.titulo,
+                valor: entrada.valor_padrao || '',
+                foto_base64: '',
+                foto_modelo: entrada.foto_modelo || '',
+                completed: false
+              }));
+
+              return {
+                id: etapa.id,
+                titulo: etapa.titulo,
+                ordem_etapa: etapa.ordem_etapa,
+                etapa_os_id: etapa.id,
+                entradas
+              };
+            });
+
+            steps = await Promise.all(stepsPromises);
+            fromCache = etapasResult.fromCache;
+          }
+        } catch (asyncStorageError) {
+          console.warn('⚠️ [FALLBACK] Erro no AsyncStorage:', asyncStorageError);
+        }
+      }
+      
+      // Se encontrou dados, retornar
+      if (steps.length > 0) {
+        const totalEntries = steps.reduce((sum, step) => sum + (step.entradas?.length || 0), 0);
+        console.log(`✅ [FALLBACK] Retornando ${steps.length} etapas com ${totalEntries} entradas`);
+        return { data: steps, error: null, fromCache };
+      }
+    } catch (fallbackError) {
+      console.error('❌ [FALLBACK] Erro no sistema de fallback:', fallbackError);
     }
+
+    // ESTRATÉGIA 3: ÚLTIMO RECURSO - Etapas offline genéricas
+    console.log('🔄 [ÚLTIMO RECURSO] Criando etapas offline genéricas...');
+    const offlineSteps = createOfflineStepsForType(tipoOsId, { id: ordemServicoId, tipo_os_id: tipoOsId } as any);
+    
+    if (offlineSteps.length > 0) {
+      console.log(`✅ [ÚLTIMO RECURSO] ${offlineSteps.length} etapas offline genéricas criadas`);
+      return { data: offlineSteps, error: null, fromCache: false };
+    }
+
+    // Se chegou até aqui, nenhuma estratégia funcionou
+    console.error('❌ [ERRO] Todas as estratégias falharam - nenhuma etapa encontrada');
+    return { 
+      data: null, 
+      error: 'Nenhuma etapa encontrada offline ou online', 
+      fromCache: false 
+    };
+
   } catch (error) {
-    console.error('💥 Erro inesperado ao buscar etapas com cache:', error);
-    return { data: null, error: `Erro inesperado: ${error}`, fromCache: false };
+    console.error('💥 [ERRO CRÍTICO] Erro inesperado em getServiceStepsWithDataCached:', error);
+    
+    // Último recurso em caso de erro crítico
+    try {
+      const offlineSteps = createOfflineStepsForType(tipoOsId, { id: ordemServicoId, tipo_os_id: tipoOsId } as any);
+      return { data: offlineSteps, error: null, fromCache: false };
+    } catch (lastError) {
+      return { 
+        data: null, 
+        error: `Erro crítico: ${error instanceof Error ? error.message : 'Erro desconhecido'}`, 
+        fromCache: false 
+      };
+    }
   }
 };
 

@@ -19,7 +19,14 @@ const BACKUP_DATA_DIR = `${FileSystem.cacheDirectory}backup_data/`;
 const METADATA_KEY = 'secure_data_metadata';
 
 // TIPOS DE DADOS SUPORTADOS
-export type DataType = 'ETAPAS_OS' | 'ENTRADAS_DADOS' | 'TIPOS_OS' | 'CACHE_ETAPAS' | 'CACHE_ENTRADAS' | 'USER_ACTIONS';
+export type DataType =
+  | 'WORK_ORDERS'
+  | 'TIPOS_OS'
+  | 'ETAPAS_OS'
+  | 'ENTRADAS_DADOS'
+  | 'CACHE_ETAPAS'
+  | 'CACHE_ENTRADAS'
+  | 'APP_USER';
 
 export interface DataFileMetadata {
   id: string;
@@ -201,7 +208,7 @@ class SecureDataStorageService {
 
       const metadata = await this.getMetadata(targetId);
       if (!metadata) {
-        console.log(`📭 [SECURE-DATA] Metadata não encontrado para ${targetId}`);
+        // console.log(`📭 [SECURE-DATA] Metadata não encontrado para ${targetId}`);
         return { data: null, fromBackup: false };
       }
 
@@ -533,7 +540,7 @@ class SecureDataStorageService {
     }
   }
 
-  private async getAllMetadata(): Promise<DataMetadataStorage> {
+  async getAllMetadata(): Promise<DataMetadataStorage> {
     try {
       const metadataStr = await AsyncStorage.getItem(METADATA_KEY);
       return metadataStr ? JSON.parse(metadataStr) : {};

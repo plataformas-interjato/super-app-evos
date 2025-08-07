@@ -8,6 +8,7 @@ import {
   Alert,
   StatusBar,
   Image,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,6 +28,8 @@ interface StartServiceScreenProps {
   onConfirmStart: (photo?: string) => void;
 }
 
+const { width } = Dimensions.get('window');
+// Validação de Funcionalidade: Online - Foto inicial do técnico - Validado pelo usuário. Não alterar sem nova validação.
 const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
   workOrder,
   user,
@@ -105,6 +108,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
     return true;
   };
 
+  // Validação de Funcionalidade: Tirar a foto do usuário - Validado pelo usuário. Não alterar sem nova validação.
   const takePhoto = async () => {
     try {
       const hasPermission = await requestCameraPermission();
@@ -188,6 +192,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
       );
     }
   };
+  // Validação de Funcionalidade: Remover a foto tirada - Validado pelo usuário. Não alterar sem nova validação.
 
   const removePhoto = () => {
     Alert.alert(
@@ -207,6 +212,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
     );
   };
 
+  // Validação de Funcionalidade: Online - Foto inicial do técnico - Validado pelo usuário. Não alterar sem nova validação.
   const handleConfirmStart = async () => {
     console.log('🔥 StartServiceScreen - handleConfirmStart iniciado');
     console.log('📷 Foto disponível:', photo ? 'Sim' : 'Não');
@@ -300,6 +306,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
         <Text style={styles.photoSectionSubtitle}>
           Tire uma foto para registrar o início da atividade
         </Text>
+        {/* Validação de Funcionalidade: Exibir foto tirada - Largura e modo de exibição ajustados para mesmo tamanho do input - Validado pelo usuário. Não alterar sem nova validação. */}
         
         <View style={styles.photoAreaContainer}>
           {photo ? (
@@ -318,6 +325,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
         </View>
 
         {/* Botão de Confirmar */}
+        {/* Validação de Funcionalidade: Online - Foto inicial do técnico - Validado pelo usuário. Não alterar sem nova validação. */}
         <TouchableOpacity 
           style={[
             styles.confirmButton, 
@@ -469,11 +477,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   photoPreview: {
-    width: 200,
+    width: 200, // Largura original do input
     height: 250,
     borderRadius: 12,
     backgroundColor: '#f3f4f6',
-    resizeMode: 'contain',
+    resizeMode: 'cover', // Foto ocupa todo o espaço disponível
   },
   removePhotoButton: {
     position: 'absolute',
@@ -492,7 +500,7 @@ const styles = StyleSheet.create({
     borderColor: '#000000',
     borderStyle: 'dashed',
     borderRadius: 12,
-    width: 200,
+    width: 200, // Largura original do input
     height: 250,
     alignItems: 'center',
     justifyContent: 'center',
