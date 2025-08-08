@@ -48,14 +48,14 @@ class ImageCompressionService {
       let actions: any[] = [];
       
       // Redimensionar se necessário (preserva aspect ratio)
-      if (config.needsResize && config.maxWidth && config.maxHeight) {
-        actions.push({
-          resize: {
-            width: config.maxWidth,
-            height: config.maxHeight
-          }
-        });
-      }
+      // if (config.needsResize && config.maxWidth && config.maxHeight) {
+      //   actions.push({
+      //     resize: {
+      //       width: config.maxWidth,
+      //       height: config.maxHeight
+      //     }
+      //   });
+      // }
       
       // 4. Executar manipulação
       const result = await ImageManipulator.manipulateAsync(
