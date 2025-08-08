@@ -15,7 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
 import { hasFinalPhoto, hasInitialPhoto } from '../services/auditService';
-import { saveChecklistEtapaOffline, checkNetworkConnection } from '../services/offlineService';
+import { saveChecklistEtapaOffline, checkNetworkConnection } from '../services/integratedOfflineService';
 import { 
   ServiceStep, 
   ServiceStepData, 
@@ -39,6 +39,7 @@ interface ServiceStepsScreenProps {
   onSkipToPhotoCollection?: () => void;
 }
 
+// Validação de Funcionalidade: Online - Tela de checklist de etapas e entradas exibindo correto - Validado pelo usuário. Não alterar sem nova validação.
 const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
   workOrder,
   user,
@@ -92,6 +93,7 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
       onBackPress();
     }
   };
+  // Validação de Funcionalidade: Online - Tela de checklist de etapas e entradas exibindo correto - Validado pelo usuário. Não alterar sem nova validação.
 
   const loadServiceSteps = async () => {
     setIsLoadingSteps(true);
@@ -527,6 +529,7 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
                 Documente as etapas do serviço com fotos para garantir a qualidade e rastreabilidade do trabalho realizado.
               </Text>
               
+              {/* Validação de Funcionalidade: Online - Tela de checklist de etapas e entradas exibindo correto - Validado pelo usuário. Não alterar sem nova validação. */}
               <View style={styles.stepsList}>
                 {steps.map((step, index) => (
                   <View key={step.id} style={styles.stepGroup}>
@@ -549,6 +552,7 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
                         color="#6b7280" 
                       />
                     </TouchableOpacity>
+                    {/* Validação de Funcionalidade: Online - Tela de checklist de etapas e entradas exibindo correto - Validado pelo usuário. Não alterar sem nova validação. */}
 
                     {/* Mostrar Entradas da Etapa apenas se expandida */}
                     {expandedSteps.has(step.id) && step.entradas && step.entradas.length > 0 ? (
@@ -588,6 +592,7 @@ const ServiceStepsScreen: React.FC<ServiceStepsScreenProps> = ({
           )}
         </View>
 
+        {/* Validação de Funcionalidade: Online - Tela de checklist de etapas e entradas exibindo correto - Validado pelo usuário. Não alterar sem nova validação. */}
         {/* Botão de Encerrar */}
         <TouchableOpacity 
           style={[styles.finishButton, isLoading && styles.finishButtonDisabled]} 

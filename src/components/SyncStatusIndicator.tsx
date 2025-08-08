@@ -3,7 +3,6 @@ import { Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RFValue } from 'react-native-responsive-fontsize';
 import { 
-  getOfflineActions, 
   syncAllPendingActions, 
   checkNetworkConnection,
   isSyncInProgress,
@@ -12,8 +11,10 @@ import {
   clearFailedActions,
   retryFailedActions,
   clearAllOfflineActions,
-  getRemainingActionsCount
+  getRemainingActionsCount,
+  registerSyncCallback
 } from '../services/offlineService';
+import unifiedOfflineDataService from '../services/unifiedOfflineDataService';
 
 interface SyncStatusIndicatorProps {
   style?: any;
@@ -35,10 +36,21 @@ const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({ style }) => {
       const syncing = isSyncInProgress();
       setIsSyncing(syncing);
 
-      // Obter estatísticas detalhadas
-      const stats = await getSyncStats();
+      // Obter estatísticas simplificadas
+      let totalPending = 0;
+      
+      try {
+        // Contar ações pendentes sem executar sincronização
+        const pendingCount = await unifiedOfflineDataService.countPendingActions();
+        totalPending = pendingCount.count;
+      } catch (error) {
+        console.warn('Erro ao verificar ações pendentes:', error);
+        totalPending = 0;
+      }
+
+      const stats = { total: totalPending, pending: totalPending, synced: 0, failed: 0 };
       setSyncStats(stats);
-      setPendingCount(stats.pending);
+      setPendingCount(totalPending);
     } catch (error) {
       console.error('Erro ao verificar status de sincronização:', error);
     }
@@ -86,7 +98,7 @@ const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({ style }) => {
               if (result.total > 0) {
                 Alert.alert(
                   'Sincronização Concluída',
-                  `${result.synced} ações sincronizadas.\n${result.failed} falharam.`
+                  `${result.synced} ações sincronizadas.\n${result.errors.length} falharam.`
                 );
               }
               await checkStatus();
@@ -134,7 +146,7 @@ const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({ style }) => {
     if (result.total > 0) {
       Alert.alert(
         'Sincronização Concluída',
-        `${result.synced} ações sincronizadas com sucesso.\n${result.failed} falharam.`
+        `${result.synced} ações sincronizadas com sucesso.\n${result.errors.length} falharam.`
       );
     }
     
@@ -147,17 +159,25 @@ const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({ style }) => {
     checkStatus();
 
     // Verificar periodicamente
-    const interval = setInterval(checkStatus, 5000); // Reduzido para 5 segundos para ser mais responsivo
+    const interval = setInterval(checkStatus, 5000);
+
+    // Registrar callback para sincronização automática
+    const unsubscribeSync = registerSyncCallback(async (result) => {
+      if (result.synced > 0) {
+        // Atualizar status imediatamente após sincronização
+        await checkStatus();
+      }
+    });
 
     // Registrar callback para OS finalizada para atualização imediata
     const { registerOSFinalizadaCallback } = require('../services/offlineService');
     const unsubscribeOSFinalizada = registerOSFinalizadaCallback(async (workOrderId: number) => {
-      console.log(`🔄 OS ${workOrderId} finalizada - atualizando SyncStatusIndicator`);
       await checkStatus();
     });
 
     return () => {
       clearInterval(interval);
+      unsubscribeSync();
       unsubscribeOSFinalizada();
     };
   }, []);

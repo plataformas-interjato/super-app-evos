@@ -39,6 +39,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onForgotPassword }) => {
       Alert.alert('Erro', 'Por favor, preencha todos os campos');
       return;
     }
+    // Validação de Funcionalidade: Login do usuário - Validado pelo usuário. Não alterar sem nova validação.
 
     const result = await signIn(email, password);
     

@@ -8,6 +8,7 @@ import {
   Alert,
   StatusBar,
   Image,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,7 +16,8 @@ import { RFValue } from 'react-native-responsive-fontsize';
 import * as ImagePicker from 'expo-image-picker';
 import { WorkOrder, User } from '../types/workOrder';
 import BottomNavigation from '../components/BottomNavigation';
-import { savePhotoInicioOffline, checkNetworkConnection } from '../services/offlineService';
+import { checkNetworkConnection, savePhotoInicioOffline } from '../services/integratedOfflineService';
+import imageCompressionService from '../services/imageCompressionService';
 import { hasInitialPhoto } from '../services/auditService';
 
 interface StartServiceScreenProps {
@@ -26,6 +28,8 @@ interface StartServiceScreenProps {
   onConfirmStart: (photo?: string) => void;
 }
 
+const { width } = Dimensions.get('window');
+// Validação de Funcionalidade: Online - Foto inicial do técnico - Validado pelo usuário. Não alterar sem nova validação.
 const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
   workOrder,
   user,
@@ -104,6 +108,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
     return true;
   };
 
+  // Validação de Funcionalidade: Tirar a foto do usuário - Validado pelo usuário. Não alterar sem nova validação.
   const takePhoto = async () => {
     try {
       const hasPermission = await requestCameraPermission();
@@ -111,19 +116,36 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
 
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.8,
+        quality: 1.0, // Máxima qualidade inicial para depois comprimir
       });
 
       if (!result.canceled && result.assets[0]) {
-        const photoUri = result.assets[0].uri;
-        setPhoto(photoUri);
+        const originalUri = result.assets[0].uri;
+        console.log('📸 Foto inicial capturada, iniciando compressão...');
+        
+        let photoUriToSave = originalUri;
+        
+        try {
+          // COMPRESSÃO INTELIGENTE
+          const compressed = await imageCompressionService.compressImage(originalUri, 'inicial');
+          
+          console.log(`✅ Foto inicial comprimida: ${compressed.compressionRatio.toFixed(1)}% redução (${(compressed.originalSize/(1024*1024)).toFixed(2)}MB → ${(compressed.compressedSize/(1024*1024)).toFixed(2)}MB)`);
+          
+          // Usar URI comprimida
+          photoUriToSave = compressed.uri;
+          setPhoto(compressed.uri);
+          
+        } catch (compressionError) {
+          console.warn('⚠️ Erro na compressão, usando foto original:', compressionError);
+          setPhoto(originalUri);
+        }
 
         // Salvar foto usando o serviço offline
         try {
           const { success, error, savedOffline } = await savePhotoInicioOffline(
             workOrder.id,
             user.id,
-            photoUri
+            photoUriToSave
           );
 
           if (success) {
@@ -162,10 +184,15 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
         }
       }
     } catch (error) {
-      console.error('💥 Erro na função takePhoto:', error);
-      Alert.alert('Erro', 'Não foi possível tirar a foto. Tente novamente.');
+      console.error('💥 Erro ao tirar foto inicial:', error);
+      Alert.alert(
+        'Erro na Câmera',
+        'Não foi possível tirar a foto. Verifique as permissões e tente novamente.',
+        [{ text: 'OK' }]
+      );
     }
   };
+  // Validação de Funcionalidade: Remover a foto tirada - Validado pelo usuário. Não alterar sem nova validação.
 
   const removePhoto = () => {
     Alert.alert(
@@ -185,6 +212,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
     );
   };
 
+  // Validação de Funcionalidade: Online - Foto inicial do técnico - Validado pelo usuário. Não alterar sem nova validação.
   const handleConfirmStart = async () => {
     console.log('🔥 StartServiceScreen - handleConfirmStart iniciado');
     console.log('📷 Foto disponível:', photo ? 'Sim' : 'Não');
@@ -278,6 +306,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
         <Text style={styles.photoSectionSubtitle}>
           Tire uma foto para registrar o início da atividade
         </Text>
+        {/* Validação de Funcionalidade: Exibir foto tirada - Largura e modo de exibição ajustados para mesmo tamanho do input - Validado pelo usuário. Não alterar sem nova validação. */}
         
         <View style={styles.photoAreaContainer}>
           {photo ? (
@@ -296,6 +325,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
         </View>
 
         {/* Botão de Confirmar */}
+        {/* Validação de Funcionalidade: Online - Foto inicial do técnico - Validado pelo usuário. Não alterar sem nova validação. */}
         <TouchableOpacity 
           style={[
             styles.confirmButton, 
@@ -447,11 +477,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   photoPreview: {
-    width: 200,
+    width: 200, // Largura original do input
     height: 250,
     borderRadius: 12,
     backgroundColor: '#f3f4f6',
-    resizeMode: 'contain',
+    resizeMode: 'cover', // Foto ocupa todo o espaço disponível
   },
   removePhotoButton: {
     position: 'absolute',
@@ -470,7 +500,7 @@ const styles = StyleSheet.create({
     borderColor: '#000000',
     borderStyle: 'dashed',
     borderRadius: 12,
-    width: 200,
+    width: 200, // Largura original do input
     height: 250,
     alignItems: 'center',
     justifyContent: 'center',

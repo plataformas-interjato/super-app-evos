@@ -16,7 +16,7 @@ import AuditSavingScreen from './src/screens/AuditSavingScreen';
 import AuditSuccessScreen from './src/screens/AuditSuccessScreen';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import { WorkOrder } from './src/types/workOrder';
-import { startAutoSync, syncAllPendingActions, cleanOrphanedOfflineData } from './src/services/offlineService';
+import { startAutoSync, syncAllPendingActions } from './src/services/offlineService';
 import { updateLocalWorkOrderStatus } from './src/services/localStatusService';
 import { updateWorkOrderStatus } from './src/services/workOrderService';
 import { saveEvaluation } from './src/services/evaluationService';
@@ -27,7 +27,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Importar debug function
 import { debugEntradasDados } from './src/services/debugEntradasDados';
-import { debugSyncStatusForWorkOrder, forceSyncPhotosForWorkOrder } from './src/services/offlineService';
+import { cleanOrphanedOfflineData, debugSyncStatusForWorkOrder, forceSyncPhotosForWorkOrder } from './src/services/integratedOfflineService';
+
+// NOVO: Importar sistema de fotos seguro e dados offline unificados
+import { initializePhotoSystem, demonstratePhotoSystem } from './src/services/photoSystemInit';
+import smartOfflineDataService from './src/services/smartOfflineDataService';
+import unifiedOfflineDataService from './src/services/unifiedOfflineDataService';
+import { migrateAsyncStorageToUnified, checkDataToMigrate } from './src/services/asyncStorageMigrationService';
 
 // Disponibilizar debug no console global
 (global as any).debugEntradasDados = debugEntradasDados;
@@ -48,6 +54,19 @@ function AppContent() {
   useEffect(() => {
     // Iniciar monitoramento automático
     const unsubscribe = startAutoSync();
+    
+    // NOVO: Inicializar sistema de fotos seguro
+    initializePhotoSystem().then(result => {
+      if (result.success) {
+        console.log('🎉 Sistema de fotos seguro inicializado com sucesso');
+        // Executar demonstração no console (opcional)
+        demonstratePhotoSystem();
+      } else {
+        console.warn('⚠️ Falha na inicialização do sistema de fotos:', result.message);
+      }
+    }).catch(error => {
+      console.error('❌ Erro crítico na inicialização do sistema de fotos:', error);
+    });
     
     // Tentar sincronizar ações pendentes na inicialização (com delay)
     const initSync = setTimeout(() => {
@@ -324,123 +343,18 @@ function AppContent() {
         const netInfo = await NetInfo.fetch();
         
         if (netInfo.isConnected) {
-          // ONLINE: Sincronizar TODAS as fotos da OS ANTES de finalizar
-          console.log('🌐 Online - sincronizando TODAS as fotos da OS antes de finalizar...');
+          // ONLINE: Sincronizar ações pendentes e finalizar OS
+          console.log('🌐 Online - sincronizando ações pendentes e finalizando OS...');
           
           try {
-            // NOVA ESTRATÉGIA: Forçar sincronização de TODAS as fotos, não apenas pendentes
-            console.log('📸 Forçando sincronização completa de todas as fotos da OS...');
+            // Sincronizar todas as ações pendentes do sistema unificado
+            const { default: unifiedOfflineDataService } = await import('./src/services/unifiedOfflineDataService');
+            const syncResult = await unifiedOfflineDataService.syncPendingActions(selectedWorkOrder.id);
             
-            // 1. Buscar e sincronizar fotos de offline_dados_records
-            const offlineData = await AsyncStorage.getItem('offline_dados_records');
-            let photosSynced = 0;
-            let photosErrors: string[] = [];
+            console.log(`📊 Sincronização: ${syncResult.synced} ações sincronizadas, ${syncResult.errors.length} erros`);
             
-            if (offlineData) {
-              const records = JSON.parse(offlineData);
-              const workOrderRecords = Object.entries(records).filter(([_, record]: [string, any]) => 
-                record.ordem_servico_id === selectedWorkOrder.id
-              );
-              
-              console.log(`📸 Encontradas ${workOrderRecords.length} fotos principais para sincronização forçada`);
-              
-              // Importar função de sincronização
-              const { saveDadosRecord } = await import('./src/services/serviceStepsService');
-              
-              for (const [recordKey, record] of workOrderRecords) {
-                try {
-                  const recordData = record as any;
-                  console.log(`🔄 Sincronizando foto principal: ${recordKey}`);
-                  
-                  const { data, error } = await saveDadosRecord(
-                    recordData.ordem_servico_id,
-                    recordData.entrada_dados_id,
-                    recordData.valor
-                  );
-                  
-                  if (!error && data) {
-                    console.log(`✅ Foto principal sincronizada: ${recordKey} -> Supabase ID: ${data.id}`);
-                    
-                    // Marcar como sincronizada
-                    records[recordKey].synced = true;
-                    records[recordKey].synced_at = new Date().toISOString();
-                    records[recordKey].supabase_id = data.id;
-                    photosSynced++;
-                  } else {
-                    console.error(`❌ Erro ao sincronizar foto principal ${recordKey}:`, error);
-                    photosErrors.push(`${recordKey}: ${error}`);
-                  }
-                } catch (syncError) {
-                  console.error(`💥 Erro crítico ao sincronizar ${recordKey}:`, syncError);
-                  photosErrors.push(`${recordKey}: ${syncError}`);
-                }
-              }
-              
-              // Salvar estado atualizado
-              if (photosSynced > 0) {
-                await AsyncStorage.setItem('offline_dados_records', JSON.stringify(records));
-              }
-            }
-            
-            // 2. Buscar e sincronizar fotos extras
-            const offlineExtrasData = await AsyncStorage.getItem('offline_fotos_extras');
-            if (offlineExtrasData) {
-              const extrasRecords = JSON.parse(offlineExtrasData);
-              const workOrderExtras = Object.entries(extrasRecords).filter(([_, record]: [string, any]) => 
-                record.ordem_servico_id === selectedWorkOrder.id
-              );
-              
-              console.log(`📸 Encontradas ${workOrderExtras.length} fotos extras para sincronização forçada`);
-              
-              // Importar função de sincronização
-              const { saveDadosRecord } = await import('./src/services/serviceStepsService');
-              
-              for (const [recordKey, record] of workOrderExtras) {
-                try {
-                  const recordData = record as any;
-                  console.log(`🔄 Sincronizando foto extra: ${recordKey}`);
-                  
-                  const { data, error } = await saveDadosRecord(
-                    recordData.ordem_servico_id,
-                    null, // entrada_dados_id null para fotos extras
-                    recordData.valor
-                  );
-                  
-                  if (!error && data) {
-                    console.log(`✅ Foto extra sincronizada: ${recordKey} -> Supabase ID: ${data.id}`);
-                    
-                    // Marcar como sincronizada
-                    extrasRecords[recordKey].synced = true;
-                    extrasRecords[recordKey].synced_at = new Date().toISOString();
-                    extrasRecords[recordKey].supabase_id = data.id;
-                    photosSynced++;
-                  } else {
-                    console.error(`❌ Erro ao sincronizar foto extra ${recordKey}:`, error);
-                    photosErrors.push(`${recordKey}: ${error}`);
-                  }
-                } catch (syncError) {
-                  console.error(`💥 Erro crítico ao sincronizar foto extra ${recordKey}:`, syncError);
-                  photosErrors.push(`${recordKey}: ${syncError}`);
-                }
-              }
-              
-              // Salvar estado atualizado
-              if (workOrderExtras.length > 0) {
-                await AsyncStorage.setItem('offline_fotos_extras', JSON.stringify(extrasRecords));
-              }
-            }
-            
-            console.log(`📊 Sincronização forçada concluída: ${photosSynced} fotos sincronizadas, ${photosErrors.length} erros`);
-            
-            // Aguardar um pouco para garantir que todas as sincronizações sejam processadas
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            
-            // Agora finalizar a OS no servidor
+            // Finalizar OS no servidor
             const { updateWorkOrderStatus } = await import('./src/services/workOrderService');
-            const { clearAllLocalDataForWorkOrder } = await import('./src/services/localStatusService');
-            const { clearOfflineActionsForWorkOrder } = await import('./src/services/offlineService');
-            
-            // 1. Finalizar OS no servidor
             const { error: statusError } = await updateWorkOrderStatus(
               selectedWorkOrder.id.toString(), 
               'finalizada'
@@ -460,17 +374,15 @@ function AppContent() {
             } else {
               console.log('✅ OS finalizada online com sucesso');
               
-              // 2. Limpar TODOS os dados locais da OS para remover ícone de sincronização
+              // Limpar dados locais da OS
+              const { clearAllLocalDataForWorkOrder } = await import('./src/services/localStatusService');
               await clearAllLocalDataForWorkOrder(selectedWorkOrder.id);
               
-              // 3. Limpar especificamente ações offline desta OS (agora que já foram sincronizadas)
-              await clearOfflineActionsForWorkOrder(selectedWorkOrder.id);
-              
-              // 4. Notificar callbacks de OS finalizada para atualizar a UI
+              // Notificar callbacks de OS finalizada
               const { notifyOSFinalizadaCallbacks } = await import('./src/services/offlineService');
               notifyOSFinalizadaCallbacks(selectedWorkOrder.id);
               
-              console.log('🧹 Dados locais e ações offline limpas após sincronização - ícone de sincronização removido');
+              console.log('🧹 Dados locais limpos após sincronização');
             }
             
           } catch (onlineError) {
@@ -487,8 +399,8 @@ function AppContent() {
           }
           
         } else {
-          // OFFLINE: Salvar apenas localmente e manter fotos para sincronização posterior
-          console.log('📱 Offline - salvando status local e mantendo fotos para sincronização...');
+          // OFFLINE: Salvar apenas localmente
+          console.log('📱 Offline - salvando status local...');
           await AsyncStorage.setItem(
             `local_work_order_status_${selectedWorkOrder.id}`,
             JSON.stringify({
@@ -498,7 +410,7 @@ function AppContent() {
             })
           );
           
-          console.log('📸 Fotos mantidas para sincronização quando houver conexão');
+          console.log('📸 Dados mantidos para sincronização quando houver conexão');
         }
         
       } catch (error) {
@@ -704,31 +616,85 @@ export default function App() {
   const [appReady, setAppReady] = useState(false);
 
   useEffect(() => {
-    initializeApp();
-  }, []);
+    // INICIALIZAÇÃO CORRIGIDA - NÃO BLOQUEIA O APP
+    const initializeAppSystems = async () => {
+      try {
+        console.log('🚀 Inicializando aplicativo...');
+        
+        // CRÍTICO: Marcar como pronto IMEDIATAMENTE para app funcionar
+        setAppReady(true);
+        
+        // Inicializar sistemas em background (não blocking)
+        setTimeout(async () => {
+          try {
+            console.log('🔄 Inicializando sistemas em background...');
+            
+            // 1. Sistema de fotos (em background)
+            try {
+              const photoResult = await initializePhotoSystem();
+              if (photoResult.success) {
+                console.log('✅ Sistema de fotos inicializado com sucesso');
+              } else {
+                console.warn('⚠️ Problema na inicialização do sistema de fotos:', photoResult.message);
+              }
+            } catch (photoError) {
+              console.warn('⚠️ Erro no sistema de fotos (não crítico):', photoError);
+            }
 
-  const initializeApp = async () => {
-    try {
-      console.log('🚀 Inicializando aplicativo...');
-      
-      // REMOVIDO: Inicialização do armazenamento híbrido que causa erro database full
-      // await hybridStorage.initialize();
-      // console.log('✅ Armazenamento híbrido inicializado');
-      
-      // REMOVIDO: Inicialização do adaptador de armazenamento
-      // await storageAdapter.initialize();
-      // console.log('✅ Adaptador de armazenamento inicializado');
-      
-      console.log('✅ App inicializado usando AsyncStorage direto (sem sistema híbrido)');
-      
-      setAppReady(true);
-    } catch (error) {
-      console.error('❌ Erro ao inicializar aplicativo:', error);
-      
-      // Continuar mesmo em caso de erro na inicialização
-      setAppReady(true);
-    }
-  };
+            // 2. Dados offline (em background)  
+            try {
+              console.log('🔄 Inicializando dados offline (FileSystem)...');
+              const offlineDataResult = await smartOfflineDataService.ensureOfflineDataAvailable();
+              
+              if (offlineDataResult.available) {
+                console.log('✅ Dados offline disponíveis no FileSystem para funcionamento offline');
+                if (!offlineDataResult.fresh) {
+                  console.log('⏰ Dados offline não são frescos - serão atualizados em background');
+                }
+              } else {
+                console.warn('⚠️ Dados offline não disponíveis no FileSystem:', offlineDataResult.error);
+                console.log('📱 App funcionará apenas online até próxima sincronização');
+              }
+
+              // 3. Diagnóstico do sistema offline (em background)
+              const diagnostics = await smartOfflineDataService.getOfflineDataDiagnostics();
+              console.log('📊 Diagnóstico dos dados offline (FileSystem):', diagnostics.recommendations);
+              
+              // 4. NOVO: Inicializar sistema unificado de dados de usuário (FileSystem)
+              try {
+                console.log('🔧 Inicializando sistema unificado de dados offline...');
+                await unifiedOfflineDataService.initialize();
+                console.log('✅ Sistema unificado de dados offline inicializado');
+              } catch (unifiedError) {
+                console.warn('⚠️ Erro na inicialização do sistema unificado (não crítico):', unifiedError);
+              }
+              
+            } catch (offlineError) {
+              console.warn('⚠️ Erro nos dados offline (não crítico):', offlineError);
+              console.log('📱 App funcionará apenas online');
+            }
+
+          } catch (backgroundError) {
+            console.error('💥 Erro na inicialização em background:', backgroundError);
+            // NÃO IMPEDE a app de funcionar - sistemas podem ser inicializados depois
+          }
+        }, 100); // 100ms delay para não bloquear UI
+
+      } catch (error) {
+        console.error('💥 Erro crítico na inicialização:', error);
+        // SEMPRE marcar como pronto, mesmo com erro crítico
+        setAppReady(true);
+      }
+    };
+
+    initializeAppSystems();
+    
+    return () => {
+      // if (unsubscribe) { // unsubscribe is not defined here
+      //   unsubscribe();
+      // }
+    };
+  }, []);
 
   if (!appReady) {
     return (
@@ -736,6 +702,88 @@ export default function App() {
         <ActivityIndicator size="large" color="#0066CC" />
       </View>
     );
+  }
+
+  // Disponibilizar debug no console global
+  if (__DEV__) {
+    (global as any).debugSyncStatusForWorkOrder = debugSyncStatusForWorkOrder;
+    (global as any).forceSyncPhotosForWorkOrder = forceSyncPhotosForWorkOrder;
+    
+    // NOVO: Comandos para sistema de dados offline
+    (global as any).downloadOfflineData = smartOfflineDataService.downloadOfflineData;
+    (global as any).getOfflineDataDiagnostics = smartOfflineDataService.getOfflineDataDiagnostics;
+    (global as any).ensureOfflineDataAvailable = smartOfflineDataService.ensureOfflineDataAvailable;
+    
+    // NOVO: Comandos para sistema unificado de dados de usuário
+    (global as any).unifiedOfflineService = unifiedOfflineDataService;
+    (global as any).saveComentarioOffline = unifiedOfflineDataService.saveComentarioEtapa;
+    (global as any).saveDadosRecordOffline = unifiedOfflineDataService.saveDadosRecord;
+    (global as any).getUserOfflineData = unifiedOfflineDataService.getUserOfflineData;
+    (global as any).syncPendingActions = unifiedOfflineDataService.syncPendingActions;
+    
+    // NOVO: Demonstrar sistema completo
+    (global as any).demonstratePhotoSystem = demonstratePhotoSystem;
+    
+    // NOVO: Comando completo de teste offline
+    (global as any).testOfflineMode = async () => {
+      console.log('🧪 ===== TESTE COMPLETO MODO OFFLINE =====');
+      
+      // 1. Verificar dados offline
+      const offlineStatus = await smartOfflineDataService.getOfflineDataDiagnostics();
+      console.log('📊 Status dados offline:', offlineStatus);
+      
+      // 2. Verificar sistema de fotos
+      const { getPhotoSystemDiagnostics } = await import('./src/services/integratedOfflineService');
+      const photoStatus = await getPhotoSystemDiagnostics();
+      console.log('📸 Status sistema de fotos:', photoStatus);
+      
+      // 3. Verificar sistema unificado de dados de usuário
+      try {
+        const testUserId = '123';
+        const testWorkOrderId = 456;
+        
+        console.log('🔧 Testando sistema unificado de dados...');
+        const userDataTest = await unifiedOfflineDataService.getUserOfflineData(testWorkOrderId);
+        console.log('💾 Dados offline do usuário:', {
+          comentarios: userDataTest.data.comentarios.length,
+          dadosRecords: userDataTest.data.dadosRecords.length,
+          entradaDados: userDataTest.data.entradaDados.length
+        });
+      } catch (unifiedError) {
+        console.warn('⚠️ Erro no teste do sistema unificado:', unifiedError);
+      }
+      
+      // 4. Recomendações
+      const allRecommendations = [
+        ...offlineStatus.recommendations,
+        ...photoStatus.recommendations
+      ];
+      
+      console.log('💡 Recomendações:', allRecommendations);
+      
+      return {
+        offlineData: offlineStatus,
+        photoSystem: photoStatus,
+        recommendations: allRecommendations,
+        ready: offlineStatus.hasEtapas && offlineStatus.hasEntradas
+      };
+    };
+    
+    console.log('🔧 Comandos de debug disponíveis:');
+    console.log('- global.downloadOfflineData() // Baixar dados offline COMPLETOS');
+    console.log('- global.getOfflineDataDiagnostics() // Ver status dados offline');
+    console.log('- global.testOfflineMode() // Teste completo modo offline');
+    console.log('- global.demonstratePhotoSystem() // Demonstrar sistema de fotos');
+    console.log('');
+    console.log('🔧 Sistema Unificado de Dados (FileSystem):');
+    console.log('- global.saveComentarioOffline(workOrderId, technicoId, etapaId, comentario)');
+    console.log('- global.saveDadosRecordOffline(workOrderId, technicoId, entradaId, photoUri, valor)');
+    console.log('- global.getUserOfflineData(workOrderId) // Ver dados salvos offline');
+    console.log('- global.syncPendingActions(workOrderId) // Sincronizar dados pendentes');
+    (global as any).migrarAsyncStorage = migrateAsyncStorageToUnified;
+    (global as any).verificarDadosOrfaos = checkDataToMigrate;
+    (global as any).countPendingActions = unifiedOfflineDataService.countPendingActions;
+    (global as any).syncPendingActions = unifiedOfflineDataService.syncPendingActions;
   }
 
   return (

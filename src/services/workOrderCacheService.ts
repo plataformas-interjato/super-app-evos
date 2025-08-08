@@ -1,19 +1,10 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
 import { WorkOrder, FilterStatus } from '../types/workOrder';
+import secureDataStorage from './secureDataStorageService';
+import smartOfflineDataService from './smartOfflineDataService';
 
-const CACHE_KEYS = {
-  WORK_ORDERS: 'cached_work_orders',
-  CACHE_TIMESTAMP: 'work_orders_cache_timestamp',
-  USER_WORK_ORDERS: 'cached_user_work_orders_', // Será concatenado com userId
-  CLEANUP_TIMESTAMP: 'cache_cleanup_timestamp', // Para controlar limpeza automática
-};
-
-// Cache permanente - sem expiração por tempo
-// const CACHE_EXPIRY_HOURS = 24; // REMOVIDO - cache agora é permanente
-
-// Configuração para limpeza de OS concluídas
-const COMPLETED_OS_CLEANUP_DAYS = 7; // OS concluídas são removidas após 7 dias
-const CLEANUP_CHECK_INTERVAL_HOURS = 6; // Verificar limpeza a cada 6 horas
+// REMOVIDO: AsyncStorage - usando apenas FileSystem agora
+// import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export interface CachedWorkOrders {
   workOrders: WorkOrder[];
@@ -22,183 +13,120 @@ export interface CachedWorkOrders {
 }
 
 /**
- * Verifica se precisa executar limpeza automática
- */
-const shouldRunCleanup = async (): Promise<boolean> => {
-  try {
-    const lastCleanup = await AsyncStorage.getItem(CACHE_KEYS.CLEANUP_TIMESTAMP);
-    if (!lastCleanup) return true;
-
-    const lastCleanupTime = new Date(lastCleanup);
-    const now = new Date();
-    const diffHours = (now.getTime() - lastCleanupTime.getTime()) / (1000 * 60 * 60);
-
-    return diffHours >= CLEANUP_CHECK_INTERVAL_HOURS;
-  } catch (error) {
-    console.error('❌ Erro ao verificar necessidade de limpeza:', error);
-    return true; // Em caso de erro, executar limpeza
-  }
-};
-
-/**
- * Remove OS concluídas (finalizadas/canceladas) que estão há mais de 7 dias
- */
-const cleanupCompletedWorkOrders = async (workOrders: WorkOrder[]): Promise<WorkOrder[]> => {
-  try {
-    const now = new Date();
-    const cutoffDate = new Date(now.getTime() - (COMPLETED_OS_CLEANUP_DAYS * 24 * 60 * 60 * 1000));
-
-    const filteredWorkOrders = workOrders.filter(wo => {
-      // Manter OS que não estão concluídas
-      if (wo.status !== 'finalizada' && wo.status !== 'cancelada') {
-        return true;
-      }
-
-      // Para OS concluídas, verificar se foram atualizadas há menos de 7 dias
-      const updatedAt = new Date(wo.updatedAt);
-      const shouldKeep = updatedAt > cutoffDate;
-
-      if (!shouldKeep) {
-        console.log(`🗑️ Removendo OS ${wo.id} (${wo.status}) - concluída há mais de 7 dias`);
-      }
-
-      return shouldKeep;
-    });
-
-    const removedCount = workOrders.length - filteredWorkOrders.length;
-    if (removedCount > 0) {
-      console.log(`✅ Limpeza automática: ${removedCount} OS concluídas removidas do cache`);
-    }
-
-    return filteredWorkOrders;
-  } catch (error) {
-    console.error('❌ Erro na limpeza automática:', error);
-    return workOrders; // Em caso de erro, retornar dados originais
-  }
-};
-
-/**
- * Executa limpeza automática se necessário
- */
-const runAutomaticCleanup = async (userId?: string): Promise<void> => {
-  try {
-    if (!(await shouldRunCleanup())) {
-      return;
-    }
-
-    console.log('🧹 Executando limpeza automática do cache...');
-
-    const cacheKey = userId 
-      ? `${CACHE_KEYS.USER_WORK_ORDERS}${userId}`
-      : CACHE_KEYS.WORK_ORDERS;
-
-    const cachedData = await AsyncStorage.getItem(cacheKey);
-    if (!cachedData) return;
-
-    const parsed: CachedWorkOrders = JSON.parse(cachedData);
-    const cleanedWorkOrders = await cleanupCompletedWorkOrders(parsed.workOrders);
-
-    // Salvar dados limpos de volta no cache
-    const updatedCacheData: CachedWorkOrders = {
-      ...parsed,
-      workOrders: cleanedWorkOrders,
-      timestamp: new Date().toISOString(), // Atualizar timestamp
-    };
-
-    await AsyncStorage.setItem(cacheKey, JSON.stringify(updatedCacheData));
-
-    // Marcar timestamp da última limpeza
-    await AsyncStorage.setItem(CACHE_KEYS.CLEANUP_TIMESTAMP, new Date().toISOString());
-
-    console.log('✅ Limpeza automática concluída');
-  } catch (error) {
-    console.error('❌ Erro na limpeza automática:', error);
-  }
-};
-
-/**
- * Verifica se o cache existe (sem validação de expiração)
- */
-const cacheExists = async (cacheKey: string): Promise<boolean> => {
-  try {
-    const cachedData = await AsyncStorage.getItem(cacheKey);
-    return cachedData !== null;
-  } catch (error) {
-    console.error('❌ Erro ao verificar existência do cache:', error);
-    return false;
-  }
-};
-
-/**
- * Salva ordens de serviço no cache local (permanente)
+ * Salva ordens de serviço APENAS no FileSystem (sem AsyncStorage)
  */
 export const cacheWorkOrders = async (
-  workOrders: WorkOrder[],
+  workOrders: WorkOrder[], 
   userId?: string
 ): Promise<void> => {
   try {
-    // Executar limpeza automática antes de salvar novos dados
-    await runAutomaticCleanup(userId);
+    // ÚNICO MÉTODO: Salvar no smartOfflineDataService FileSystem
+    if (userId) {
+      try {
+        const saveResult = await smartOfflineDataService.saveWorkOrdersToFileSystem(userId, workOrders);
+        console.log('🔍 sssssssssssssssssssaveResult:', saveResult);
+        console.log('🔍 wwwwwwwwwwwwwwwwwwworkOrders:', workOrders);
 
-    const cacheData: CachedWorkOrders = {
-      workOrders,
-      timestamp: new Date().toISOString(),
-      userId,
-    };
+        if (!saveResult.success) {
+          throw new Error(saveResult.error || 'Erro no FileSystem');
+        }
+      } catch (filesystemError) {
+        throw filesystemError;
+      }
+    }
+    
+    // BACKUP: Também salvar no secureDataStorage como backup secundário
+    try {
+      await secureDataStorage.initialize();
+      
+      const cacheData: CachedWorkOrders = {
+        workOrders,
+        timestamp: new Date().toISOString(),
+        userId
+      };
 
-    const cacheKey = userId 
-      ? `${CACHE_KEYS.USER_WORK_ORDERS}${userId}`
-      : CACHE_KEYS.WORK_ORDERS;
+      const cacheId = userId 
+        ? `user_work_orders_${userId}`
+        : 'work_orders_global';
 
-    await AsyncStorage.setItem(cacheKey, JSON.stringify(cacheData));
-    console.log(`✅ ${workOrders.length} ordens de serviço salvas no cache permanente${userId ? ` para usuário ${userId}` : ''}`);
+      await secureDataStorage.saveData('WORK_ORDERS', [cacheData], cacheId);
+    } catch (secureError) {
+      // Backup falhou mas não é crítico
+    }
+    
   } catch (error) {
-    console.error('❌ Erro ao salvar ordens de serviço no cache:', error);
+    throw error;
   }
 };
 
 /**
- * Busca ordens de serviço do cache local (permanente)
+ * Busca ordens de serviço APENAS do FileSystem (sem AsyncStorage)
  */
 export const getCachedWorkOrders = async (
   userId?: string
 ): Promise<{ data: WorkOrder[] | null; fromCache: boolean; error?: string }> => {
-  try {
-    const cacheKey = userId 
-      ? `${CACHE_KEYS.USER_WORK_ORDERS}${userId}`
-      : CACHE_KEYS.WORK_ORDERS;
-
-    // Verificar se o cache existe (sem validação de expiração)
-    const exists = await cacheExists(cacheKey);
-    if (!exists) {
-      console.log('📭 Cache de ordens de serviço não encontrado');
-      return { data: null, fromCache: false };
+  // MÉTODO PRINCIPAL: Buscar do smartOfflineDataService FileSystem
+  if (userId) {
+    try {
+      const filesystemResult = await smartOfflineDataService.getWorkOrdersFromFileSystem(userId);
+      
+      if (filesystemResult.workOrders && filesystemResult.workOrders.length > 0) {
+        console.log(`✅ ${filesystemResult.workOrders.length} ordens carregadas do FileSystem principal`);
+        return { 
+          data: filesystemResult.workOrders, 
+          fromCache: true 
+        };
+      }
+    } catch (filesystemError) {
+      console.warn('⚠️ Erro no FileSystem principal:', filesystemError);
+      // Continuar para o backup em vez de falhar
     }
-
-    // Executar limpeza automática antes de retornar dados
-    await runAutomaticCleanup(userId);
-
-    const cachedData = await AsyncStorage.getItem(cacheKey);
-    if (!cachedData) {
-      return { data: null, fromCache: false };
-    }
-
-    const parsed: CachedWorkOrders = JSON.parse(cachedData);
-    
-    // Converter datas de string para Date
-    const workOrders = parsed.workOrders.map(wo => ({
-      ...wo,
-      scheduling_date: new Date(wo.scheduling_date),
-      createdAt: new Date(wo.createdAt),
-      updatedAt: new Date(wo.updatedAt),
-    }));
-
-    console.log(`📱 ${workOrders.length} ordens de serviço carregadas do cache permanente${userId ? ` para usuário ${userId}` : ''}`);
-    return { data: workOrders, fromCache: true };
-  } catch (error) {
-    console.error('❌ Erro ao buscar ordens de serviço do cache:', error);
-    return { data: null, fromCache: false, error: 'Erro ao acessar cache local' };
   }
+
+  // FALLBACK ÚNICO: Buscar do secureDataStorage backup
+  try {
+    await secureDataStorage.initialize();
+    
+    const cacheId = userId 
+      ? `user_work_orders_${userId}`
+      : 'work_orders_global';
+
+    const secureResult = await secureDataStorage.getData<CachedWorkOrders>('WORK_ORDERS', cacheId);
+    
+    if (secureResult.data && Array.isArray(secureResult.data) && secureResult.data.length > 0) {
+      const cacheData = secureResult.data[0];
+      
+      if (cacheData.workOrders && Array.isArray(cacheData.workOrders)) {
+        const workOrders = cacheData.workOrders.map(wo => ({
+          ...wo,
+          scheduling_date: new Date(wo.scheduling_date),
+          createdAt: new Date(wo.createdAt),
+          updatedAt: new Date(wo.updatedAt),
+        }));
+
+        console.log(`✅ ${workOrders.length} ordens carregadas do backup secureDataStorage`);
+
+        // Tentar migrar para o FileSystem principal em background
+        if (userId) {
+          smartOfflineDataService.saveWorkOrdersToFileSystem(userId, workOrders).catch(() => {
+            // Falha não crítica
+          });
+        }
+        
+        return { data: workOrders, fromCache: true };
+      }
+    }
+  } catch (secureError) {
+    console.warn('⚠️ Erro no backup secureDataStorage:', secureError);
+    // Não falhar, apenas continuar
+  }
+
+  // NENHUM CACHE ENCONTRADO - mas não é erro, é situação normal
+  console.log('📭 Nenhum cache encontrado no FileSystem');
+  return { 
+    data: null, 
+    fromCache: false
+  };
 };
 
 /**
@@ -211,36 +139,26 @@ export const filterCachedWorkOrders = (
 ): WorkOrder[] => {
   let filtered = [...workOrders];
 
-  // Filtrar por status
+  // Filtro por status
   if (status && status !== 'todas') {
     filtered = filtered.filter(wo => wo.status === status);
   }
 
-  // Filtrar por busca
+  // Filtro de busca
   if (search && search.trim()) {
-    const searchTerm = search.trim().toLowerCase();
-    const isNumeric = /^\d+$/.test(searchTerm);
-    
-    filtered = filtered.filter(wo => {
-      const title = wo.title.toLowerCase();
-      const idString = wo.id.toString();
-      
-      if (isNumeric) {
-        // Se for apenas números, buscar por ID exato ou título
-        return idString.includes(searchTerm) || title.includes(searchTerm);
-      } else {
-        // Se contém texto, buscar por ID parcial ou título
-        // Permite buscar "123" dentro de "OS 123 - Manutenção"
-        return idString.includes(searchTerm) || title.includes(searchTerm);
-      }
-    });
+    const searchLower = search.toLowerCase().trim();
+    filtered = filtered.filter(wo => 
+      wo.title.toLowerCase().includes(searchLower) ||
+      wo.id.toString().includes(searchLower) ||
+      wo.client?.toLowerCase().includes(searchLower)
+    );
   }
 
   return filtered;
 };
 
 /**
- * Busca ordens de serviço com cache permanente - sempre tenta cache primeiro
+ * Busca ordens de serviço com cache FileSystem - sempre tenta cache primeiro
  */
 export const getWorkOrdersWithCache = async (
   fetchFunction: () => Promise<{ data: WorkOrder[] | null; error: string | null }>,
@@ -250,80 +168,53 @@ export const getWorkOrdersWithCache = async (
 ): Promise<{ data: WorkOrder[] | null; error: string | null; fromCache: boolean }> => {
   try {
     // Verificar conectividade
-    const NetInfo = require('@react-native-community/netinfo');
     const netInfo = await NetInfo.fetch();
+    const isOffline = !netInfo.isConnected;
 
-    // SEMPRE tentar buscar do cache primeiro (online ou offline)
-    console.log('📱 Buscando ordens de serviço do cache permanente...');
+    // SEMPRE tentar buscar do cache primeiro (APENAS FileSystem)
+    const cacheResult = await getCachedWorkOrders(userId);
     
-    const cacheKey = userId 
-      ? `${CACHE_KEYS.USER_WORK_ORDERS}${userId}`
-      : CACHE_KEYS.WORK_ORDERS;
-
-    // Buscar dados do cache
-    const cachedData = await AsyncStorage.getItem(cacheKey);
-    
-    if (cachedData) {
-      try {
-        // Executar limpeza automática
-        await runAutomaticCleanup(userId);
-        
-        // Recarregar dados após limpeza
-        const cleanedData = await AsyncStorage.getItem(cacheKey);
-        if (cleanedData) {
-          const parsed: CachedWorkOrders = JSON.parse(cleanedData);
-          
-          // Converter datas de string para Date
-          const workOrders = parsed.workOrders.map(wo => ({
-            ...wo,
-            scheduling_date: new Date(wo.scheduling_date),
-            createdAt: new Date(wo.createdAt),
-            updatedAt: new Date(wo.updatedAt),
-          }));
-
-          // Aplicar filtros nos dados do cache
-          const filteredData = filterCachedWorkOrders(workOrders, status, search);
-          console.log(`✅ ${filteredData.length} ordens de serviço filtradas do cache permanente (total: ${workOrders.length})`);
-          
-          // Se offline, retornar dados do cache
-          if (!netInfo.isConnected) {
-            console.log('📱 Offline: usando dados do cache permanente');
-            return { data: filteredData, error: null, fromCache: true };
-          }
-          
-          // Se online, retornar dados do cache mas também tentar atualizar em background
-          console.log('🌐 Online: usando cache permanente e atualizando em background');
-          
-          // Atualizar cache em background (sem bloquear a UI)
-          fetchFunction()
-            .then(async (serverResult) => {
-              if (serverResult.data && !serverResult.error) {
-                await cacheWorkOrders(serverResult.data, userId);
-              }
-            })
-            .catch((error) => {
-              console.log('⚠️ Erro ao atualizar cache em background:', error);
-            });
-          
-          return { data: filteredData, error: null, fromCache: true };
-        }
-      } catch (parseError) {
-        console.error('❌ Erro ao processar cache:', parseError);
+    // Se tem dados no cache, usar sempre (online ou offline)
+    if (cacheResult.data && cacheResult.data.length > 0) {
+      // Aplicar filtros nos dados do cache
+      const filteredData = filterCachedWorkOrders(cacheResult.data, status, search);
+      
+      console.log(`📁 Cache encontrado: ${cacheResult.data.length} ordens, ${filteredData.length} após filtros`);
+      
+      // CORREÇÃO: SEMPRE retornar dados do cache quando existem, independente de conexão
+      // Se online, atualizar cache em background mas não bloquear o usuário
+      if (!isOffline) {
+        // Atualizar cache em background (sem bloquear a UI)
+        fetchFunction()
+          .then(async (serverResult) => {
+            if (serverResult.data && !serverResult.error) {
+              await cacheWorkOrders(serverResult.data, userId);
+            }
+          })
+          .catch(() => {
+            // Falha não crítica
+          });
       }
-    }
-    
-    // Se não há cache ou erro no cache, tentar servidor (apenas se online)
-    if (!netInfo.isConnected) {
-      console.log('❌ Offline e sem cache disponível');
-      return { data: [], error: null, fromCache: false };
+      
+      return { data: filteredData, error: null, fromCache: true };
     }
 
-    // Online sem cache: buscar do servidor
+    // Se não há cache E está offline, informar que precisa estar online primeiro
+    if (isOffline) {
+      console.log('📭 Sem cache e offline - precisa login online primeiro');
+      return { 
+        data: [], 
+        error: null, // Não mostrar erro, apenas lista vazia
+        fromCache: false 
+      };
+    }
+
+    // Se online e sem cache: buscar do servidor
     console.log('🌐 Online sem cache: buscando do servidor...');
     const serverResult = await fetchFunction();
     
     if (serverResult.data && !serverResult.error) {
-      // Salvar no cache para próximas consultas
+      // Salvar no cache FileSystem para próximas consultas
       await cacheWorkOrders(serverResult.data, userId);
       
       // Aplicar filtros nos dados do servidor
@@ -334,329 +225,103 @@ export const getWorkOrdersWithCache = async (
     return { data: null, error: serverResult.error, fromCache: false };
   } catch (error) {
     console.error('❌ Erro em getWorkOrdersWithCache:', error);
+    
+    // Em caso de erro, tentar carregar cache como último recurso
+    try {
+      const cacheResult = await getCachedWorkOrders(userId);
+      if (cacheResult.data && cacheResult.data.length > 0) {
+        const filteredData = filterCachedWorkOrders(cacheResult.data, status, search);
+        return { data: filteredData, error: null, fromCache: true };
+      }
+    } catch (cacheError) {
+      // Falha total
+    }
+    
     return { data: null, error: 'Erro inesperado ao buscar ordens de serviço', fromCache: false };
   }
 };
 
 /**
- * Limpa o cache de ordens de serviço
+ * Limpa o cache de ordens de serviço (APENAS FileSystem)
  */
 export const clearWorkOrdersCache = async (userId?: string): Promise<void> => {
   try {
-    const cacheKey = userId 
-      ? `${CACHE_KEYS.USER_WORK_ORDERS}${userId}`
-      : CACHE_KEYS.WORK_ORDERS;
-
-    await AsyncStorage.removeItem(cacheKey);
-    console.log(`🗑️ Cache de ordens de serviço limpo${userId ? ` para usuário ${userId}` : ''}`);
-  } catch (error) {
-    console.error('❌ Erro ao limpar cache de ordens de serviço:', error);
-  }
-};
-
-/**
- * Força limpeza manual de OS concluídas
- */
-export const forceCleanupCompletedWorkOrders = async (userId?: string): Promise<{
-  success: boolean;
-  removedCount: number;
-  error?: string;
-}> => {
-  try {
-    console.log('🧹 Executando limpeza manual de OS concluídas...');
-
-    const cacheKey = userId 
-      ? `${CACHE_KEYS.USER_WORK_ORDERS}${userId}`
-      : CACHE_KEYS.WORK_ORDERS;
-
-    const cachedData = await AsyncStorage.getItem(cacheKey);
-    if (!cachedData) {
-      return { success: true, removedCount: 0 };
-    }
-
-    const parsed: CachedWorkOrders = JSON.parse(cachedData);
-    const originalCount = parsed.workOrders.length;
-    const cleanedWorkOrders = await cleanupCompletedWorkOrders(parsed.workOrders);
-    const removedCount = originalCount - cleanedWorkOrders.length;
-
-    // Salvar dados limpos de volta no cache
-    const updatedCacheData: CachedWorkOrders = {
-      ...parsed,
-      workOrders: cleanedWorkOrders,
-      timestamp: new Date().toISOString(),
-    };
-
-    await AsyncStorage.setItem(cacheKey, JSON.stringify(updatedCacheData));
-    await AsyncStorage.setItem(CACHE_KEYS.CLEANUP_TIMESTAMP, new Date().toISOString());
-
-    console.log(`✅ Limpeza manual concluída: ${removedCount} OS removidas`);
-    return { success: true, removedCount };
-  } catch (error) {
-    console.error('❌ Erro na limpeza manual:', error);
-    return { success: false, removedCount: 0, error: 'Erro ao executar limpeza manual' };
-  }
-};
-
-/**
- * Obtém estatísticas detalhadas do cache permanente
- */
-export const getWorkOrdersCacheStats = async (userId?: string): Promise<{
-  hasCache: boolean;
-  cacheAge: number;
-  itemCount: number;
-  completedCount: number;
-  activeCount: number;
-  lastUpdate: string | null;
-  lastCleanup: string | null;
-  nextCleanupDue: boolean;
-}> => {
-  try {
-    const cacheKey = userId 
-      ? `${CACHE_KEYS.USER_WORK_ORDERS}${userId}`
-      : CACHE_KEYS.WORK_ORDERS;
-
-    const cachedData = await AsyncStorage.getItem(cacheKey);
-    const lastCleanup = await AsyncStorage.getItem(CACHE_KEYS.CLEANUP_TIMESTAMP);
+    await secureDataStorage.initialize();
     
-    if (!cachedData) {
-      return {
-        hasCache: false,
-        cacheAge: 0,
-        itemCount: 0,
-        completedCount: 0,
-        activeCount: 0,
-        lastUpdate: null,
-        lastCleanup,
-        nextCleanupDue: true,
-      };
-    }
-
-    const parsed: CachedWorkOrders = JSON.parse(cachedData);
-    const cacheTime = new Date(parsed.timestamp);
-    const now = new Date();
-    const ageHours = (now.getTime() - cacheTime.getTime()) / (1000 * 60 * 60);
-
-    // Verificar se workOrders existe e é um array
-    if (!parsed.workOrders || !Array.isArray(parsed.workOrders)) {
-      console.log('⚠️ Cache mal formado - workOrders não é um array válido');
-      return {
-        hasCache: false,
-        cacheAge: 0,
-        itemCount: 0,
-        completedCount: 0,
-        activeCount: 0,
-        lastUpdate: null,
-        lastCleanup,
-        nextCleanupDue: true,
-      };
-    }
-
-    // Contar OS por status
-    const completedCount = parsed.workOrders.filter(wo => 
-      wo.status === 'finalizada' || wo.status === 'cancelada'
-    ).length;
-    const activeCount = parsed.workOrders.length - completedCount;
-
-    // Verificar se próxima limpeza é necessária
-    const nextCleanupDue = await shouldRunCleanup();
-
-    return {
-      hasCache: true,
-      cacheAge: Math.round(ageHours * 100) / 100,
-      itemCount: parsed.workOrders.length,
-      completedCount,
-      activeCount,
-      lastUpdate: parsed.timestamp,
-      lastCleanup,
-      nextCleanupDue,
-    };
-  } catch (error) {
-    console.error('❌ Erro ao obter estatísticas do cache:', error);
-    return {
-      hasCache: false,
-      cacheAge: 0,
-      itemCount: 0,
-      completedCount: 0,
-      activeCount: 0,
-      lastUpdate: null,
-      lastCleanup: null,
-      nextCleanupDue: true,
-    };
-  }
-};
-
-/**
- * Atualiza uma ordem de serviço específica no cache
- */
-export const updateWorkOrderInCache = async (
-  workOrderId: number,
-  updates: Partial<WorkOrder>,
-  userId?: string
-): Promise<void> => {
-  try {
-    const cacheKey = userId 
-      ? `${CACHE_KEYS.USER_WORK_ORDERS}${userId}`
-      : CACHE_KEYS.WORK_ORDERS;
-
-    // Buscar dados do cache diretamente, sem verificar validade
-    const cachedData = await AsyncStorage.getItem(cacheKey);
-    if (!cachedData) {
-      console.log('⚠️ Nenhum cache encontrado para atualizar');
-      return;
-    }
-
-    const parsed: CachedWorkOrders = JSON.parse(cachedData);
-    
-    // Verificar se workOrders existe e é um array
-    if (!parsed.workOrders || !Array.isArray(parsed.workOrders)) {
-      console.log('⚠️ Cache mal formado - workOrders não é um array válido');
-      return;
-    }
-    
-    // Converter datas de string para Date
-    const workOrders = parsed.workOrders.map(wo => ({
-      ...wo,
-      scheduling_date: new Date(wo.scheduling_date),
-      createdAt: new Date(wo.createdAt),
-      updatedAt: new Date(wo.updatedAt),
-    }));
-
-    // Atualizar a OS específica
-    const updatedWorkOrders = workOrders.map(wo => 
-      wo.id === workOrderId ? { ...wo, ...updates } : wo
-    );
-
-    // Salvar de volta no cache
-    await cacheWorkOrders(updatedWorkOrders, userId);
-    console.log(`✅ Ordem de serviço ${workOrderId} atualizada no cache`);
-  } catch (error) {
-    console.error('❌ Erro ao atualizar ordem de serviço no cache:', error);
-  }
-};
-
-/**
- * Força o refresh do cache, ignorando validade
- */
-export const forceRefreshWorkOrdersCache = async (
-  fetchFunction: () => Promise<{ data: WorkOrder[] | null; error: string | null }>,
-  userId?: string
-): Promise<{ success: boolean; error?: string }> => {
-  try {
-    console.log('🔄 Forçando refresh do cache de ordens de serviço...');
-    
-    // Verificar conectividade
-    const NetInfo = require('@react-native-community/netinfo');
-    const netInfo = await NetInfo.fetch();
-    
-    if (!netInfo.isConnected) {
-      console.log('📱 Offline: não é possível forçar refresh do servidor');
-      return { success: false, error: 'Sem conexão para atualizar cache' };
-    }
-
-    // Buscar dados do servidor
-    const serverResult = await fetchFunction();
-    
-    if (serverResult.data && !serverResult.error) {
-      // Atualizar cache com dados frescos
-      await cacheWorkOrders(serverResult.data, userId);
-      console.log(`✅ Cache atualizado com ${serverResult.data.length} ordens de serviço`);
-      return { success: true };
-    } else {
-      console.error('❌ Erro ao buscar dados do servidor:', serverResult.error);
-      return { success: false, error: serverResult.error || 'Erro ao buscar dados' };
-    }
-  } catch (error) {
-    console.error('💥 Erro ao forçar refresh do cache:', error);
-    return { success: false, error: 'Erro inesperado ao atualizar cache' };
-  }
-};
-
-/**
- * Atualiza cache de forma inteligente após finalização de OS online
- * Preserva OS em andamento para não perder progresso
- */
-export const updateCacheAfterOSFinalizada = async (
-  finalizadaWorkOrderId: number,
-  fetchFunction: () => Promise<{ data: WorkOrder[] | null; error: string | null }>,
-  userId?: string
-): Promise<{ success: boolean; error?: string }> => {
-  try {
-    console.log(`🔄 Atualizando cache após OS ${finalizadaWorkOrderId} finalizada online...`);
-    
-    // Verificar conectividade
-    const NetInfo = require('@react-native-community/netinfo');
-    const netInfo = await NetInfo.fetch();
-    
-    if (!netInfo.isConnected) {
-      console.log('📱 Offline: não é possível atualizar cache do servidor');
-      return { success: false, error: 'Sem conexão para atualizar cache' };
-    }
-
-    const cacheKey = userId 
-      ? `${CACHE_KEYS.USER_WORK_ORDERS}${userId}`
-      : CACHE_KEYS.WORK_ORDERS;
-
-    // 1. Buscar dados atuais do cache
-    const cachedData = await AsyncStorage.getItem(cacheKey);
-    let osEmAndamento: WorkOrder[] = [];
-    
-    if (cachedData) {
+    // Limpar do FileSystem principal (smartOfflineDataService)
+    if (userId) {
       try {
-        const parsed: CachedWorkOrders = JSON.parse(cachedData);
-        
-        // Verificar se workOrders existe e é um array
-        if (parsed.workOrders && Array.isArray(parsed.workOrders)) {
-          // Converter datas e filtrar OS em andamento (exceto a que foi finalizada)
-          osEmAndamento = parsed.workOrders
-            .map(wo => ({
-              ...wo,
-              scheduling_date: new Date(wo.scheduling_date),
-              createdAt: new Date(wo.createdAt),
-              updatedAt: new Date(wo.updatedAt),
-            }))
-            .filter(wo => 
-              wo.status === 'em_progresso' && 
-              wo.id !== finalizadaWorkOrderId
-            );
-          
-          console.log(`📱 Preservando ${osEmAndamento.length} OS em andamento no cache`);
-        } else {
-          console.log('⚠️ Cache mal formado - workOrders não é um array válido');
-        }
-      } catch (parseError) {
-        console.error('❌ Erro ao parsear cache atual:', parseError);
+        // Salvar array vazio para "limpar"
+        await smartOfflineDataService.saveWorkOrdersToFileSystem(userId, []);
+      } catch (error) {
+        // Falha não crítica
       }
     }
-
-    // 2. Buscar dados frescos do servidor
-    console.log('🌐 Buscando dados frescos do servidor...');
-    const serverResult = await fetchFunction();
     
-    if (serverResult.data && !serverResult.error) {
-      // 3. Mesclar dados: servidor + OS em andamento preservadas
-      const dadosDoServidor = serverResult.data;
-      
-      // Remover do servidor as OS em andamento que já temos no cache
-      const idsEmAndamento = osEmAndamento.map(wo => wo.id);
-      const dadosServidorFiltrados = dadosDoServidor.filter(wo => 
-        !idsEmAndamento.includes(wo.id)
+    // Limpar do backup secureDataStorage
+    const cacheId = userId 
+      ? `user_work_orders_${userId}`
+      : 'work_orders_global';
+    
+    // Salvar array vazio para "limpar"
+    await secureDataStorage.saveData('WORK_ORDERS', [], cacheId);
+    
+  } catch (error) {
+    // Falha não crítica
+  }
+};
+
+// Funções mantidas para compatibilidade (mas simplificadas para FileSystem)
+export const runAutomaticCleanup = async (userId?: string): Promise<void> => {
+  // Não necessário no FileSystem
+};
+
+export const cacheExists = async (userId?: string): Promise<boolean> => {
+  try {
+    const result = await getCachedWorkOrders(userId);
+    return !!(result.data && result.data.length > 0);
+  } catch {
+    return false;
+  }
+};
+
+export const getWorkOrdersCacheStats = async (userId?: string) => {
+  try {
+    const result = await getCachedWorkOrders(userId);
+    
+    return {
+      hasCache: !!result.data,
+      itemCount: result.data?.length || 0,
+      cacheAge: 0, // FileSystem não tem expiração
+      lastUpdate: new Date().toISOString(),
+      cacheSource: 'FileSystem'
+    };
+  } catch (error) {
+    return {
+      hasCache: false,
+      itemCount: 0,
+      cacheAge: 0,
+      lastUpdate: null,
+      cacheSource: 'none',
+      error: error instanceof Error ? error.message : 'Erro desconhecido'
+    };
+  }
+};
+
+export const updateCacheAfterOSFinalizada = async (workOrderId: number, userId?: string): Promise<void> => {
+  try {
+    const result = await getCachedWorkOrders(userId);
+    
+    if (result.data) {
+      const updatedWorkOrders = result.data.map(wo => 
+        wo.id === workOrderId ? { ...wo, status: 'finalizada' as const } : wo
       );
       
-      // Combinar dados
-      const dadosCombinados = [...dadosServidorFiltrados, ...osEmAndamento];
-      
-      console.log(`✅ Cache atualizado: ${dadosServidorFiltrados.length} do servidor + ${osEmAndamento.length} em andamento preservadas`);
-      
-      // 4. Salvar cache atualizado
-      await cacheWorkOrders(dadosCombinados, userId);
-      
-      return { success: true };
+      await cacheWorkOrders(updatedWorkOrders, userId);
     } else {
-      console.error('❌ Erro ao buscar dados do servidor:', serverResult.error);
-      return { success: false, error: serverResult.error || 'Erro ao buscar dados' };
+      // Falha não crítica
     }
   } catch (error) {
-    console.error('💥 Erro ao atualizar cache após OS finalizada:', error);
-    return { success: false, error: 'Erro inesperado ao atualizar cache' };
+    // Falha não crítica
   }
 }; 

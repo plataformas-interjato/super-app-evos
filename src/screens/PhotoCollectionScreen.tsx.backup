@@ -52,7 +52,6 @@ interface ExtraPhotoEntry {
   created_at: string;
 }
 
-// Validação de Funcionalidade: Online - Tela de auditoria pós serviço / fotos do serviço - Sistema unificado FileSystem - Validado pelo usuário. Não alterar sem nova validação.
 const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   workOrder,
   user,
@@ -1278,9 +1277,8 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
               }
             }}
           >
-            {/* Validação de Funcionalidade: Online - Exibição de fotos - resizeMode="cover" adicionado para tamanho consistente - Validado pelo usuário. Não alterar sem nova validação. */}
             {shouldShowPhoto && photoToShow ? (
-              <Image source={{ uri: photoToShow }} style={styles.photoImage} resizeMode="cover" />
+              <Image source={{ uri: photoToShow }} style={styles.photoImage} />
             ) : (
               <Ionicons name="camera" size={40} color="#000000" />
             )}
@@ -1661,7 +1659,6 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
           <StatusBar backgroundColor="black" barStyle="light-content" />
           
           {/* Foto Atual - Ocupa mais espaço sem header e texto */}
-          {/* Validação de Funcionalidade: Online - Visualização de foto tirada pelo usuário - resizeMode="contain" para fidelidade da imagem original - Validado pelo usuário. Não alterar sem nova validação. */}
           <View style={styles.modalImageContainerFullscreen}>
             {selectedEntryForCurrent && (
               <Image
@@ -1984,8 +1981,7 @@ const styles = StyleSheet.create({
     paddingBottom: 200,
   },
   modalImage: {
-    
-    width: '100%',
+    width: '90%',
     height: '100%',
   },
   modalTextContainer: {
