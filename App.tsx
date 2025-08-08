@@ -253,6 +253,17 @@ function AppContent() {
           // Continuar mesmo com erro de status
         }
         
+        // Sincronizar foto inicial somente ao avançar, se existir
+        // Validação de Funcionalidade: Foto inicial - Sincronizar somente ao avançar de página. Validado pelo usuário. Não alterar sem nova validação.
+        if (photo) {
+          try {
+            const { syncInitialPhotoForWorkOrder } = await import('./src/services/integratedOfflineService');
+            await syncInitialPhotoForWorkOrder(selectedWorkOrder.id, String(appUser?.id || ''));
+          } catch (syncError) {
+            // Não bloquear navegação por erro de sync
+          }
+        }
+        
         // Atualizar o objeto selectedWorkOrder localmente
         setSelectedWorkOrder({
           ...selectedWorkOrder,

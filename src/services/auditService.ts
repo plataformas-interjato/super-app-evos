@@ -52,9 +52,7 @@ const convertPhotoToBase64 = async (photoUri: string): Promise<{ base64: string 
   }
 };
 
-/**
- * Salva a foto de início na tabela auditoria_tecnico
- */
+// Validação de Funcionalidade: Foto inicial - Inserir/atualizar na mesma linha por OS (ordem_servico_id + auditor_id). Validado pelo usuário. Não alterar sem nova validação.
 export const savePhotoInicio = async (
   workOrderId: number,
   technicoId: string,
@@ -106,41 +104,72 @@ export const savePhotoInicio = async (
       console.log('📸 Adicionando prefixo ao base64 puro');
     }
 
-    // Salvar registro na tabela com base64
-    const { data, error } = await supabase
+    // Verificar se já existe linha para esta OS + técnico
+    const { data: existingAudit, error: searchError } = await supabase
       .from('auditoria_tecnico')
-      .insert({
-        ordem_servico_id: workOrderId,
-        auditor_id: parseInt(technicoId),
-        foto_inicial: base64ToSave, // Base64 da foto
-        dt_adicao: new Date().toISOString(),
-        ativo: 1,
-        trabalho_realizado: 0,
-      })
       .select('*')
+      .eq('ordem_servico_id', workOrderId)
+      .eq('auditor_id', parseInt(technicoId))
+      .eq('ativo', 1)
       .single();
 
-    if (error) {
-      console.error('❌ Erro ao salvar registro na auditoria:', error);
-      return { data: null, error: error.message };
+    let resultData: AuditoriaTecnico | null = null;
+
+    if (searchError && searchError.code === 'PGRST116') {
+      // Não existe: inserir novo com foto_inicial
+      const { data, error } = await supabase
+        .from('auditoria_tecnico')
+        .insert({
+          ordem_servico_id: workOrderId,
+          auditor_id: parseInt(technicoId),
+          foto_inicial: base64ToSave,
+          trabalho_realizado: 0,
+          dt_adicao: new Date().toISOString(),
+          ativo: 1,
+        })
+        .select('*')
+        .single();
+
+      if (error) {
+        console.error('❌ Erro ao salvar registro na auditoria:', error);
+        return { data: null, error: error.message };
+      }
+
+      resultData = data;
+    } else if (existingAudit) {
+      // Existe: atualizar apenas foto_inicial
+      const { data, error } = await supabase
+        .from('auditoria_tecnico')
+        .update({
+          foto_inicial: base64ToSave,
+          dt_edicao: new Date().toISOString(),
+        })
+        .eq('id', existingAudit.id)
+        .select('*')
+        .single();
+
+      if (error) {
+        console.error('❌ Erro ao atualizar foto inicial:', error);
+        return { data: null, error: error.message };
+      }
+
+      resultData = data;
+    } else if (searchError) {
+      console.error('❌ Erro inesperado ao buscar auditoria inicial:', searchError);
+      return { data: null, error: searchError.message };
     }
 
-    console.log('✅ Foto de início salva com sucesso:', data?.id);
+    console.log('✅ Foto de início salva/atualizada com sucesso:', resultData?.id);
     
     // Atualizar status da ordem de serviço para "em_progresso"
     console.log('🔄 Atualizando status da OS para "em_progresso"...');
-    
     const { updateWorkOrderStatus } = await import('./workOrderService');
     const { error: statusError } = await updateWorkOrderStatus(workOrderId, 'em_progresso');
-    
     if (statusError) {
       console.warn('⚠️ Erro ao atualizar status da OS:', statusError);
-      // Não falhar a operação por causa do status
-    } else {
-      console.log('✅ Status da OS atualizado para "em_progresso"');
     }
 
-    return { data, error: null };
+    return { data: resultData, error: null };
 
   } catch (error) {
     console.error('💥 Erro inesperado ao salvar foto de início:', error);
@@ -418,9 +447,7 @@ export const hasFinalPhoto = async (
   }
 };
 
-/**
- * Salva a auditoria final (foto final + dados da auditoria)
- */
+// Validação de Funcionalidade: Foto final - Sincronizar somente ao avançar e gravar na mesma linha da foto inicial (ordem_servico_id + auditor_id). Validado pelo usuário. Não alterar sem nova validação.
 export const saveAuditoriaFinal = async (
   workOrderId: number,
   technicoId: string,

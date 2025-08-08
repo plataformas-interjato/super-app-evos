@@ -142,6 +142,7 @@ const StartServiceScreen: React.FC<StartServiceScreenProps> = ({
 
         // Salvar foto usando o serviço offline
         try {
+          // Validação de Funcionalidade: Foto inicial - Salva localmente (FileSystem) e NÃO sincroniza aqui; sincroniza somente ao avançar de página. Validado pelo usuário. Não alterar sem nova validação.
           const { success, error, savedOffline } = await savePhotoInicioOffline(
             workOrder.id,
             user.id,

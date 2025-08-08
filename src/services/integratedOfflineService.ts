@@ -28,6 +28,7 @@ export interface PhotoSyncResult {
  * SUBSTITUTO SEGURO para savePhotoInicioOffline
  * API 100% COMPATÍVEL + armazenamento seguro
  */
+// Validação de Funcionalidade: Foto inicial - Salvar local e sincronizar somente ao avançar de página (evitar múltiplos envios). Validado pelo usuário. Não alterar sem nova validação.
 export const savePhotoInicioOffline = async (
   workOrderId: number,
   technicoId: string,
@@ -42,20 +43,14 @@ export const savePhotoInicioOffline = async (
       photoUri
     );
 
-    // 2. Se está online, tentar sincronizar imediatamente
-    const isOnline = await checkNetworkConnection();
-    if (isOnline && result.success) {
-      // Tentar sync em background sem bloquear
-      setTimeout(() => {
-        syncPhotoInicioInBackground(result.photoId, workOrderId, technicoId);
-      }, 500);
-    }
+    // 2. NÃO SINCRONIZAR AQUI. Sincronização ocorrerá somente ao avançar de página
+    // (comportamento solicitado pelo usuário)
 
     return {
       success: result.success,
       photoId: result.photoId,
       error: result.error,
-      savedOffline: !isOnline
+      savedOffline: true
     };
 
   } catch (error) {
@@ -304,6 +299,7 @@ export const getPhotoSystemDiagnostics = async (): Promise<{
 
 // FUNÇÕES PRIVADAS PARA SINCRONIZAÇÃO EM BACKGROUND
 
+// Validação de Funcionalidade: Foto inicial - Inserir/atualizar no Supabase pela mesma linha (ordem_servico_id + auditor_id). Validado pelo usuário. Não alterar sem nova validação.
 async function syncPhotoInicioInBackground(
   photoId: string,
   workOrderId: number,
@@ -316,15 +312,23 @@ async function syncPhotoInicioInBackground(
       throw new Error('Foto não encontrada para sincronização');
     }
 
-    // Aqui você adaptaria para chamar a API do Supabase
-    // Exemplo: await uploadPhotoToSupabase(workOrderId, base64, 'PHOTO_INICIO');
+    // Enviar para o Supabase utilizando o serviço de auditoria (foto inicial)
+    const { savePhotoInicio } = await import('./auditService');
+    const { error } = await savePhotoInicio(
+      workOrderId,
+      technicoId.toString(),
+      base64
+    );
+
+    if (error) {
+      throw new Error(`Erro ao salvar foto inicial no Supabase: ${error}`);
+    }
     
     // Marcar como sincronizada
     await securePhotoStorage.markAsSynced(photoId);
-    console.log(`✅ Foto de início sincronizada: ${photoId}`);
 
   } catch (error) {
-    console.error(`❌ Erro na sincronização em background: ${photoId}`, error);
+    // Propagar erro para controle do chamador
     throw error;
   }
 }
@@ -443,6 +447,36 @@ async function syncSecurePhotos(): Promise<PhotoSyncResult> {
   } catch (error) {
     console.error('❌ Erro ao sincronizar fotos seguras:', error);
     return { success: false, synced: 0, errors: [error instanceof Error ? error.message : 'Erro desconhecido'] };
+  }
+}
+
+// Validação de Funcionalidade: Foto inicial - Ao avançar, sincroniza apenas a última e marca anteriores como sincronizadas para garantir 1 foto efetiva por OS. Validado pelo usuário. Não alterar sem nova validação.
+export async function syncInitialPhotoForWorkOrder(
+  workOrderId: number,
+  technicoId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const photos = await securePhotoStorage.getPhotosByWorkOrder(workOrderId);
+    const pendingInitial = photos
+      .filter((p: any) => p.type === 'PHOTO_INICIO' && !p.synced)
+      .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    if (pendingInitial.length === 0) {
+      return { success: true };
+    }
+
+    const latest = pendingInitial[pendingInitial.length - 1];
+    await syncPhotoInicioInBackground(latest.id, workOrderId, technicoId);
+
+    // Marcar as demais fotos iniciais pendentes como sincronizadas para evitar múltiplos envios
+    const older = pendingInitial.slice(0, -1);
+    for (const photo of older) {
+      await securePhotoStorage.markAsSynced(photo.id);
+    }
+
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'Erro desconhecido' };
   }
 }
 
