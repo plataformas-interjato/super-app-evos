@@ -568,20 +568,7 @@ export const saveAuditoriaFinal = async (
     }
 
     console.log('✅ Auditoria final salva com sucesso:', auditData?.id);
-    
-    // Atualizar status da ordem de serviço para "finalizada"
-    console.log('🔄 Atualizando status da OS para "finalizada"...');
-    
-    const { updateWorkOrderStatus } = await import('./workOrderService');
-    const { error: statusError } = await updateWorkOrderStatus(workOrderId, 'finalizada');
-    
-    if (statusError) {
-      console.warn('⚠️ Erro ao atualizar status da OS:', statusError);
-      // Não falhar a operação por causa do status
-    } else {
-      console.log('✅ Status da OS atualizado para "finalizada"');
-    }
-
+ 
     return { data: auditData, error: null };
 
   } catch (error) {
