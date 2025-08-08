@@ -447,7 +447,7 @@ export const hasFinalPhoto = async (
   }
 };
 
-// Validação de Funcionalidade: Foto final - Sincronizar somente ao avançar e gravar na mesma linha da foto inicial (ordem_servico_id + auditor_id). Validado pelo usuário. Não alterar sem nova validação.
+// Validação de Funcionalidade: Finalização de OS NÃO ocorre neste serviço. A finalização deve acontecer somente na última tela do fluxo (App -> handleFinishAuditSaving). Validado pelo usuário. Não alterar sem nova validação.
 export const saveAuditoriaFinal = async (
   workOrderId: number,
   technicoId: string,

@@ -342,6 +342,7 @@ function AppContent() {
     setCurrentScreen('auditSaving');
   };
 
+  // Validação de Funcionalidade: Finalização de OS centralizada nesta função (última etapa da auditoria, após confirmação). Validado pelo usuário. Não alterar sem nova validação.
   const handleFinishAuditSaving = async () => {
     console.log('🔄 handleFinishAuditSaving iniciado');
     
