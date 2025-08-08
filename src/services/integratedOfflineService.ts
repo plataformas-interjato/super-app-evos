@@ -346,7 +346,8 @@ async function syncDadosRecordInBackground(
     }
 
     // Salvar na tabela dados
-    const { data, error } = await saveDadosRecord(workOrderId, entradaDadosId, base64);
+    // Ajuste: permitir etapa_id opcional para fotos extras/vinculadas à etapa
+    const { data, error } = await saveDadosRecord(workOrderId, entradaDadosId, base64 as string, undefined);
     
     if (error) {
       throw new Error(`Erro ao salvar no Supabase: ${error}`);

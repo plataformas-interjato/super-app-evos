@@ -26,7 +26,8 @@ export type DataType =
   | 'ENTRADAS_DADOS'
   | 'CACHE_ETAPAS'
   | 'CACHE_ENTRADAS'
-  | 'APP_USER';
+  | 'APP_USER'
+  | 'USER_ACTIONS';
 
 export interface DataFileMetadata {
   id: string;

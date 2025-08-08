@@ -52,7 +52,7 @@ interface ExtraPhotoEntry {
   created_at: string;
 }
 
-// Validação de Funcionalidade: Online - Tela de auditoria pós serviço / fotos do serviço - Sistema unificado FileSystem - Validado pelo usuário. Não alterar sem nova validação.
+// Validação de Funcionalidade: Online - Tela de auditoria do técnico (coleta de fotos por etapa, fotos extras, comentários e exibição). Validado pelo usuário. Não alterar sem nova validação.
 const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   workOrder,
   user,
@@ -190,6 +190,7 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
   };
 
   // Função para salvar comentário da etapa atual - COM PROTEÇÃO CONTRA LOOPS
+  // Validação de Funcionalidade: Comentário por etapa - Salva no FileSystem e sincroniza com o Supabase via serviço unificado. Validado pelo usuário. Não alterar sem nova validação.
   const saveCurrentComentario = async () => {
     // Proteção contra execuções simultâneas
     if (isSavingComment) {
@@ -205,27 +206,16 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
         const comentario = comentarios[currentStep.id] || '';
         
         if (comentario.trim()) {
-          console.log('💬 Salvando comentário da etapa atual OFFLINE:', { stepId: currentStep.id, comentarioLength: comentario.length });
-          
           try {
-            // SALVAR DIRETO NO ASYNCSTORAGE - SEM IMPORTS DINÂMICOS
-            const offlineKey = 'offline_comentarios_etapa';
-            const existingDataStr = await AsyncStorage.getItem(offlineKey);
-            const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
-            
-            const recordKey = `${workOrder.id}-${currentStep.id}`;
-            existingData[recordKey] = {
-              ordem_servico_id: workOrder.id,
-              etapa_id: currentStep.id,
-              comentario: comentario.trim(),
-              created_at: new Date().toISOString(),
-              synced: false
-            };
-            
-            await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
-            console.log('✅ Comentário salvo offline com sucesso');
+            const { default: unifiedOfflineDataService } = await import('../services/unifiedOfflineDataService');
+            await unifiedOfflineDataService.saveComentarioEtapa(
+              workOrder.id,
+              user.id.toString(),
+              currentStep.id,
+              comentario.trim()
+            );
           } catch (offlineError) {
-            console.error('💥 Erro ao salvar comentário offline:', offlineError);
+            console.error('💥 Erro ao salvar comentário (unificado):', offlineError);
           }
         } else {
           console.log('💬 Comentário vazio, não salvando');
@@ -466,11 +456,17 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
         try {
           const { default: unifiedOfflineDataService } = await import('../services/unifiedOfflineDataService');
           
+          // Descobrir etapaId a partir da entrada
+          const entry = photoEntries.find(e => e.id === entryId);
+          const etapaId = entry?.stepId;
+          
           const result = await unifiedOfflineDataService.saveDadosRecord(
             workOrder.id,
             user.id.toString(),
             entryId,
-            photoUriToSave
+            photoUriToSave,
+            undefined,
+            etapaId
           );
           
           if (result.success) {
@@ -798,52 +794,19 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
       if (!result.canceled && result.assets[0]) {
         const photoUri = result.assets[0].uri;
         
-        console.log('💾 Salvando foto extra URI direto no AsyncStorage (SEM conversão base64)...');
-        
-        // 1. Salvar no offline_fotos_extras APENAS O URI (sem conversão base64)
-        const offlineKey = 'offline_fotos_extras';
-        const existingDataStr = await AsyncStorage.getItem(offlineKey);
-        const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
-        
-        existingData[extraEntry.id] = {
-          ativo: 1,
-          valor: photoUri, // Salvar URI direto sem conversão
-          ordem_servico_id: workOrder.id,
-          etapa_id: extraEntry.stepId,
-          titulo: extraEntry.titulo,
-          tipo: 'FOTO_EXTRA',
-          created_at: extraEntry.created_at,
-          synced: false
-        };
-        
-        await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
-        
-        // 2. Criar ação no offline_actions APENAS COM URI
-        const actionKey = 'offline_actions';
-        const existingActionsStr = await AsyncStorage.getItem(actionKey);
-        const existingActions = existingActionsStr ? JSON.parse(existingActionsStr) : {};
-        
-        const actionId = `foto_extra_${workOrder.id}_${extraEntry.stepId}_${Date.now()}`;
-        existingActions[actionId] = {
-          id: actionId,
-          type: 'DADOS_RECORD',
-          timestamp: new Date().toISOString(),
-          workOrderId: workOrder.id,
-          technicoId: user.id,
-          data: {
-            entradaDadosId: null, // Usar null para indicar foto extra
-            photoUri: photoUri, // URI direto sem conversão
-            extraData: {
-              etapaId: extraEntry.stepId,
-              titulo: extraEntry.titulo,
-              tipo: 'FOTO_EXTRA'
-            }
-          },
-          synced: false,
-          attempts: 0
-        };
-        
-        await AsyncStorage.setItem(actionKey, JSON.stringify(existingActions));
+        // Salvar via sistema unificado (com etapaId) para sincronizar com Supabase
+        try {
+          const { default: unifiedOfflineDataService } = await import('../services/unifiedOfflineDataService');
+          await unifiedOfflineDataService.saveDadosRecord(
+            workOrder.id,
+            user.id.toString(),
+            null,
+            photoUri,
+            undefined,
+            extraEntry.stepId,
+            extraEntry.id
+          );
+        } catch {}
         
         // 3. Atualizar estado local (usando URI direto)
         setExtraPhotoEntries(prev => ({
@@ -911,52 +874,19 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
       if (!result.canceled && result.assets[0]) {
         const photoUri = result.assets[0].uri;
         
-        console.log('💾 Salvando foto extra via modal URI direto no AsyncStorage (SEM conversão base64)...');
-        
-        // 1. Salvar no offline_fotos_extras APENAS O URI (sem conversão base64)
-        const offlineKey = 'offline_fotos_extras';
-        const existingDataStr = await AsyncStorage.getItem(offlineKey);
-        const existingData = existingDataStr ? JSON.parse(existingDataStr) : {};
-        
-        existingData[selectedExtraEntry.id] = {
-          ativo: 1,
-          valor: photoUri, // Salvar URI direto sem conversão
-          ordem_servico_id: workOrder.id,
-          etapa_id: selectedExtraEntry.stepId,
-          titulo: selectedExtraEntry.titulo,
-          tipo: 'FOTO_EXTRA',
-          created_at: selectedExtraEntry.created_at,
-          synced: false
-        };
-        
-        await AsyncStorage.setItem(offlineKey, JSON.stringify(existingData));
-        
-        // 2. Criar ação no offline_actions APENAS COM URI
-        const actionKey = 'offline_actions';
-        const existingActionsStr = await AsyncStorage.getItem(actionKey);
-        const existingActions = existingActionsStr ? JSON.parse(existingActionsStr) : {};
-        
-        const actionId = `foto_extra_modal_${workOrder.id}_${selectedExtraEntry.stepId}_${Date.now()}`;
-        existingActions[actionId] = {
-          id: actionId,
-          type: 'DADOS_RECORD',
-          timestamp: new Date().toISOString(),
-          workOrderId: workOrder.id,
-          technicoId: user.id,
-          data: {
-            entradaDadosId: null, // Usar null para indicar foto extra
-            photoUri: photoUri, // URI direto sem conversão
-            extraData: {
-              etapaId: selectedExtraEntry.stepId,
-              titulo: selectedExtraEntry.titulo,
-              tipo: 'FOTO_EXTRA'
-            }
-          },
-          synced: false,
-          attempts: 0
-        };
-        
-        await AsyncStorage.setItem(actionKey, JSON.stringify(existingActions));
+        // Salvar via sistema unificado (com etapaId) para sincronizar com Supabase
+        try {
+          const { default: unifiedOfflineDataService } = await import('../services/unifiedOfflineDataService');
+          await unifiedOfflineDataService.saveDadosRecord(
+            workOrder.id,
+            user.id.toString(),
+            null,
+            photoUri,
+            undefined,
+            selectedExtraEntry.stepId,
+            selectedExtraEntry.id
+          );
+        } catch {}
         
         // 3. Atualizar estado local (usando URI direto)
         setExtraPhotoEntries(prev => ({
@@ -1017,6 +947,16 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
                 }
               }
             });
+            
+            // Desativar registro ativo no Supabase para este container
+            (async () => {
+              try {
+                const { default: unifiedOfflineDataService } = await import('../services/unifiedOfflineDataService');
+                await unifiedOfflineDataService.deactivateExtraPhoto(workOrder.id, selectedExtraEntry.id);
+              } catch (e) {
+                // silencioso
+              }
+            })();
             
             closeExtraPhotoModal();
           }
@@ -1716,12 +1656,12 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
           </View>
 
           {/* Texto Explicativo */}
-          <View style={styles.modalTextContainer}>
+          {/* <View style={styles.modalTextContainer}>
             <Text style={styles.modalTitle}>Foto Extra</Text>
             <Text style={styles.modalDescription}>
               Esta é uma foto extra a ser capturada. Use-a como referência para capturar sua foto.
             </Text>
-          </View>
+          </View> */}
 
           {/* Botões de Ação */}
           <View style={styles.modalButtonContainer}>
@@ -1729,10 +1669,10 @@ const PhotoCollectionScreen: React.FC<PhotoCollectionScreenProps> = ({
               <Text style={styles.modalBackButtonText}>Voltar</Text>
             </TouchableOpacity>
             
-            <TouchableOpacity style={styles.modalTakePhotoButton} onPress={takeExtraPhotoFromModal}>
+            {/* <TouchableOpacity style={styles.modalTakePhotoButton} onPress={takeExtraPhotoFromModal}>
               <Ionicons name="camera" size={20} color="white" style={styles.modalButtonIcon} />
               <Text style={styles.modalTakePhotoButtonText}>Tirar Foto</Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
 
             <TouchableOpacity style={styles.modalRemovePhotoButton} onPress={removeExtraPhotoFromModal}>
               <Ionicons name="trash" size={20} color="white" style={styles.modalButtonIcon} />

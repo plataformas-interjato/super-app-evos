@@ -2,6 +2,7 @@ import NetInfo from '@react-native-community/netinfo';
 import secureDataStorage from './secureDataStorageService';
 import { saveComentarioEtapa, saveDadosRecord } from './serviceStepsService';
 import { supabase } from './supabase';
+import securePhotoStorage from './securePhotoStorageService';
 
 /**
  * SERVIÇO UNIFICADO DE DADOS OFFLINE
@@ -42,6 +43,7 @@ class UnifiedOfflineDataService {
   /**
    * SALVAR COMENTÁRIO DA ETAPA (FileSystem)
    */
+  // Validação de Funcionalidade: Comentário por etapa - Salva no FileSystem e sincroniza com o Supabase pelo serviço unificado. Validado pelo usuário. Não alterar sem nova validação.
   async saveComentarioEtapa(
     workOrderId: number,
     technicoId: string,
@@ -104,17 +106,26 @@ class UnifiedOfflineDataService {
   async saveDadosRecord(
     workOrderId: number,
     technicoId: string,
-    entradaDadosId: number,
+    entradaDadosId: number | null,
     photoUri: string,
-    valor?: string
+    valor?: string,
+    etapaId?: number,
+    containerId?: string
   ): Promise<{ success: boolean; error?: string; savedOffline?: boolean }> {
     
     await this.initialize();
-    const actionId = `dados_record_${workOrderId}_${entradaDadosId}_${Date.now()}`;
+    const actionId = `dados_record_${workOrderId}_${entradaDadosId ?? 'extra'}_${Date.now()}`;
     
     try {
       console.log(`💾 [UNIFIED-OFFLINE] Salvando dados record para entrada ${entradaDadosId}...`);
       
+      // 0. Garantir persistência da foto no FileSystem seguro para uso offline
+      try {
+        await securePhotoStorage.savePhoto(photoUri, workOrderId, 'DADOS_RECORD');
+      } catch (e) {
+        console.warn('⚠️ [UNIFIED-OFFLINE] Falha ao salvar foto no FileSystem seguro (continuando):', e);
+      }
+
       // 1. Criar ação offline
       const offlineAction: OfflineUserAction = {
         id: actionId,
@@ -126,6 +137,8 @@ class UnifiedOfflineDataService {
           entradaDadosId,
           photoUri,
           valor,
+          etapaId,
+          containerId,
         },
         synced: false,
         attempts: 0
@@ -151,7 +164,7 @@ class UnifiedOfflineDataService {
       }
 
     } catch (error) {
-      console.error('❌ [UNIFIED-OFFLINE] Erro ao salvar dados record:', error);
+      console.error('❌ [UNIFIED-OFFLINE] Erro ao salvar entrada de dados:', error);
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -590,11 +603,38 @@ class UnifiedOfflineDataService {
           break;
           
         case 'DADOS_RECORD':
+          // Se houver containerId, desativar o registro anterior relacionado a este container
+          if (action.data.containerId) {
+            try {
+              const index = await this._getExtraPhotosIndex(action.workOrderId);
+              const current = index.find(i => i.containerId === action.data.containerId);
+              if (current?.supabaseId) {
+                await supabase
+                  .from('dados')
+                  .update({ ativo: 0, dt_edicao: new Date().toISOString() })
+                  .eq('id', current.supabaseId);
+              }
+            } catch (e) {
+              console.warn('⚠️ [UNIFIED-OFFLINE] Falha ao desativar registro anterior (containerId):', e);
+            }
+          }
+
           result = await saveDadosRecord(
             action.workOrderId,
             action.data.entradaDadosId,
-            action.data.photoBase64 || action.data.photoUri
+            action.data.photoBase64 || action.data.photoUri,
+            action.data.etapaId
           );
+
+          // Atualizar índice com o novo supabaseId quando disponível
+          if (!result.error && result.data?.id && action.data.containerId) {
+            await this._upsertExtraPhotosIndex(action.workOrderId, {
+              containerId: action.data.containerId,
+              supabaseId: result.data.id,
+              etapaId: action.data.etapaId,
+              lastUpdated: new Date().toISOString()
+            });
+          }
           break;
           
         case 'ENTRADA_DADOS':
@@ -741,6 +781,46 @@ class UnifiedOfflineDataService {
       console.error('❌ [UNIFIED-OFFLINE] Erro ao buscar ações pendentes:', error);
       return [];
     }
+  }
+
+  /**
+   * Desativar foto extra no Supabase para um container específico
+   */
+  async deactivateExtraPhoto(workOrderId: number, containerId: string): Promise<{ success: boolean; error?: string }> {
+    await this.initialize();
+    try {
+      const index = await this._getExtraPhotosIndex(workOrderId);
+      const current = index.find(i => i.containerId === containerId);
+      if (current?.supabaseId) {
+        const { error } = await supabase
+          .from('dados')
+          .update({ ativo: 0, dt_edicao: new Date().toISOString() })
+          .eq('id', current.supabaseId);
+        if (error) return { success: false, error: error.message };
+      }
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : 'Erro desconhecido' };
+    }
+  }
+
+  /**
+   * Índice de fotos extras por OS (containerId -> supabaseId)
+   */
+  private async _getExtraPhotosIndex(workOrderId: number): Promise<Array<{ containerId: string; supabaseId: number; etapaId?: number; lastUpdated: string }>> {
+    try {
+      const result = await secureDataStorage.getData('USER_ACTIONS', `extra_photos_index_${workOrderId}`);
+      return (result.data as any[]) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async _upsertExtraPhotosIndex(workOrderId: number, item: { containerId: string; supabaseId: number; etapaId?: number; lastUpdated: string }): Promise<void> {
+    const list = await this._getExtraPhotosIndex(workOrderId);
+    const idx = list.findIndex(i => i.containerId === item.containerId);
+    if (idx >= 0) list[idx] = item; else list.push(item);
+    await secureDataStorage.saveData('USER_ACTIONS', list as any, `extra_photos_index_${workOrderId}`);
   }
 }
 

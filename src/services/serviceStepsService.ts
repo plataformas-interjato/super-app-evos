@@ -1151,14 +1151,17 @@ const convertPhotoToBase64 = async (photoUri: string): Promise<{ base64: string 
 export const saveDadosRecord = async (
   ordemServicoId: number,
   entradaDadosId: number | null,
-  photoValue: string
+  photoValue: string,
+  etapaId?: number
 ): Promise<{ data: DadosRecord | null; error: string | null }> => {
+  // Validação de Funcionalidade: Fotos por etapa (inclui etapa_id) e fotos extras (entrada_dados_id=null) são salvas na tabela 'dados'. Validado pelo usuário. Não alterar sem nova validação.
   try {
     const isExtraPhoto = entradaDadosId === null;
     
     console.log('💾 Salvando dados na tabela dados...', {
       ordemServicoId,
       entradaDadosId: isExtraPhoto ? 'FOTO_EXTRA (null)' : entradaDadosId,
+      etapaId,
       photoValue: photoValue.substring(0, 50) + '...'
     });
 
@@ -1185,7 +1188,7 @@ export const saveDadosRecord = async (
     }
 
     // Salvar na tabela dados
-    const insertData = {
+    const insertData: any = {
       ativo: 1,
       valor: base64ToSave,
       ordem_servico_id: ordemServicoId,
@@ -1193,6 +1196,10 @@ export const saveDadosRecord = async (
       created_at: new Date().toISOString(),
       dt_edicao: new Date().toISOString(),
     };
+
+    if (typeof etapaId === 'number') {
+      insertData.etapa_id = etapaId;
+    }
 
     const { data, error } = await supabase
       .from('dados')
@@ -1227,6 +1234,7 @@ export const saveComentarioEtapa = async (
   etapaId: number,
   comentario: string
 ): Promise<{ data: ComentarioEtapa | null; error: string | null }> => {
+  // Validação de Funcionalidade: Comentário por etapa salvo/atualizado na tabela 'comentario_etapa'. Validado pelo usuário. Não alterar sem nova validação.
   try {
     console.log('💬 Salvando comentário da etapa...', {
       ordemServicoId,

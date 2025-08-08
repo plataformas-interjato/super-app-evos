@@ -39,7 +39,7 @@ interface AuditData {
   skipPhotoCollection?: boolean;
 }
 
-// Validação de Funcionalidade: Online - Confirmação usuario / Foto final - Trabalho realizado - Validado pelo usuário. Não alterar sem nova validação.
+// Validação de Funcionalidade: Online - Tela de auditoria final (confirmação, foto final, envio ao Supabase). Validado pelo usuário. Não alterar sem nova validação.
 const PostServiceAuditScreen: React.FC<PostServiceAuditScreenProps> = ({
   workOrder,
   user,

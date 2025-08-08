@@ -349,6 +349,15 @@ function AppContent() {
       try {
         console.log('⏳ Verificando conectividade e finalizando OS...');
         
+        // Validação de Funcionalidade: Finalização de OS - Atualização imediata do status local para 'finalizada' e atualização do cache para refletir instantaneamente no app. Validado pelo usuário. Não alterar sem nova validação.
+        // Atualizar status local IMEDIATAMENTE para 'finalizada'
+        try {
+          await updateLocalWorkOrderStatus(selectedWorkOrder.id, 'finalizada', false);
+          // Continuar mesmo com erro de status local
+        } catch (statusLocalError) {
+          // silencioso
+        }
+        
         // Verificar conectividade
         const NetInfo = require('@react-native-community/netinfo');
         const netInfo = await NetInfo.fetch();
@@ -384,6 +393,11 @@ function AppContent() {
               );
             } else {
               console.log('✅ OS finalizada online com sucesso');
+              
+              try {
+                const { updateCacheAfterOSFinalizada } = await import('./src/services/workOrderCacheService');
+                await updateCacheAfterOSFinalizada(selectedWorkOrder.id, String(appUser?.id || ''));
+              } catch {}
               
               // Limpar dados locais da OS
               const { clearAllLocalDataForWorkOrder } = await import('./src/services/localStatusService');
