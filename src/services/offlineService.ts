@@ -108,6 +108,27 @@ export const syncAllPendingActions = async (): Promise<{
       errors.push(`Erro ao sincronizar sistema unificado: ${unifiedError instanceof Error ? unifiedError.message : String(unifiedError)}`);
     }
 
+    // NOVO: Sincronizar status locais finalizados (AsyncStorage) para compatibilidade
+    try {
+      const { getLocalWorkOrderStatuses, markLocalStatusAsSynced } = await import('./localStatusService');
+      const { updateWorkOrderStatus } = await import('./workOrderService');
+      const statuses = await getLocalWorkOrderStatuses();
+      const entries = Object.entries(statuses);
+      for (const [woId, st] of entries) {
+        if (st.status === 'finalizada' && st.synced === false) {
+          const { error } = await updateWorkOrderStatus(woId, 'finalizada');
+          if (!error) {
+            await markLocalStatusAsSynced(Number(woId));
+            synced += 1;
+          } else {
+            errors.push(`Falha ao sincronizar status da OS ${woId}: ${error}`);
+          }
+        }
+      }
+    } catch (statusSyncError) {
+      errors.push(`Erro ao sincronizar status locais: ${statusSyncError instanceof Error ? statusSyncError.message : String(statusSyncError)}`);
+    }
+
     // Notificar callbacks se houve sincronização
     if (synced > 0) {
       notifySyncCallbacks({ total: synced, synced, failed: errors.length });

@@ -179,8 +179,6 @@ export const getWorkOrdersWithCache = async (
       // Aplicar filtros nos dados do cache
       const filteredData = filterCachedWorkOrders(cacheResult.data, status, search);
       
-      console.log(`📁 Cache encontrado: ${cacheResult.data.length} ordens, ${filteredData.length} após filtros`);
-      
       // CORREÇÃO: SEMPRE retornar dados do cache quando existem, independente de conexão
       // Se online, atualizar cache em background mas não bloquear o usuário
       if (!isOffline) {
@@ -188,7 +186,31 @@ export const getWorkOrdersWithCache = async (
         fetchFunction()
           .then(async (serverResult) => {
             if (serverResult.data && !serverResult.error) {
-              await cacheWorkOrders(serverResult.data, userId);
+              // Sobrepor status locais não sincronizados antes de gravar no cache
+              try {
+                const { getLocalWorkOrderStatuses } = await import('./localStatusService');
+                const localStatuses = await getLocalWorkOrderStatuses();
+                const cachedMap: Record<string, string> = {};
+                if (cacheResult.data) {
+                  cacheResult.data.forEach(wo => {
+                    cachedMap[wo.id.toString()] = wo.status;
+                  });
+                }
+                const overlaid = serverResult.data.map(wo => {
+                  const st = localStatuses[wo.id.toString()];
+                  const cachedStatus = cachedMap[wo.id.toString()];
+                  if (cachedStatus === 'finalizada' || cachedStatus === 'cancelada') {
+                    return { ...wo, status: cachedStatus as any };
+                  }
+                  if (st && st.synced === false) {
+                    return { ...wo, status: st.status as any };
+                  }
+                  return wo;
+                });
+                await cacheWorkOrders(overlaid, userId);
+              } catch {
+                await cacheWorkOrders(serverResult.data, userId);
+              }
             }
           })
           .catch(() => {
@@ -214,8 +236,21 @@ export const getWorkOrdersWithCache = async (
     const serverResult = await fetchFunction();
     
     if (serverResult.data && !serverResult.error) {
-      // Salvar no cache FileSystem para próximas consultas
-      await cacheWorkOrders(serverResult.data, userId);
+      // Sobrepor status locais não sincronizados antes de gravar no cache
+      try {
+        const { getLocalWorkOrderStatuses } = await import('./localStatusService');
+        const localStatuses = await getLocalWorkOrderStatuses();
+        const overlaid = serverResult.data.map(wo => {
+          const st = localStatuses[wo.id.toString()];
+          if (st && st.synced === false) {
+            return { ...wo, status: st.status as any };
+          }
+          return wo;
+        });
+        await cacheWorkOrders(overlaid, userId);
+      } catch {
+        await cacheWorkOrders(serverResult.data, userId);
+      }
       
       // Aplicar filtros nos dados do servidor
       const filteredData = filterCachedWorkOrders(serverResult.data, status, search);
@@ -322,6 +357,45 @@ export const updateCacheAfterOSFinalizada = async (workOrderId: number, userId?:
       // Falha não crítica
     }
   } catch (error) {
+    // Falha não crítica
+  }
+};
+
+/**
+ * Atualiza uma única OS nos caches existentes (FileSystem principal e backup)
+ * Sem necessidade de userId: varre todos os arquivos de WORK_ORDERS e aplica a atualização.
+ */
+export const updateWorkOrderInCache = async (
+  workOrderId: number,
+  updates: Partial<WorkOrder>
+): Promise<void> => {
+  try {
+    await secureDataStorage.initialize();
+    const all = await secureDataStorage.getAllMetadata();
+    const targets = Object.values(all).filter(m => m.dataType === 'WORK_ORDERS');
+
+    for (const meta of targets) {
+      const res: { data: any[] | null } = await secureDataStorage.getData<any>('WORK_ORDERS', meta.id);
+      if (res.data && Array.isArray(res.data) && res.data.length > 0 && !res.data[0]?.workOrders) {
+        // Formato principal: array de WorkOrder
+        const hasItem = res.data.some((wo: any) => wo?.id === workOrderId);
+        if (hasItem) {
+          const updated = res.data.map((wo: any) => wo?.id === workOrderId ? { ...wo, ...updates } : wo);
+          await secureDataStorage.saveData('WORK_ORDERS', updated, meta.id);
+        }
+      } else if (res.data && Array.isArray(res.data) && res.data.length > 0 && (res.data as any)[0]?.workOrders) {
+        // Formato backup: [{ workOrders: WorkOrder[], timestamp, userId }]
+        const wrapper: any = (res.data as any)[0];
+        const workOrders: any[] = Array.isArray(wrapper?.workOrders) ? wrapper.workOrders : [];
+        const hasItem = workOrders.some(wo => wo?.id === workOrderId);
+        if (hasItem) {
+          const updatedWorkOrders = workOrders.map(wo => wo?.id === workOrderId ? { ...wo, ...updates } : wo);
+          const updatedWrapper: any = { ...(wrapper || {}), workOrders: updatedWorkOrders, timestamp: new Date().toISOString() };
+          await secureDataStorage.saveData('WORK_ORDERS', [updatedWrapper], meta.id);
+        }
+      }
+    }
+  } catch {
     // Falha não crítica
   }
 }; 

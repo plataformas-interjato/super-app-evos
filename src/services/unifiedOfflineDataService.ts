@@ -459,10 +459,12 @@ class UnifiedOfflineDataService {
       
       if (allActions.length === 0) {
         console.log('✅ [UNIFIED-OFFLINE] Nenhuma ação pendente para sincronizar');
+        // Mesmo sem ações, ainda tentar sincronizar fotos iniciais pendentes do sistema seguro
+        const { synced, errors } = await this._syncPendingInitialPhotos(workOrderId);
         return {
-          success: true,
-          synced: 0,
-          errors: []
+          success: errors.length === 0,
+          synced,
+          errors
         };
       }
 
@@ -491,6 +493,15 @@ class UnifiedOfflineDataService {
           console.log(`💥 [UNIFIED-OFFLINE] Erro crítico na ação ${action.id}: ${errorMsg}`);
           errors.push(`${action.id}: ${errorMsg}`);
         }
+      }
+      
+      // Após sincronizar ações, sincronizar fotos iniciais pendentes do sistema seguro
+      try {
+        const extra = await this._syncPendingInitialPhotos(workOrderId, allActions.map(a => a.workOrderId));
+        synced += extra.synced;
+        errors.push(...extra.errors);
+      } catch (e) {
+        errors.push(e instanceof Error ? e.message : String(e));
       }
       
       console.log(`✅ [UNIFIED-OFFLINE] Sincronização concluída: ${synced}/${allActions.length} ações sincronizadas`);
@@ -821,6 +832,80 @@ class UnifiedOfflineDataService {
     const idx = list.findIndex(i => i.containerId === item.containerId);
     if (idx >= 0) list[idx] = item; else list.push(item);
     await secureDataStorage.saveData('USER_ACTIONS', list as any, `extra_photos_index_${workOrderId}`);
+  }
+
+  /**
+   * Sincroniza fotos iniciais pendentes (PHOTO_INICIO) do sistema seguro
+   */
+  private async _syncPendingInitialPhotos(
+    workOrderId?: number,
+    hintedWorkOrders?: number[]
+  ): Promise<{ synced: number; errors: string[] }> {
+    const errors: string[] = [];
+    let synced = 0;
+    try {
+      // Obter technicoId a partir do perfil salvo no FileSystem (APP_USER mais recente)
+      let technicoId: string | null = null;
+      try {
+        const all = await secureDataStorage.getAllMetadata();
+        const userFiles = Object.values(all)
+          .filter(m => m.dataType === 'APP_USER')
+          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        if (userFiles.length > 0) {
+          const res = await secureDataStorage.getData<any>('APP_USER', userFiles[0].id);
+          if (res.data && res.data.length > 0) {
+            const u = res.data[0] as any;
+            technicoId = (u?.id || u?.uuid || '').toString();
+          }
+        }
+      } catch {}
+      if (!technicoId) {
+        return { synced: 0, errors };
+      }
+      
+      const candidateOsIds = new Set<number>();
+      if (typeof workOrderId === 'number') {
+        candidateOsIds.add(workOrderId);
+      }
+      if (hintedWorkOrders && hintedWorkOrders.length > 0) {
+        hintedWorkOrders.forEach(id => candidateOsIds.add(id));
+      }
+      
+      // Se não houver dicas, não varrer tudo (evitar pesado). Apenas retorna.
+      if (candidateOsIds.size === 0) {
+        return { synced, errors };
+      }
+      
+      for (const osId of candidateOsIds) {
+        try {
+          const photos = await securePhotoStorage.getPhotosByWorkOrder(osId);
+          const pendings = photos.filter(p => p.type === 'PHOTO_INICIO' && !p.synced);
+          for (const p of pendings) {
+            try {
+              const base64 = await securePhotoStorage.getPhotoAsBase64(p.id);
+              if (!base64) {
+                continue;
+              }
+              const { savePhotoInicio } = await import('./auditService');
+              const { error } = await savePhotoInicio(osId, technicoId, base64);
+              if (!error) {
+                await securePhotoStorage.markAsSynced(p.id);
+                synced += 1;
+              } else {
+                errors.push(`OS ${osId} foto inicial: ${error}`);
+              }
+            } catch (e) {
+              errors.push(`OS ${osId} erro foto inicial: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+        } catch (e) {
+          errors.push(`OS ${osId} erro ao listar fotos: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : String(e));
+    }
+    return { synced, errors };
   }
 }
 

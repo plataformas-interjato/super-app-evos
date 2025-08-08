@@ -189,7 +189,9 @@ const MainScreen: React.FC<MainScreenProps> = ({ user, onTabPress, onOpenWorkOrd
         setError(result.error);
       }
       
-      setWorkOrders(result.data || []);
+      // Mesclar status locais (ex.: finalização offline) para refletir imediatamente
+      const merged = await mergeLocalStatus(result.data || []);
+      setWorkOrders(merged);
 
     } catch (err) {
       setError('Um erro inesperado ocorreu ao carregar as ordens.');

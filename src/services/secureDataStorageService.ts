@@ -17,6 +17,7 @@ const SECURE_DATA_DIR = Platform.select({
 
 const BACKUP_DATA_DIR = `${FileSystem.cacheDirectory}backup_data/`;
 const METADATA_KEY = 'secure_data_metadata';
+const METADATA_FILE_PATH = `${SECURE_DATA_DIR}secure_data_metadata.json`;
 
 // TIPOS DE DADOS SUPORTADOS
 export type DataType =
@@ -102,6 +103,13 @@ class SecureDataStorageService {
     if (!backupInfo.exists) {
       await FileSystem.makeDirectoryAsync(BACKUP_DATA_DIR, { intermediates: true });
       console.log('📁 Diretório de backup de dados criado:', BACKUP_DATA_DIR);
+    }
+    // Garantir arquivo de metadata
+    const metaInfo = await FileSystem.getInfoAsync(METADATA_FILE_PATH);
+    if (!metaInfo.exists) {
+      try {
+        await FileSystem.writeAsStringAsync(METADATA_FILE_PATH, JSON.stringify({}));
+      } catch {}
     }
   }
 
@@ -207,10 +215,43 @@ class SecureDataStorageService {
         targetId = typeFiles[0].id;
       }
 
-      const metadata = await this.getMetadata(targetId);
+      let metadata = await this.getMetadata(targetId);
       if (!metadata) {
-        // console.log(`📭 [SECURE-DATA] Metadata não encontrado para ${targetId}`);
-        return { data: null, fromBackup: false };
+        // Tentativa de reconstrução a partir do arquivo esperado
+        const filename = `${targetId}.json`;
+        const secureFilePath = `${SECURE_DATA_DIR}${filename}`;
+        const backupFilePath = `${BACKUP_DATA_DIR}${filename}`;
+        const mainInfo = await FileSystem.getInfoAsync(secureFilePath);
+        const backupInfo = await FileSystem.getInfoAsync(backupFilePath);
+        const chosenPath = mainInfo.exists ? secureFilePath : (backupInfo.exists ? backupFilePath : null);
+        if (!chosenPath) {
+          return { data: null, fromBackup: false };
+        }
+        try {
+          const dataString = await FileSystem.readAsStringAsync(chosenPath);
+          const parsed = JSON.parse(dataString);
+          const inferredType = this.inferDataTypeFromId(targetId) || dataType;
+          const reconstructed: DataFileMetadata = {
+            id: targetId,
+            filename,
+            secureFilePath,
+            backupFilePath: backupInfo.exists ? backupFilePath : undefined,
+            dataType: inferredType,
+            timestamp: new Date().toISOString(),
+            size: dataString.length,
+            recordCount: Array.isArray(parsed) ? parsed.length : 0,
+            version: Date.now(),
+            fresh: true
+          };
+          await this.saveMetadata(targetId, reconstructed);
+          return {
+            data: parsed,
+            fromBackup: !mainInfo.exists,
+            metadata: reconstructed
+          };
+        } catch {
+          return { data: null, fromBackup: false };
+        }
       }
 
       console.log(`🔍 [SECURE-DATA] Carregando ${dataType} (${targetId})...`);
@@ -509,46 +550,69 @@ class SecureDataStorageService {
     }
   }
 
-  // MÉTODOS PRIVADOS DE METADATA (usando AsyncStorage apenas para índice)
+  // MÉTODOS PRIVADOS DE METADATA (índice migrado para FileSystem; AsyncStorage apenas leitura para migração)
   
-  private async saveMetadata(dataId: string, metadata: DataFileMetadata): Promise<void> {
+  private async readMetadataFile(): Promise<DataMetadataStorage> {
     try {
-      const allMetadata = await this.getAllMetadata();
-      allMetadata[dataId] = metadata;
-      await AsyncStorage.setItem(METADATA_KEY, JSON.stringify(allMetadata));
-    } catch (error) {
-      console.error('❌ Erro ao salvar metadata:', error);
-    }
+      const info = await FileSystem.getInfoAsync(METADATA_FILE_PATH);
+      if (info.exists) {
+        const content = await FileSystem.readAsStringAsync(METADATA_FILE_PATH);
+        return content ? JSON.parse(content) : {};
+      }
+    } catch {}
+    return {};
+  }
+
+  private async writeMetadataFile(all: DataMetadataStorage): Promise<void> {
+    try {
+      await FileSystem.writeAsStringAsync(METADATA_FILE_PATH, JSON.stringify(all));
+    } catch {}
+  }
+
+  private async migrateMetadataFromAsyncStorageIfNeeded(current: DataMetadataStorage): Promise<DataMetadataStorage> {
+    if (Object.keys(current).length > 0) return current;
+    try {
+      const metadataStr = await AsyncStorage.getItem(METADATA_KEY);
+      if (metadataStr) {
+        const parsed = JSON.parse(metadataStr) as DataMetadataStorage;
+        await this.writeMetadataFile(parsed);
+        return parsed;
+      }
+    } catch {}
+    return current;
+  }
+
+  private async saveMetadata(dataId: string, metadata: DataFileMetadata): Promise<void> {
+    const all = await this.getAllMetadata();
+    all[dataId] = metadata;
+    await this.writeMetadataFile(all);
   }
 
   private async getMetadata(dataId: string): Promise<DataFileMetadata | null> {
-    try {
-      const allMetadata = await this.getAllMetadata();
-      return allMetadata[dataId] || null;
-    } catch (error) {
-      console.error('❌ Erro ao buscar metadata:', error);
-      return null;
-    }
+    const allMetadata = await this.getAllMetadata();
+    return allMetadata[dataId] || null;
   }
 
   private async removeMetadata(dataId: string): Promise<void> {
-    try {
-      const allMetadata = await this.getAllMetadata();
-      delete allMetadata[dataId];
-      await AsyncStorage.setItem(METADATA_KEY, JSON.stringify(allMetadata));
-    } catch (error) {
-      console.error('❌ Erro ao remover metadata:', error);
-    }
+    const allMetadata = await this.getAllMetadata();
+    delete allMetadata[dataId];
+    await this.writeMetadataFile(allMetadata);
   }
 
   async getAllMetadata(): Promise<DataMetadataStorage> {
-    try {
-      const metadataStr = await AsyncStorage.getItem(METADATA_KEY);
-      return metadataStr ? JSON.parse(metadataStr) : {};
-    } catch (error) {
-      console.error('❌ Erro ao buscar todo metadata:', error);
-      return {};
+    const fileData = await this.readMetadataFile();
+    const merged = await this.migrateMetadataFromAsyncStorageIfNeeded(fileData);
+    return merged;
+  }
+
+  private inferDataTypeFromId(id: string): DataType | null {
+    const knownTypes: DataType[] = [
+      'WORK_ORDERS', 'TIPOS_OS', 'ETAPAS_OS', 'ENTRADAS_DADOS', 'CACHE_ETAPAS', 'CACHE_ENTRADAS', 'APP_USER', 'USER_ACTIONS'
+    ];
+    for (const t of knownTypes) {
+      if (id.startsWith(t)) return t;
     }
+    return null;
   }
 }
 
